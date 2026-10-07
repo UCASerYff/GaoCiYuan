@@ -1,0 +1,603 @@
+搞词元	GaoCiYuan
+用量总览	Overview
+会员额度	Membership quotas
+API 与费用	API & costs
+用量记录	History
+平台接入	Connections
+设置	Settings
+每一份额度，都心中有数。	Keep track of every quota.
+各自的额度窗口，一眼看清。	See each quota window at a glance.
+Token、消费和余额，分开核算。	Track tokens, costs and balances separately.
+每一次同步，都有迹可循。	A record of every successful update.
+把常用的 AI，放到一起。	Your AI accounts in one place.
+按你的习惯，管理词元。	Make GaoCiYuan work your way.
+词元管理	Usage management
+记录真实成果，建设自己的星空。	Log real outcomes and build your own sky.
+连接与偏好	Connections & preferences
+正在同步…	Syncing…
+本地存储 · 密钥保存在钥匙串	Local data · Credentials in Keychain
+提示	Notice
+知道了	OK
+移除账户？	Remove account?
+取消	Cancel
+移除	Remove
+将移除该账户在本机的快照和密钥，不影响平台上的账号。需要保留记录时可先导出备份。	This removes the local snapshots and credential. Your platform account stays intact. Export a backup to keep your records.
+刷新	Refresh
+同步中	Syncing
+导出完整数据…	Export all data…
+导入数据…	Import data…
+导出用量 CSV	Export usage CSV
+导入与导出	Import & export
+添加账户	Add account
+已启用账户	Active accounts
+有快照的会员账户	Membership accounts with snapshots
+API 账户	API accounts
+费用按账户、币种独立核算	Costs kept separate by account and currency
+需要留意	Needs attention
+低额度、预算提醒或同步异常	Low quotas, budgets or sync errors
+我的额度	My quotas
+来源与更新时间始终可见	Source and update time always visible
+会员百分比、API Token 与账户余额是不同指标。没有数据时显示“—”；快照超过 15 分钟会标记为历史数据。	Membership percentages, API tokens and balances are different measures. Missing values appear as “—”. Snapshots over 15 minutes old are marked stale.
+从第一个账户开始	Start with your first account
+连接本机 Codex，查看会员剩余额度；\n添加 API 账户，跟踪用量、余额与费用。	Connect local Codex for membership quotas.\nAdd API accounts to track usage, balances and costs.
+连接本机 Codex	Connect local Codex
+浏览所有平台	Browse platforms
+搜索平台、账户或套餐	Search platform, account or plan
+自动报告按 UTC 自然月统计。各账户独立展示，避免同一组织多个密钥重复汇总；预算是本机提醒，不会限制平台扣费。	Automatic reports use UTC calendar months. Accounts stay separate to avoid double counting shared organizations. Budgets are local reminders and do not cap platform charges.
+还没有匹配的账户	No matching accounts
+账户设置	Account settings
+录入用量	Enter usage
+打开官方控制台	Open official dashboard
+移除账户	Remove account
+已暂停	Paused
+历史快照	Stale snapshot
+Token 用量	Token usage
+统计期费用	Period cost
+账户余额	Account balance
+尚未获取用量	No usage data yet
+从官方页面录入实际额度或账单。	Enter actual quotas or costs from the official dashboard.
+连接后读取真实数据，不预填额度。	Connect to read actual data. Quotas are never prefilled.
+立即同步	Sync now
+同步中…	Syncing…
+控制台 ↗	Dashboard ↗
+11 个平台 · 会员与 API 独立接入	11 platforms · Separate membership and API connections
+自动接入能力因平台而异。通用快照文件可由你已有的脚本持续更新；应用定时读取，不采集聊天内容。	Automatic support varies by platform. Your own scripts can update standard snapshot files for periodic reading. Chat content is not collected.
+支持官方接口	Official connector
+快照 / 手动	File / manual
+添加会员	Add membership
+添加 API	Add API
+最近同步快照	Recent snapshots
+导出 CSV	Export CSV
+记录的是时点快照，累计月度用量不能跨快照相加。	These are point-in-time snapshots. Do not add cumulative monthly totals across snapshots.
+成功同步或录入后，会在这里留下记录。	Successful syncs and manual entries appear here.
+平台	Platform
+账户类型	Account type
+账户名称	Account name
+套餐 / 组织备注	Plan / organization notes
+如 Plus、Pro、Max、Coding Plan	e.g. Plus, Pro, Max, Coding Plan
+连接方式	Connection
+API 密钥	API key
+留空保留已存密钥	Leave blank to keep the saved credential
+需要组织 Admin Key，普通模型调用 Key 无法读取组织账单。密钥仅保存在本机钥匙串。	Requires an organization Admin Key. Inference keys cannot read organization billing. Credentials stay in macOS Keychain.
+使用对应套餐或云平台的查询凭据；云余额接口需要财务只读权限，普通模型 Key 不适用。密钥仅保存在本机钥匙串。	Use the matching plan or cloud credentials. Cloud balances require billing read permissions, not inference keys. Secrets stay in Keychain.
+快照文件	Snapshot file
+选择…	Choose…
+读取标准 JSON 快照，不是任意平台原始账单。格式示例见设置页，可由外部脚本持续更新。	Reads the standard JSON snapshot format. See Settings for an example. External scripts can keep this file updated.
+复用本机 Codex 已登录的会员账号，通过官方服务读取所有额度池。不读取聊天、不发起模型调用。多个本机 Codex 账户指向同一登录态。	Uses your existing local Codex login and official service to read quota pools. No chats or inference calls. Multiple local Codex entries share the same login.
+本月预算（可选）	Monthly budget (optional)
+币种	Currency
+启用此账户	Enable account
+保存账户	Save account
+按官方页面实际数值填写；空白表示未知。手动记录会标注来源，下次自动同步可能覆盖此快照。	Enter values from the official dashboard. Blank means unknown. Manual entries are labeled and may be replaced by the next sync.
+数据观测时间	Observed at
+额度名称	Quota name
+剩余 %	Remaining %
+注明重置时间	Specify reset time
+重置时间	Resets at
+添加额度窗口	Add quota window
+统计开始	Period start
+统计结束	Period end
+输入 Token	Input tokens
+输出 Token	Output tokens
+金额币种	Currency
+账户剩余余额	Remaining balance
+来源页面 / 备注	Source page / notes
+导入快照 JSON…	Import snapshot JSON…
+保存快照	Save snapshot
+同步与提醒	Sync & alerts
+应用运行时自动同步	Sync automatically while running
+同步间隔	Sync interval
+剩余额度提醒阈值	Low-quota alert threshold
+提醒阈值按剩余 % 让总览、菜单栏、浮动条与小组件变色；系统通知按下方「额度告警阈值」的已用 % 档位另算。关闭应用后停止同步。手动账户不会被自动更新。	This threshold recolors the overview, menu bar, floating bar and widgets by remaining %; system notifications use the used-% steps under "Quota alert threshold" below. Quitting stops sync. Manual accounts are never updated automatically.
+外观与连接	Appearance & connection
+外观	Appearance
+跟随系统	System
+浅色	Light
+深色	Dark
+语言 / Language	Language / 语言
+Codex 程序	Codex executable
+自动查找已安装的 Codex	Find installed Codex automatically
+自动	Automatic
+数据与备份	Data & backups
+完整数据包含账户、历史、外观与语言设置，以及数据目录中的全部 PDF 和其他文档。API 密钥保留在钥匙串，不随备份导出。	Full exports include accounts, history, appearance, language, and all PDFs and documents in the data folder. Secrets remain in Keychain and are not exported.
+打开数据目录	Open data folder
+通用快照文件	Standard snapshots
+所有平台均可连接标准 JSON 快照。外部脚本更新文件后，应用会定时读取；observedAt 表示实际观测时间，不能用刷新时间冒充。	All platforms support standard JSON snapshots. Files are read periodically. observedAt must reflect the actual observation time, not the time the file was read.
+导出快照格式示例…	Export snapshot example…
+macOS 原生应用	Native macOS application
+会员限额并非固定 Token 数；官方账单可能延迟。通用快照不代表所有平台已实现自动登录。自动接口均只读取，不调用模型、不充值、不修改订阅。	Membership quotas are not fixed token amounts. Official billing may lag. File support does not mean automatic platform login. Connectors only read; they do not run models, top up or change subscriptions.
+添加账户，随时查看剩余额度。	Add an account to see remaining quotas.
+待接入	Not connected
+同步失败，打开主窗口查看	Sync failed. Open the main window for details.
+打开主窗口	Open main window
+退出搞词元	Quit GaoCiYuan
+待刷新	Awaiting refresh
+重置时间已到，等待新数据	Reset time passed; awaiting new data
+平台未提供重置时间	Reset time not provided
+服务地区	Service region
+国内站	China
+国际站	International
+手动记录	Manual
+本机 Codex	Local Codex
+OpenAI 管理 API	OpenAI Admin API
+Claude 管理 API	Claude Admin API
+DeepSeek 余额 API	DeepSeek Balance API
+Kimi 余额 API	Kimi Balance API
+自动读取快照文件	Snapshot file
+xAI 账单 API	xAI Billing API
+阿里云余额 API	Alibaba Cloud Balance API
+火山引擎余额 API	Volcengine Balance API
+API 用量	API usage
+Qwen · 通义千问	Qwen
+豆包	Doubao
+GLM · 智谱	GLM · Zhipu
+Codex 官方服务	Official Codex service
+每周	Weekly
+5 小时	5 hours
+主要窗口	Primary window
+次要窗口	Secondary window
+当前窗口	Current window
+额度比例不等同于固定 Token 余额；保留官方独立额度池。	Quota percentages are not fixed token balances. Official quota pools remain separate.
+余额	Balance
+手动导入快照	Imported snapshot
+桌面小组件	Desktop widget
+全部账户	All accounts
+暂无账户	No accounts yet
+导入这份数据？	Import this data?
+导入	Import
+请等待当前同步完成后再导入。	Wait for the current sync to finish before importing.
+导出成功：账户、历史、设置和数据目录内的全部文档已打包。密钥仍保留在钥匙串。	Exported accounts, history, settings and all documents in the data folder. Credentials remain in Keychain.
+导入完成，原数据及所有文档均已保留。请检查账户连接后再开启自动同步。	Import complete. Original data and documents were preserved. Check connections before enabling automatic sync.
+平台响应格式不符，保留上次数据；请检查接口或升级连接器。	Unexpected platform response. Previous data was retained; check the API or update the connector.
+网络连接失败，请检查网络后重试。	Connection failed. Check your network and retry.
+请填写有效的 Team ID 或 AccessKey ID。	Enter a valid Team ID or AccessKey ID.
+关闭小组件	Close widget
+拖动空白处移动位置	Drag empty space to move
+Codex 可读取本机会员额度；API 用量和费用需组织 Admin Key。ChatGPT 聊天额度与 Codex 额度分别计算。	Local Codex reads membership quota pools. API reports require an organization Admin Key. ChatGPT chat limits and Codex limits are separate.
+API 用量与费用需组织 Admin Key；Pro / Max 会员额度可从官方用量页录入或通过快照文件同步。	API reports require an organization Admin Key. Enter Pro / Max membership quotas from the official usage page or sync a snapshot file.
+API Key 可自动查询账户余额；Token 和消费明细通过快照文件或手动录入。	An API key can query account balance. Use snapshots or manual entry for token and spending details.
+国内 Moonshot API Key 可查询人民币余额；Kimi 会员与 API 账户分别记录。	A China Moonshot API key can query CNY balance. Kimi membership and API accounts are tracked separately.
+xAI Management Key 与 Team ID 可查询本月 API 费用及预付余额；不代表 Grok 聊天会员额度。	An xAI Management Key and Team ID can query monthly API costs and prepaid balance, not Grok chat membership quotas.
+Google AI 聊天会员尚未发现公开额度接口。API 账单需 Cloud Billing 导出至 BigQuery；本版支持标准快照同步。	No public Google AI chat quota API was verified. API billing uses Cloud Billing exports to BigQuery; this version supports standard snapshot files.
+阿里云 AccessKey 可查询云账户现金余额，覆盖该云账号所有产品，不是百炼独占余额；聊天会员、Token 与费用可用快照同步。	Alibaba Cloud AccessKeys can query account-wide cash balance, not a Model Studio exclusive balance. Use snapshots for chat quotas, tokens and costs.
+火山引擎 AccessKey 可查询云账号可用余额，覆盖该账号所有产品，不是豆包会员额度或方舟独占余额。	Volcengine AccessKeys can query account-wide available balance, not Doubao membership or an Ark exclusive balance.
+使用 GLM Coding Plan Key，按智谱官方插件读取套餐额度；按量 API 与聊天会员另行记录。	Use a GLM Coding Plan key to read quotas through the official plugin's endpoint. Track pay-as-you-go API and chat membership separately.
+使用 Token Plan 专用 Key 查询模型额度窗口；支持国内与国际站。按量余额与聊天会员不在此接口内。	Use a Token Plan key to query model quota windows in China or internationally. This endpoint excludes pay-as-you-go balances and chat memberships.
+尚未核实公开的余额或会员额度接口；支持标准快照及手动录入，不使用网页登录 Cookie。	No public balance or membership quota API was verified. Standard snapshots and manual entry are supported, without browser cookies.
+Claude 官方管理 API	Official Claude Admin API
+OpenAI 官方管理 API	Official OpenAI Admin API
+DeepSeek 官方 API	Official DeepSeek API
+Kimi 官方 API	Official Kimi API
+GLM 官方 Coding Plan 接口	Official GLM Coding Plan API
+MiniMax 官方 Token Plan API	Official MiniMax Token Plan API
+xAI 官方 Management API	Official xAI Management API
+阿里云官方 BSS API	Official Alibaba Cloud BSS API
+火山引擎官方 Billing API	Official Volcengine Billing API
+官方 API	Official API
+余额不代表累计消费；此接口不提供 Token 用量。	Balance is not cumulative spending. This endpoint does not report token usage.
+余额包含有效赠金与充值余额；此接口不提供 Token 和累计费用。	Balance includes valid promotional and prepaid credits. This endpoint does not report tokens or cumulative costs.
+UTC 本月组织级报告；Token 为 completions 类别，费用来自独立 Costs 报告。缓存输入不重复累加。	Current UTC month, organization-wide. Tokens cover completions; costs come from the separate Costs report. Cached input is not double counted.
+UTC 本月组织级报告；含缓存读写，Priority Tier 费用不在官方成本接口内。	Current UTC month, organization-wide. Includes cache reads and writes. The official cost endpoint excludes Priority Tier costs.
+UTC 本月团队 API 费用及预付余额；不含 Grok 会员额度，接口未提供本次查询的 Token 总数。	Current UTC month team API costs and prepaid balance. Excludes Grok membership quotas and does not report token totals for this query.
+优先采用官方剩余百分比；旧字段按官方 CLI 兼容规则解析。额度单位随模型而异，不换算为固定 Token。	Official remaining percentages take priority. Legacy fields follow the official CLI convention. Units vary by model and are not converted to fixed tokens.
+使用智谱官方额度查询插件相同的只读端点；百分比为已用比例，未猜测重置时间。	Uses the same read-only endpoint as Zhipu's official quota plugin. Percentages represent usage. Reset times are not guessed.
+整个阿里云账号的现金余额，包含其他云产品；不是 Qwen 独占额度，不包含授信额度。	Cash balance across the Alibaba Cloud account, including other products. Not a Qwen-exclusive quota; excludes credit limits.
+火山引擎国内云账号可用余额，可能包含授信并扣除冻结款；不是豆包会员或方舟独占额度。	China Volcengine account-wide available balance, which may include credit and deduct frozen funds. Not a Doubao or Ark-exclusive quota.
+Codex 读取超时或服务退出。请确认已登录且网络可用。	Codex timed out or exited. Check your login and network.
+Codex 额度读取失败。请在 Codex 中登录会员账号后重试。	Could not read Codex quotas. Sign into a membership account in Codex and retry.
+未找到 Codex。请安装并登录 Codex，或在设置中选择可执行文件。	Codex was not found. Install and sign in, or select its executable in Settings.
+该账号未返回可用额度窗口。API Key 登录不能读取会员额度。	The account returned no quota windows. API key logins cannot read membership quotas.
+请在账户设置中保存 API 密钥。	Save a credential in account settings.
+平台未返回有效套餐额度，请确认使用 Token Plan 专用密钥。	No valid plan quotas returned. Check that you are using a Token Plan key.
+Token 与费用必须注明统计起止时间。	Tokens and costs require a reporting start and end time.
+Token 请输入非负整数。	Enter a nonnegative integer for tokens.
+不兼容或无效的存档。	Incompatible or invalid archive.
+不支持的备份格式或文件路径。	Unsupported backup format or file path.
+备份中的快照引用无效。	Invalid snapshot reference in backup.
+备份文件校验失败，未导入任何数据。	Backup checksum failed. Nothing was imported.
+备份文件缺失或清单不一致。	Backup files are missing or do not match the manifest.
+备份文件路径无效。	Invalid backup file path.
+备份清单不能是符号链接。	The backup manifest cannot be a symbolic link.
+存档不可写。	The archive is not writable.
+密钥无效或登录已过期	Invalid credential or expired login
+平台限流，请稍后刷新	Rate limited; try again later
+快照包含无效时间、重复项目、百分比或数值。	Snapshot contains invalid dates, duplicate items, percentages or values.
+快照文件不能超过 2 MB。	Snapshot files must not exceed 2 MB.
+快照路径是符号链接，请选择实际文件。	Select the actual snapshot file, not a symbolic link.
+手动账户请使用“录入用量”更新。	Use Enter usage to update manual accounts.
+报告页数超出安全上限，未保存不完整统计。	Report page limit exceeded. Partial totals were not saved.
+数据包含符号链接，请先将实际文件复制到数据目录。	Data contains symbolic links. Copy the actual files into the data folder first.
+数据目录不是有效的普通目录。	The data path is not a valid regular folder.
+数据目录包含不支持的特殊文件。	The data folder contains unsupported special files.
+无法读取数据目录。	Unable to read the data folder.
+服务不可用	Service unavailable
+权限不足；管理接口需要组织 Admin Key	Insufficient permission; admin endpoints require an organization Admin Key
+统计起始时间不能晚于结束时间。	The reporting start time must not be later than its end.
+请先恢复可用的数据备份。	Restore a valid data backup first.
+请将备份保存在应用数据目录之外。	Save the backup outside the application data folder.
+请至少填写一个额度窗口。	Enter at least one quota window.
+请至少填写一项实际用量或金额。	Enter at least one actual usage or monetary value.
+请选择可读取的 JSON 文件。	Choose a readable JSON file.
+请选择快照 JSON 文件。	Choose a snapshot JSON file.
+账户设置无效。	Invalid account settings.
+金额请输入有效数字。	Enter a valid number for the amount.
+预算请输入大于 0 的数字。	Enter a budget greater than zero.
+额度名称不能为空，剩余比例必须在 0–100 之间。	Quota names are required and remaining percentages must be between 0 and 100.
+时间	Time
+窗口	Window
+更新时间	Updated at
+来源	Source
+类型	Type
+账户	Account
+费用	Cost
+输入Token	Input tokens
+输出Token	Output tokens
+自定义窗口	Custom window
+会员自动识别	Automatic membership discovery
+自动读取本机官方用量页（含免费额度）	Read local official usage pages automatically (including free plans)
+支持 Chrome、Edge、Safari 及可访问的客户端页面。仅读取官方用量页中明确显示的百分比；登录本身不代表平台公开剩余额度。当前标签页之外的网页及未显示的数值无法读取。	Supports Chrome, Edge, Safari and accessible client pages. Reads explicit percentages on official usage pages. Login alone does not expose quotas. Other tabs and values not shown on the page cannot be read.
+授予辅助功能权限…	Grant Accessibility permission…
+立即识别	Scan now
+本机读取已授权	Local reading authorized
+等待系统授权，尚未开始读取	Waiting for system permission; reading has not started
+打开官方用量页	Open official usage page
+已自动读取页面额度	Page quota read automatically
+已发现官方页面；登录与剩余额度尚未确认	Official page detected; login and remaining quota not confirmed
+已发现客户端；尚未显示可读取的官方用量页	Client detected; no readable official usage page is visible
+本机页面自动读取	Automatic local page reading
+本机官方页面读取	Local official page reading
+当前页面（含免费方案）	Current page (including free plans)
+来自当前可访问的官方用量页，可能有页面缓存；未读取登录凭据，不猜测重置时间。此记录代表浏览器当前页面，不区分同一浏览器内的不同登录账号。	From the accessible official usage page, which may be cached. No credentials are read or reset times guessed. This record represents the current browser page and does not distinguish logins within the same browser.
+请在官方用量页显示额度，应用会在获授权后自动读取。	Show quotas on the official usage page. The app reads them automatically once permission is granted.
+每月	Monthly
+系统小组件	System widget
+这是 macOS WidgetKit 小组件。请在桌面或通知中心进入“编辑小组件”，搜索“搞词元”，可添加小号、中号或大号额度总览。退出主应用后仍会保留最近一次同步结果。	This is a macOS WidgetKit widget. Choose Edit Widgets on the desktop or in Notification Center, search for GaoCiYuan, and add the small, medium, or large overview. The latest synced result remains visible after the main app quits.
+刷新小组件数据	Refresh widget data
+小组件数据已刷新。	Widget data refreshed.
+小组件数据写入失败，请重新打开应用后再试。	Could not write widget data. Reopen the app and try again.
+小组件仅包含账户名称和用量摘要，不包含 API 密钥、Cookie 或聊天内容。	The widget contains account names and usage summaries only. It never contains API keys, cookies, or chat content.
+搞词元 V1.8	GaoCiYuan V1.8
+添加 LLM 账户	Add LLM Account
+Agent 接入说明	Agent Connection Notice
+各 Agent（如 Codex、Antigravity 等）的额度监控由该 Agent 在其自身运行环境中自动操作接入，无需在此手动添加。例如当前监视的 Codex 与 Antigravity 均由其自身自动配置添加。此处仅供手动添加 LLM (API) 账户。	Agent quota monitoring is configured and added automatically by each agent (such as Codex, Antigravity, etc.) within its own runtime environment, and does not require manual addition here. For example, Codex and Antigravity monitoring are added automatically by themselves. This interface is only for manually adding LLM (API) accounts.
+12 个平台 · LLM 官方接入	12 Platforms · Official LLM Connections
+Agent 由各 Agent 自身自动化接入；LLM 对接官方 API。支持通用快照文件同步，不采集聊天正文。	Agents are connected automatically by themselves; LLM connects via official APIs. Supports standard JSON snapshot files without collecting chat text.
+支持 API 接入	Supports API Connection
+还没有添加 LLM 账户	No LLM accounts added yet
+暂无已接入的 Agent 账户	No connected Agent accounts yet
+Agent 额度监控由各 Agent 在其自身运行环境中自动配置接入，无需手动添加。	Agent quota monitoring is automatically configured and added by each agent in its own runtime environment; no manual addition required.
+Kimi Code 额度 API	Kimi Code quota API
+Kimi Code 官方额度 API	Kimi Code official quota API
+使用 Kimi Code 订阅专用 Key（kimi.com 控制台获取，通常 sk-kimi- 开头），与 Moonshot 开放平台按量 Key 互不通用。密钥仅保存在本机钥匙串。	Use a Kimi Code subscription key (from the kimi.com console, usually starting with sk-kimi-). It is not interchangeable with Moonshot Open Platform pay-as-you-go keys. Secrets stay in macOS Keychain.
+Agent（Kimi Work / Kimi Code）：保存 Kimi Code 专用 Key 后自动读取官方额度，或经辅助功能只读读取本机 Kimi 桌面端订阅页（月度额度池，无需 Key），否则检测本机软件状态；LLM（API）支持 Moonshot Key 查询人民币余额与 Kimi Code 额度。	Agent (Kimi Work / Kimi Code): reads official quotas with a saved Kimi Code key, or read-only reads the local Kimi desktop subscription page via Accessibility (monthly quota pool, no key needed); otherwise detects local software status. LLM (API) supports Moonshot key CNY balance and Kimi Code quotas.
+Kimi 桌面订阅页	Kimi Desktop Subscription
+经系统辅助功能只读读取本机 Kimi 桌面端「设置 › 订阅 › 我的订阅」页面的会员月度额度池与 Kimi Code 用量；本机读取，无需 Key。Kimi 前台使用中不打扰，后台自动导航读取，未运行时保留上次状态。	Read-only reads the membership monthly quota pool and Kimi Code usage from the local Kimi desktop app's Settings › Subscription › My Subscription page via macOS Accessibility; fully local, no key required. It never interrupts while Kimi is in the foreground, navigates in the background otherwise, and keeps the last state when Kimi is not running.
+Kimi 桌面端未运行。启动后将在下次同步自动补读；上次数据已保留。	Kimi Desktop is not running. It will be read automatically on the next sync after launch. Previous data was retained.
+需在「系统设置 - 隐私与安全性 - 辅助功能」中勾选允许「搞词元」，允许后点立即同步即可读取。上次数据已保留。	Grant GaoCiYuan in System Settings - Privacy & Security - Accessibility, then sync to read. Previous data was retained.
+Kimi 使用中，稍后自动补读；上次数据已保留。	Kimi is in active use; will read later automatically. Previous data was retained.
+未能后台打开 Kimi 设置页（菜单项不可用）。上次数据已保留。	Could not open the Kimi settings page in the background (menu item unavailable). Previous data was retained.
+订阅页额度区块未读取到（页面结构可能已变化）。上次数据已保留。	The quota block on the subscription page could not be read (the page layout may have changed). Previous data was retained.
+各 AI 平台专属本机 Agent 软件。	Dedicated local agent software for each AI platform.
+大模型 API 余额、Token 与费用。	LLM API balances, tokens and costs.
+Agent 百分比、API Token 与账户余额是不同指标。没有数据时显示“—”；快照超过 15 分钟会标记为历史数据。	Agent percentages, API tokens and balances are different measures. Missing values appear as “—”. Snapshots over 15 minutes old are marked as stale data.
+自动连接并检测各大 AI 平台的本机 Agent 软件（如 Codex、Claude Code、Antigravity 等），由 Agent 自身自动化配置接入。	Automatically connects to and detects each AI platform's local agent software (such as Codex, Claude Code, Antigravity); agents configure their own integration.
+历史数据	Stale data
+— 尚未读取到额度	— No quota read yet
+连接后自动读取真实数据，不预填额度。	Real data is read automatically after connecting; quotas are never prefilled.
+打开系统设置授权 ↗	Open System Settings to authorize ↗
+详情 ▸	Details ▸
+收起 ▾	Collapse ▾
+成功同步后，会在这里留下记录。	Successful syncs appear here.
+专属 Agent 软件	Dedicated agent software
+如组织名称或项目名	e.g. organization or project name
+复用本机 Codex 已登录的会员账号，通过官方服务读取所有额度池。不读取聊天、不发起模型调用。	Uses your existing local Codex login and official service to read all quota pools. No chats or inference calls.
+Kimi 桌面订阅页（推荐 · 免 Key）	Kimi Desktop Subscription (recommended · no key)
+测试连接	Test connection
+测试中…	Testing…
+连接成功 ✓	Connected ✓
+连接成功，暂未读取到额度数据。	Connected; no quota data read yet.
+本机软件自动读取	Local software auto-read
+阿里云百炼 / 余额 API	Alibaba Cloud Model Studio / Balance API
+火山引擎方舟 / 余额 API	Volcengine Ark / Balance API
+Antigravity 本机服务	Antigravity local service
+Claude Code 本机服务	Claude Code local service
+豆包 本机服务	Doubao local service
+豆包 暂未启动。启动本机软件并在头像-额度状态中查看后自动读取，不预填额度。	Doubao is not running. Launch the local app and open Avatar - Quota Status; it will be read automatically. Quotas are never prefilled.
+豆包 软件运行中。请在软件中点击头像-额度状态查看额度，搞词元将自动同步已用额度，不预填额度。	Doubao is running. Open Avatar - Quota Status in the app; GaoCiYuan will sync the used quota automatically. Quotas are never prefilled.
+Kimi 前台使用中，稍后自动补读；上次数据已保留。	Kimi is in active use; will read later automatically. Previous data was retained.
+Agent（Codex）自动读取本机官方服务；LLM（API）需组织 Admin Key 查询 completions 用量与成本。	Agent (Codex) reads the local official service automatically; LLM (API) requires an organization Admin Key to query completions usage and costs.
+Agent（Claude Code）自动检测本机软件环境；LLM（API）需组织 Admin Key 读取 Messages 用量与成本。	Agent (Claude Code) detects the local software environment automatically; LLM (API) requires an organization Admin Key to read Messages usage and costs.
+Agent（DeepSeek Harness）自动检测本机软件；LLM（API）需 API Key 自动查询账户余额。	Agent (DeepSeek Harness) detects the local software automatically; LLM (API) queries account balance with an API key.
+Agent（Grok Bot）自动检测本机软件；LLM（API）需 xAI Management Key 查询本月费用与预付余额。	Agent (Grok Bot) detects the local software automatically; LLM (API) requires an xAI Management Key to query monthly costs and prepaid balance.
+Agent（Antigravity）自动检测本机软件环境；LLM（API）支持快照文件同步。	Agent (Antigravity) detects the local software environment automatically; LLM (API) supports standard snapshot files.
+Agent（Qoder）自动检测本机软件；LLM（API）支持阿里云百炼/现金余额自动查询。	Agent (Qoder) detects the local software automatically; LLM (API) supports automatic Alibaba Cloud Model Studio / cash balance queries.
+Agent（豆包 Work）自动检测本机软件；LLM（API）支持火山引擎云账号余额自动查询。	Agent (Doubao Work) detects the local software automatically; LLM (API) supports automatic Volcengine account balance queries.
+Agent（Zcode）自动读取 Coding Plan 额度；LLM（API）支持智谱开放平台 API。	Agent (Zcode) reads Coding Plan quotas automatically; LLM (API) supports the Zhipu open platform API.
+Agent（MiniMax Code）自动查询 Token Plan 额度；LLM（API）支持按量 API。	Agent (MiniMax Code) queries Token Plan quotas automatically; LLM (API) supports pay-as-you-go APIs.
+Agent（Workbuddy）自动检测本机腾讯混元助手软件；LLM（API）支持混元开放接口。	Agent (Workbuddy) detects the local Tencent Hunyuan assistant software automatically; LLM (API) supports Hunyuan open endpoints.
+Agent（MiMo Agent）自动检测本机软件；LLM（API）支持快照文件同步。	Agent (MiMo Agent) detects the local software automatically; LLM (API) supports standard snapshot files.
+专属 Codex 助手校验失败（文件可能已被改动），已拒绝执行。请重新运行安装脚本，或在设置中手动选择 Codex 可执行文件。	The dedicated Codex helper failed verification (the file may have been modified) and was not executed. Re-run the installer, or select the Codex executable manually in Settings.
+Kimi 会员有效期	Kimi membership validity
+Codex 官方接口	Codex official endpoint
+Claude Code 官方接口	Claude Code official endpoint
+Claude Code 状态栏推送	Claude Code status line push
+Claude 桌面会话	Claude desktop session
+官方 OAuth 只读接口；额度比例不等同于固定 Token 余额。	Read-only official OAuth endpoint; quota ratios are not fixed token balances.
+Claude Code 未返回可用额度窗口。	Claude Code returned no usable quota windows.
+Claude Code 状态栏已连接，等待下次会话推送额度数据；上次数据已保留。	Status line connected; waiting for the next Claude Code session to push quota data. Previous data was retained.
+Claude Code 登录已过期，请在 Claude Code 中重新登录，或在设置中连接状态栏推送。上次数据已保留。	Your Claude Code login has expired. Sign in again in Claude Code, or connect the status line push in Settings. Previous data was retained.
+未找到 Claude Code 登录凭证。请登录 Claude Code，或在设置中连接状态栏推送。	No Claude Code login credentials found. Sign in to Claude Code, or connect the status line push in Settings.
+Claude 桌面会话路需要一次钥匙串授权：请点击「立即同步」完成授权。上次数据已保留。	The Claude desktop session route needs a one-time Keychain grant: click Sync Now to authorize. Previous data was retained.
+Claude 桌面端与 CLI 登录的账号不一致，已忽略桌面会话读数。上次数据已保留。	The Claude desktop app and CLI are signed in as different accounts; the desktop session reading was ignored. Previous data was retained.
+未在 Claude 桌面端找到登录会话。请在桌面端登录后重试。	No signed-in session found in the Claude desktop app. Sign in there and retry.
+未获得读取 Claude 桌面端会话的钥匙串授权。手动同步时会再次询问。	Keychain access to the Claude desktop session was not granted. You will be asked again on a manual sync.
+Claude 桌面端会话已过期，请在桌面端重新登录。上次数据已保留。	The Claude desktop session has expired. Sign in again in the desktop app. Previous data was retained.
+借用本机 Claude 桌面端（Electron）的登录会话读取官方用量，适合主要在桌面端使用 Claude 的场景。默认关闭，仅在你显式选择时启用，首次需一次钥匙串授权。只读会话键与当前组织，不读取聊天内容。	Borrows the local Claude desktop (Electron) login session to read official usage, for those who mainly use Claude in the desktop app. Off by default and enabled only when you explicitly choose it; requires a one-time Keychain grant. Reads only the session key and active organization, never chats.
+自动链：官方 OAuth 接口（本机登录凭证）→ 状态栏推送（可在设置中一键连接）→ 本地记录。登录过期时建议在设置中连接状态栏推送。	Automatic chain: official OAuth endpoint (local login credentials) → status line push (one-click connect in Settings) → local records. When the login expires, connecting the status line push in Settings is recommended.
+把搞词元注册为 Claude Code 的官方状态栏命令后，即使本机登录过期，额度也会在每次会话响应后自动推送。修改前会备份 ~/.claude/settings.json（settings.json.gaociyuan-backup），已有状态栏命令会链式保留，断开后自动恢复。	Once GaoCiYuan is registered as Claude Code's official status line command, quotas are pushed after every session response even when the local login expires. ~/.claude/settings.json is backed up first (settings.json.gaociyuan-backup); an existing status line command is chained and restored on disconnect.
+已连接状态栏推送	Status line push connected
+未连接状态栏推送	Status line push not connected
+断开并恢复	Disconnect & restore
+连接状态栏	Connect status line
+已断开 Claude Code 状态栏推送，原状态栏命令已恢复。	Disconnected from the Claude Code status line push; the previous status line command was restored.
+已连接 Claude Code 状态栏推送。	Claude Code status line push connected.
+无法读取 ~/.claude/settings.json，未做任何修改。请检查该文件后重试。	Could not read ~/.claude/settings.json; nothing was changed. Check the file and retry.
+Agent（Claude Code）：优先经官方 OAuth 接口读取本机登录的额度窗（5 小时/每周/按模型），登录过期时可用官方状态栏推送（设置里一键连接）；可选 Claude 桌面会话路（默认关，显式选择，需一次钥匙串授权）；LLM（API）需组织 Admin Key 读取 Messages 用量与成本。	Agent (Claude Code): reads the local login's quota windows (5-hour/weekly/per-model) via the official OAuth endpoint first; when the login expires, the official status line push can take over (one-click in Settings); an optional Claude desktop session route is off by default and needs explicit choice plus a one-time Keychain grant. LLM (API) requires an organization Admin Key for Messages usage and costs.
+Cursor 编辑器登录态	Cursor editor login
+复用本机 Cursor 编辑器已登录的账号：读取编辑器自己保存的登录令牌，拼出官方账号接口认可的会话，不读取浏览器 Cookie。Cursor 会自动续期令牌；提示过期时打开一次 Cursor 即可。只读额度与余额，不发起模型调用。	Reuses the login your local Cursor editor already holds: the editor's own stored token is turned into the session its official account endpoint accepts, without touching any browser cookie. Cursor renews the token itself; if told it expired, open Cursor once. Read-only quotas and balance; no model calls.
+Agent（Cursor 编辑器登录态）复用本机 Cursor 编辑器已登录的账号，经官方账号接口读取双额度池（Cursor Models / Other Models）与套餐余额；令牌只用于拼一次请求头，不落盘、不读取浏览器 Cookie、不发起模型调用。	Agent (Cursor editor login) reuses the account your local Cursor editor is signed in with, reading the two quota pools (Cursor Models / Other Models) and the plan balance through the official account endpoint; the token only builds one request header, is never written to disk, never touches browser cookies, and makes no model calls.
+Cursor 登录态已过期，请打开 Cursor 编辑器完成登录后重试。	Cursor login has expired; open the Cursor editor to sign in again, then retry.
+未找到本机 Cursor 编辑器登录。请在 Cursor 中登录账号后重试。	No local Cursor editor login found. Sign in to Cursor and retry.
+Cursor 登录态已被拒绝，请打开 Cursor 编辑器重新登录。	The Cursor login was refused; open the Cursor editor and sign in again.
+Cursor 未返回可用额度窗口。请确认账号已开通套餐。	Cursor returned no usable quota windows. Confirm the account has a plan.
+Cursor 官方账号接口	Cursor official account endpoint
+Cursor Models · 每月	Cursor Models · Monthly
+Other Models · 每月	Other Models · Monthly
+Cursor 套餐 · 每月	Cursor plan · Monthly
+Cursor · 额外用量	Cursor · Extra usage
+双额度池与账单周期同步重置；套餐余额为美分换算的真余额，与额度池分母不同不并列。额度比例不等同于固定 Token 余额。	The two pools reset with the billing cycle; the plan balance is real money converted from cents, kept apart from the pools' different denominator. A quota share is not a fixed token balance.
+GitHub 设备流登录	GitHub device sign-in
+Agent（GitHub 设备流登录）一键授权 GitHub（仅 read:user 权限，绝不索取 repo 等代码权限），经 Copilot 插件官方内部接口读取 Premium / Chat / Completions 三条月度额度；令牌只存本机钥匙串，不读取 gh CLI 的凭证。	Agent (GitHub device sign-in): one-tap GitHub authorization (read:user scope only — never repo or other code access), reading the three monthly Copilot lanes (Premium / Chat / Completions) via the Copilot plugin's official internal endpoint; the token lives only in this Mac's Keychain and gh CLI credentials are never read.
+登录 GitHub	Sign in to GitHub
+等待浏览器授权…	Waiting for browser authorization…
+浏览器中输入代码：	Enter this code in the browser:
+点「登录 GitHub」后代码已复制到剪贴板并打开授权页，输入代码即完成；只索取 read:user 权限（读不了代码仓库），令牌仅存本机钥匙串，与 gh CLI 的凭证无关。授权页会显示 VS Code Copilot 插件的名字——这是它公开的客户端，不是官方集成。	After "Sign in to GitHub" the code is copied to the clipboard and the consent page opens — type the code to finish. Only read:user is requested (your repositories stay unread); the token lives only in this Mac's Keychain, independent of gh CLI. The consent page names the VS Code Copilot plugin — its public client is used; this is not an official integration.
+GitHub 已登录 ✓ 保存账户后生效。	GitHub signed in ✓ Save the account to apply.
+GitHub 设备登录应答格式不符，请稍后重试。	GitHub's device sign-in reply had an unexpected shape; retry later.
+GitHub 登录已被取消。	GitHub sign-in was cancelled.
+浏览器没有及时完成登录，代码已过期。请重新发起登录。	The browser did not finish in time and the code expired. Start the sign-in again.
+浏览器没有及时完成登录，已超时。请重新发起登录。	The browser did not finish in time. Start the sign-in again.
+GitHub 登录已失效，请重新登录。	The GitHub sign-in is no longer valid; sign in again.
+该账号未返回 Copilot 额度车道，请确认已开通 Copilot。	The account returned no Copilot quota lanes; confirm Copilot is subscribed.
+GitHub Copilot 官方插件接口	GitHub Copilot official plugin endpoint
+接口报剩余已反转为已用；三条车道每月随账号统一重置；允许超额付费的车道剩余为 0 不算耗尽。	The endpoint reports what is left, inverted here to what is used; all three lanes reset together monthly; a lane with paid overage is not exhausted at zero.
+GitHub 设备登录失败	GitHub device sign-in failed
+GitHub 拒绝了设备登录：	GitHub refused the device sign-in: 
+Grok 账号额度	Grok account quota
+借用本机 Grok CLI 已登录的账号，读取全 Grok 产品共用的账号额度池（网页聊天/Imagine/语音/API/CLI 同一个池）。CLI 令牌约 6 小时有效、使用中自动续期；提示过期时在 Grok CLI 中使用一次即可。与 Grok Bot（CLI 账单）是两笔账。	Borrows the login your local Grok CLI holds to read the account quota pool shared by every Grok product (web chat / Imagine / voice / API / CLI — one pool). The CLI token lives about 6 hours and renews while you use it; if told it expired, use the Grok CLI once. This is a different bill from Grok Bot (CLI billing).
+未找到本机 Grok CLI 登录。请安装并登录 Grok CLI 后重试。	No local Grok CLI login found. Install and sign in to the Grok CLI, then retry.
+Grok CLI 登录已过期（令牌约 6 小时有效，使用中自动续期）。请在 Grok CLI 中使用或重新登录后重试。	The Grok CLI login has expired (tokens live about 6 hours and renew with use). Use the Grok CLI or sign in again, then retry.
+Grok 未返回进行中的账单周期。请确认账号已开通 SuperGrok 等付费套餐。	Grok returned no running billing period. Confirm the account has a paid plan such as SuperGrok.
+Grok 账号官方接口	Grok account official endpoint
+Grok 账号池 · 每周	Grok account pool · Weekly
+Grok 账号池 · 每月	Grok account pool · Monthly
+全 Grok 产品共用同一额度池（网页聊天/Imagine/语音/API/CLI），无单产品独立数字；缺失的百分比按周期进行中读作 0。	All Grok products spend one shared pool (web chat / Imagine / voice / API / CLI); there are no per-product figures. A missing percentage reads as zero only inside a running period.
+GLM 密钥无效或未授权（国内站与国际站密钥互不通用，请检查服务地区）。	The GLM key is invalid or unauthorized (mainland and international keys are not interchangeable; check the service region).
+该账号没有进行中的 Coding Plan 订阅（密钥本身有效）。请开通订阅后重试。	The account has no running Coding Plan subscription (the key itself is valid). Subscribe, then retry.
+GLM 服务暂不可用（状态码 	GLM service unavailable (status 
+计数优先（currentValue > 配额−remaining > percentage 兜底）；窗口长度由 unit×number 读出，nextResetTime 为毫秒。	Counts win (currentValue > quota−remaining > percentage fallback); window length is read from unit×number; nextResetTime is epoch milliseconds.
+编程额度 · 每周	Coding quota · Weekly
+编程额度 · 每月	Coding quota · Monthly
+编程额度 · 5 小时	Coding quota · 5 hours
+MCP 工具 · 每月	MCP tools · Monthly
+MiniMax 密钥无效或已过期（国内站与国际站密钥互不通用，请检查服务地区）。	The MiniMax key is invalid or expired (mainland and international keys are not interchangeable; check the service region).
+MiniMax 服务暂不可用（状态码 	MiniMax service unavailable (status 
+报的是剩余（已反转）；计数与百分比同为字符串/数字双形态；status 3 未开通车道与无限车道不画；短窗长度由时间戳量出。	The reply states what is left (inverted here); counts and percentages arrive as strings or numbers; status-3 lanes not in the plan and unlimited lanes are not drawn; the short window's length is measured from its own timestamps.
+MiniMax · 每周	MiniMax · Weekly
+MiniMax · 5 小时	MiniMax · 5 hours
+火山方舟 Coding Plan API	Volcengine Ark Coding Plan API
+小米 MiMo Coding Plan	Xiaomi MiMo Coding Plan
+火山方舟 Coding Plan / Agent Plan 官方签名接口（按公开实现对接，未对真实账号验证）。需要火山引擎 AccessKey 对：AccessKey ID 填上行、Secret 填下行，两条套餐接口独立查询，一条被拒不影响另一条。	Volcengine Ark Coding Plan / Agent Plan official signed endpoints (integrated from a public implementation, not verified against a live account). A Volcengine access key pair is required: AccessKey ID above, Secret below. The two plan endpoints are queried independently; one refusal does not affect the other.
+小米 MiMo Coding Plan 控制台会话（按公开实现对接，未对真实账号验证）：在 platform.xiaomimimo.com 登录后，从浏览器开发者工具复制完整 Cookie 头粘贴到密钥框。只保留 serviceToken/userId 等必需项，其余 Cookie 不出本机；会话过期后需重新复制。	Xiaomi MiMo Coding Plan console session (integrated from a public implementation, not verified against a live account): sign in at platform.xiaomimimo.com, copy the full Cookie header from the browser's developer tools, and paste it into the key field. Only required names such as serviceToken/userId are kept — no other cookie leaves this Mac. Paste again when the session expires.
+火山方舟官方签名 API	Volcengine Ark official signed API
+火山方舟未返回有效额度窗口（账号可能未开通 Coding Plan / Agent Plan）。	Volcengine Ark returned no usable quota windows (the account may have no Coding Plan / Agent Plan).
+按公开实现对接，未对真实账号验证。	Integrated from a public implementation, not verified against a live account.
+Coding Plan 与 Agent Plan 两条接口独立查询，一条被拒不丢另一条；Quota 为 0 是未开通该窗不是已用满；AFPDaily 不映射。	The Coding Plan and Agent Plan endpoints answer independently — one refusal loses nothing of the other; a Quota of 0 means the window is not held, not that it is full; AFPDaily is not mapped.
+方舟 Coding Plan · 每周	Ark Coding Plan · Weekly
+方舟 Coding Plan · 每月	Ark Coding Plan · Monthly
+方舟 Coding Plan · 5 小时	Ark Coding Plan · 5 hours
+方舟 Agent Plan · 每周	Ark Agent Plan · Weekly
+方舟 Agent Plan · 每月	Ark Agent Plan · Monthly
+方舟 Agent Plan · 5 小时	Ark Agent Plan · 5 hours
+小米 MiMo 官方控制台接口	Xiaomi MiMo official console endpoint
+小米 MiMo 会话已过期，请重新登录 platform.xiaomimimo.com 并更新 Cookie。	The Xiaomi MiMo session has expired; sign in again at platform.xiaomimimo.com and update the Cookie.
+小米 MiMo 服务暂不可用（状态码 	Xiaomi MiMo service unavailable (status 
+该小米账号没有 MiMo Coding Plan（按 Token 按量付费的账号）。	This Xiaomi account has no MiMo Coding Plan (it buys tokens pay-as-you-go).
+MiMo Coding Plan · 每月	MiMo Coding Plan · Monthly
+MiMo Coding Plan 已过期，显示的上月数字不是当前额度。	The MiMo Coding Plan has expired; last month's figures it keeps reporting are not a current allowance.
+Cookie 值含有非法字符，请重新复制。	A Cookie value contains illegal characters; copy it again.
+Cookie 缺少必需项 api-platform_serviceToken 或 userId。请在 platform.xiaomimimo.com 登录后重新复制完整 Cookie 头。	The Cookie lacks required names (api-platform_serviceToken or userId). Sign in at platform.xiaomimimo.com and copy the full Cookie header again.
+余额分母	Balance denominator
+充值以来峰值（默认 · 实测）	Peak since top-up (default · measured)
+仅余额（无分母）	Balance only (no denominator)
+我的预算	My budget
+DeepSeek 余额接口不含百分比。「充值以来峰值」以本机观测到的余额峰值为分母，余额上升视为充值重新计满；「我的预算」以上方本月预算数字为分母。	DeepSeek's balance endpoint carries no percentage. "Peak since top-up" uses the highest balance this Mac has observed as the denominator — a rising balance is a top-up and restarts from full; "My budget" uses the monthly budget figure above.
+DeepSeek 余额 · 预算口径	DeepSeek balance · Budget basis
+ 仅显示余额，无分母。	 Balance only, no denominator.
+ 分母为自填预算 	Budget basis, denominator is the self-entered budget 
+DeepSeek 余额（	DeepSeek balance (
+）· 充值以来	) · Since top-up
+ 分母为自 	 Denominator is the observed balance peak since 
+ 起本机观测到的余额峰值（实测口径，余额上升即视为充值重新计满）。	 on this Mac (measured; a rising balance counts as a top-up and restarts from full).
+Devin 本机保存 plan	Devin locally saved plan
+Devin 账单 API（粘贴凭证）	Devin billing API (paste credential)
+Ollama Cloud 账号额度	Ollama Cloud account quota
+Command Code API	Command Code API
+Devin 本机缓存	Devin local cache
+Devin 账单 API	Devin billing API
+Ollama 设置页	Ollama settings page
+Command Code 官方接口	Command Code official API
+Devin 消息额度	Devin message allowance
+Command Code 组织支出上限	Command Code org spend limit
+Command Code 余额池（$）	Command Code credit pool ($)
+Agent（Devin）：本机保存 plan 路只读读取 Devin 应用（前身为 Windsurf）启动时缓存的每日/每周额度与超额余额，无需凭证，观测时间为最近一次启动；账单 API 路粘贴「token 组织」凭证读取实时已用百分比，两路独立互不回退。	Agent (Devin): the locally saved plan route reads the daily/weekly quota and overage balance the Devin app (formerly Windsurf) cached at launch — no credential, observed at the most recent launch; the billing API route takes a pasted "token organization" credential and reads live used percentages. The two routes are independent and never fall back to each other.
+Agent（Ollama）：粘贴浏览器 Cookie 读取 ollama.com 设置页的 Session（5 小时）与 Weekly（每周）用量；按公开实现对接，未对真实账号验证。LLM（API）支持快照文件同步。	Agent (Ollama): paste the browser Cookie to read Session (5-hour) and Weekly usage from the ollama.com settings page; integrated from a public implementation, not verified against a live account. LLM (API) supports snapshot-file sync.
+Agent（Command Code）：粘贴 API Key 或复用本机 command-code CLI 登录，读取美元计价的滚动窗、组织支出上限、套餐月度额度（授权额为公开价目表，估算口径）与余额；按公开实现对接，未对真实账号验证。LLM（API）支持快照文件同步。	Agent (Command Code): paste an API Key or reuse the local command-code CLI login to read dollar-denominated rolling windows, org spend limits, the plan's monthly grant (sized from the published pricing table, estimated) and balance; integrated from a public implementation, not verified against a live account. LLM (API) supports snapshot-file sync.
+只读读取本机 Devin 应用（前身为 Windsurf）启动时保存的套餐缓存：每日/每周额度与超额余额，观测时间即最近一次启动，超过 24 小时未启动视为过旧。无需任何凭证；与账单 API 路独立，互不回退。	Read-only: the plan cache the local Devin app (formerly Windsurf) writes at launch — daily/weekly quota and overage balance, observed at the most recent launch, stale after 24 hours without a launch. No credential needed; independent of the billing API route, never crossing over.
+Devin 账单接口（按公开实现对接，未对真实账号验证）：从 app.devin.ai 浏览器开发者工具复制 Authorization 请求头与组织名（或组织设置页地址），以「token 组织」格式粘贴到密钥框。接口报已用百分比，与本机缓存报的剩余相反。	Devin billing API (integrated from a public implementation, not verified against a live account): copy the Authorization header and the organization name (or its settings URL) from the browser's developer tools on app.devin.ai, and paste them as "token organization" into the key field. The endpoint reports used percentages — the opposite of the local cache, which reports what is left.
+Ollama Cloud 账号额度（按公开实现对接，未对真实账号验证）：在 ollama.com 登录后，从浏览器开发者工具复制完整 Cookie 头粘贴到密钥框。只保留 wos-session 等认证项，其余 Cookie 不出本机；读取设置页的 Session（5 小时）与 Weekly（每周）用量。	Ollama Cloud account quota (integrated from a public implementation, not verified against a live account): sign in at ollama.com, copy the full Cookie header from the browser's developer tools and paste it into the key field. Only authenticating entries such as wos-session are kept — no other cookie leaves this Mac; reads Session (5-hour) and Weekly usage from the settings page.
+Command Code 账单接口（按公开实现对接，未对真实账号验证）：粘贴 API Key，或留空复用本机 command-code CLI（cmd auth login）保存的登录。美元计价：5 小时/每周滚动窗、组织支出上限、套餐月度额度（授权额为公开价目表，估算口径）与余额。	Command Code billing API (integrated from a public implementation, not verified against a live account): paste an API Key, or leave it empty to reuse the login the local command-code CLI saved (cmd auth login). Priced in US dollars: 5-hour/weekly rolling windows, org spend limits, the plan's monthly grant (sized from the published pricing table, estimated) and balance.
+系统通知	System notifications
+额度告警阈值	Quota alert threshold
+窗口重置时提醒我	Notify me when a window resets
+连续同步失败时提醒我	Notify me when syncs keep failing
+低余额提醒	Low balance alert
+按账户币种，余额跌破时提醒；0 或留空为关闭。	In the account's currency; alerts when the balance falls below. 0 or empty turns it off.
+「已用尽」只看平台自己的裁决，不用算术推断；每扇窗每档最多一条，窗口有翻篇证据后才重新提醒；连续失败满 3 轮报一次；授权只在打开任一开关时请求，点击通知打开主窗口。此处阈值按已用 % 触发系统通知；上方「剩余额度提醒阈值」只管界面变色，不发通知。	"Spent" is only the provider's own verdict, never arithmetic; at most one notice per window per step, re-armed only by proven turnover; three failed passes in a row post once; authorization is requested only when you switch something on, and clicking a notice opens the main window. This threshold fires system notifications by used %; the "remaining-quota alert threshold" above only recolors the UI and never notifies.
+固定间隔同步	Fixed interval sync
+按活跃度自适应同步（2–30 分钟；服务端计费类封顶 5 分钟）	Adaptive sync by activity (2–30 min; server-billed accounts capped at 5 min)
+凭证已失效，重新连接前不展示旧读数。	Credential invalid; old readings stay hidden until you reconnect.
+上一计费周期已结束，等待平台新读数。	The previous billing window has ended; waiting for new readings.
+CLI 工作中	CLI working
+屏幕边缘浮动条	Screen-edge floating bar
+显示浮动条	Show floating bar
+活跃状态圆点	Activity dot
+全屏时隐藏	Hide in full screen
+跟随活跃显示器	Follow the active display
+停靠位置	Dock position
+左	Left
+右	Right
+顶部	Top
+浮动	Floating
+隐藏浮动条	Hide floating bar
+全部同步	Sync all
+空闲	Idle
+不到 1 分钟	under 1 min
+空闲时收成屏幕边缘的细条（有需要留意的账户时发红光），悬停展开；可直接拖动换位或贴边，右键有更多选项。	Collapses to a thin strip at the screen edge when idle (glowing red when an account needs attention); hover to expand. Drag it anywhere or to an edge; right-click for more options.
+检查更新…	Check for Updates…
+检查更新	Software Update
+更新检查失败	Update Check Failed
+暂时无法检查更新，请稍后再试。	Unable to check for updates right now. Please try again later.
+更新源地址无效，仅支持 https 或本地文件。	The update feed URL is invalid. Only https or local files are supported.
+已是最新版本	You're Up to Date
+当前版本	Current version
+更新包签名校验失败，已丢弃。	The update package failed signature verification and has been discarded.
+发现新版本	New Version Available
+更新包已下载并通过签名校验；请在 Finder 中解压后手动替换应用。	The update has been downloaded and verified. Unzip it in Finder and replace the app manually.
+在 Finder 中显示	Show in Finder
+稍后	Later
+更新源地址	Update feed URL
+留空则不自动检查	Leave empty to disable automatic checks
+签名公钥	Signing public key
+Ed25519 公钥（Base64）	Ed25519 public key (Base64)
+立即检查	Check Now
+每 2 小时自动检查一次；发现新版本只提示并验证签名，绝不自动安装。	Checks automatically every 2 hours; new versions are announced and signature-verified, never installed automatically.
+关闭	Off
+简体中文	Simplified Chinese
+本机 Agent 软件状态	Local Agent Software Status
+刷新检测	Re-detect
+各 AI 平台专属 Agent 软件自动检测；只展示本机已安装或已添加的 Agent 软件。	Dedicated agent apps for each AI platform are detected automatically; only agents installed or added on this Mac are shown.
+暂未检测到本机已安装或已添加的 Agent 软件（如 Codex、Claude Code、Antigravity 等）。	No installed or added agent software detected on this Mac yet (e.g. Codex, Claude Code, Antigravity).
+额度不必来回找。\n常用 AI，一处查看。	No more hunting for quotas.\nAll your AI, in one place.
+各 Agent 在运行环境中自动接入并检测剩余额度；\n在此添加 LLM API 账户，跟踪用量、余额与费用。	Agents connect automatically in their runtime and detect remaining quotas;\nadd LLM API accounts here to track usage, balance, and cost.
+豆包 暂未启动。启动本机软件后自动读取，不预填额度。	Doubao is not running. Launch the app and quotas will be read automatically; quotas are never prefilled.
+豆包 本机服务 · 需在「系统设置 - 隐私与安全性 - 辅助功能」中勾选允许「搞词元」，允许后点立即同步即可读取。上次数据已保留。	Doubao local service · Allow GaoCiYuan in System Settings - Privacy & Security - Accessibility, then tap Sync Now. Previous data was retained.
+豆包前台使用中，稍后自动补读；上次数据已保留。	Doubao is in active use; will read later automatically. Previous data was retained.
+距上次自动导航不足 5 分钟，本次沿用上次数据。	Navigated less than 5 minutes ago; reusing the last reading.
+未能读取豆包订阅与额度管理页（页面结构可能已变化）。上次数据已保留。	Could not read Doubao's subscription and quota page (the page structure may have changed). Previous data was retained.
+豆包订阅与额度管理页未读取到额度区块（页面结构可能已变化）。上次数据已保留。	No quota block was read from Doubao's subscription and quota page (the page structure may have changed). Previous data was retained.
+豆包 桌面端订阅与额度管理页（辅助功能只读）；页面显示已用百分比，界面按剩余展示	Doubao's desktop subscription & quota page (read-only via Accessibility); the page shows used percentage, displayed here as remaining
+近 7 天页面原话「已用 <1%」，按不足 1% 处理	The page literally says "used <1%" for the last 7 days; treated as under one percent
+Agent（豆包 桌面端）经辅助功能只读读取「订阅与额度管理」页（头像 › 额度状态，后台导航 + 5 分钟节流 + 读完按返回恢复，前台使用中不打扰）：当前时段与近 7 天已用百分比、剩余重置机会、赠送时长截止；免费档无会员池不编造；LLM（API）支持火山引擎云账号余额自动查询。	Agent (Doubao desktop): read-only via Accessibility from the Subscription & Quota page (avatar › Quota Status; background navigation throttled to 5 minutes, restores the previous view afterwards, never interrupts while in the foreground): used percentages for the current period and the last 7 days, remaining reset credits, and gift-duration deadline; the free tier has no membership pool and nothing is fabricated. LLM (API): Volcano Engine cloud-account balance.
+豆包 · 当前时段	Doubao · Current period
+豆包 · 近 7 天	Doubao · Last 7 days
+豆包赠送时长	Doubao gift duration
+剩余额度重置机会 	Remaining reset credits: 
+套餐：	Plan: 
+Agent 软件	Agent apps
+本机 Agent 智能体	Local agent apps
+LLM API	LLM API
+设置…	Settings…
+打开主窗口查看全部账户	Open the main window to see all accounts
+历史快照里没有可画图的 Token 或费用序列。	No token or cost series in the history to chart yet.
+DeepSeek Harness 本机凭证	DeepSeek Harness local credential
+Agent（DeepSeek Harness · dsh）自动检测本机软件与登录凭证，经平台官方接口按量查询钱包余额、赠金与累计消费；凭证只用于拼一次请求头，不落盘、不写日志。LLM（API）支持快照文件同步。	Agent (DeepSeek Harness · dsh) detects the local app and its saved sign-in automatically, and queries wallet balance, bonus credits and cumulative spend via the official platform API. The credential is only used to build one request header — never written to disk or logs. LLM (API) supports snapshot-file sync.
+钱包余额	Wallet balance
+去充值	Top up
+距上次同步不足 5 分钟，本次沿用上次数据。	Less than 5 minutes since the last sync; keeping the previous data.
+未找到本机 DeepSeek Harness 登录凭证。请安装并登录 DeepSeek Harness 后重试。	No local DeepSeek Harness sign-in credential found. Install DeepSeek Harness and sign in, then retry.
+未找到本机 DeepSeek Harness 登录凭证（凭证文件缺少默认账号记录）。请打开一次 DeepSeek Harness 并登录后重试。	No local DeepSeek Harness sign-in credential found (the credential file has no default account record). Open DeepSeek Harness once and sign in, then retry.
+未找到本机 DeepSeek Harness 登录凭证（凭证文件格式无法解析）。请打开一次 DeepSeek Harness 并登录后重试。	No local DeepSeek Harness sign-in credential found (the credential file could not be parsed). Open DeepSeek Harness once and sign in, then retry.
+未找到本机 DeepSeek Harness 登录凭证（凭证中的服务地址不是官方主机）。请重新登录 DeepSeek Harness 后重试。	No local DeepSeek Harness sign-in credential found (the service address in the credential is not the official host). Sign in to DeepSeek Harness again, then retry.
+DeepSeek Harness 登录已过期或凭证已被拒绝。请在 DeepSeek Harness 中重新登录。	The DeepSeek Harness sign-in has expired or the credential was refused. Sign in again in DeepSeek Harness.
+DeepSeek Harness 官方接口	DeepSeek Harness official API
+自动检测本机 DeepSeek Harness（dsh）软件与登录凭证，经平台官方接口按量查询钱包余额、赠金与累计消费。凭证只用于拼一次请求头，不落盘、不写日志；提示过期时打开一次 DeepSeek Harness 重新登录即可。	Detects the local DeepSeek Harness (dsh) app and its saved sign-in automatically, and queries wallet balance, bonus credits and cumulative spend via the official platform API. The credential is only used to build one request header — never written to disk or logs. If it expires, open DeepSeek Harness once and sign in again.
+腾讯 · WorkBuddy	Tencent · WorkBuddy
+WorkBuddy 积分余额（本机只读）	WorkBuddy credit balance (local read-only)
+积分余额	Credit balance
+去查看	View
+积分制：1000 积分满环，低于按比例	Credit-based: 1000 credits fill the ring, less fills proportionally
+经辅助功能只读读取本机账户弹层，读完按 Escape 关闭	Read-only via Accessibility from the local account popover, closed with Escape afterwards
+积分值不写日志	Credit values are never logged
+WorkBuddy 本机读取	WorkBuddy local read
+WorkBuddy 暂未启动。启动本机软件后自动读取积分余额，不预填数值。	WorkBuddy is not running. Launch the local app and credits will be read automatically. Values are never prefilled.
+WorkBuddy 前台使用中，稍后自动补读；上次数据已保留。	WorkBuddy is in use in the foreground; will retry later. Previous data was retained.
+距上次自动读取不足 5 分钟，本次沿用上次数据。	Less than 5 minutes since the last automatic read; keeping previous data.
+未能读取 WorkBuddy 积分余额（页面结构可能已变化）。上次数据已保留。	Could not read the WorkBuddy credit balance (the page structure may have changed). Previous data was retained.
+WorkBuddy 积分余额 · 1000 积分满环	WorkBuddy credit balance · 1000 credits fill the ring
+积分不足 10	Less than 10 credits left
+经辅助功能只读读取本机 WorkBuddy 桌面端左下角账户弹层的积分余额（积分制：1000 积分满环，低于按比例）。后台读取 + 5 分钟节流，前台使用中不打扰，读完按 Escape 关闭弹层；零网络、零凭证，积分值不写日志。需在系统设置中授予辅助功能权限。	Reads the credit balance from the local WorkBuddy desktop app's account popover (bottom-left) read-only via Accessibility (credit-based: 1000 credits fill the ring, less fills proportionally). Background reads with a 5-minute throttle, never interrupts foreground use, closes the popover with Escape afterwards; zero network, zero credentials, credit values are never logged. Requires Accessibility permission in System Settings.
+自定义 · API 计费	Custom · API Billing
+自定义账户	Custom account
+自定义 API 余额查询（GET）	Custom API balance query (GET)
+添加自定义账户	Add custom account
+余额查询 URL（GET）	Balance query URL (GET)
+鉴权方式	Auth method
+Bearer Token	Bearer Token
+自定义请求头	Custom header
+请求头名	Header name
+请求头值	Header value
+余额字段路径	Balance field path
+满环基准值	Full-ring baseline
+单位符号	Unit symbol
+赠送/第二字段路径（选填）	Bonus / second field path (optional)
+显示在悬浮条	Show in floating bar
+悬浮条显示	Floating bar visibility
+账户余额	Account balance
+自定义 API	Custom API
+附加余额	Additional balance
+还没有自定义账户。	No custom accounts yet.
+留空保留已存凭证	Leave empty to keep the saved credential
+悬浮条布局	Rail layout
+单列	Single column
+双列	Two columns
+双列布局	Two-column layout
+需处理	Needs action
+低额度、凭证失效或连续失败	Low quota, credential failure, or repeated sync failures
+暂时无法同步	Sync paused
+历史数据	Historical data
+定位 ›	Locate ›
+个需处理	need action
+个暂时无法同步	paused
+个历史数据	historical
+自动发现	Auto-discovered

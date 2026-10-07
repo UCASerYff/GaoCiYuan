@@ -1,0 +1,15 @@
+{
+  "engine": "Tokscale",
+  "version": "4.17.0",
+  "revision": "37e347fedf8fee1059742e9fffa2deb8b4ad3bc9",
+  "upstream": "https://github.com/junhoyeo/tokscale",
+  "fork": "https://github.com/Javis603/tokscale",
+  "reference": "https://github.com/Javis603/token-monitor",
+  "asset": "https://github.com/Javis603/tokscale/releases/download/token-monitor-37e347fe/tokscale-darwin-arm64",
+  "sha256": "3989f5d1eee31842070f484f5fbf996e52ac38c1b86596d7abee64bb8bc2e2c0",
+  "baseSha256": "80fd47e2f317b2787eb079a206ad08d4a0e759cea360c5bedcb7df519d437a90",
+  "localPatch": "gqns-3.66.patch",
+  "patchSha256": "b0b6870e3d2c9371ea165718d3bd7fd1572c4b18294b4a022060c9c6406ba863",
+  "buildToolchain": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "buildCommand": "cargo +stable build --release --locked -p tokscale-cli"
+}

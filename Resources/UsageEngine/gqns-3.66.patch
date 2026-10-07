@@ -1,0 +1,199 @@
+--- a/crates/tokscale-core/src/lib.rs
++++ b/crates/tokscale-core/src/lib.rs
+@@ -3386,9 +3386,7 @@
+         }
+     }
+     sessions::kimi::apply_code_workspaces(&mut kimi_lane);
+-    for (_, messages) in kimi_lane {
+-        all_messages.extend(messages);
+-    }
++    all_messages.extend(gq_dedup_kimi(kimi_lane.into_iter().flat_map(|(_, messages)| messages).collect()));
+ 
+     // Parse Qwen files
+     parse_cached_lane(
+@@ -6531,7 +6529,7 @@
+     messages.extend(opencodereview_msgs);
+ 
+     // Parse Kimi wire.jsonl files in parallel
+-    let kimi_msgs: Vec<ParsedMessage> = scan_result
++    let kimi_msgs: Vec<UnifiedMessage> = scan_result
+         .get(ClientId::Kimi)
+         .par_iter()
+         .flat_map(|path| {
+@@ -6540,11 +6538,10 @@
+             } else {
+                 sessions::kimi::parse_kimi_file(path)
+             };
+-            msgs.into_iter()
+-                .map(|msg| unified_to_parsed(&msg))
+-                .collect::<Vec<_>>()
++            msgs
+         })
+         .collect();
++    let kimi_msgs: Vec<ParsedMessage> = gq_dedup_kimi(kimi_msgs).iter().map(unified_to_parsed).collect();
+     let kimi_count = kimi_msgs.len() as i32;
+     counts.set(ClientId::Kimi, kimi_count);
+     messages.extend(kimi_msgs);
+@@ -21435,3 +21432,82 @@
+         );
+     }
+ }
++
++// Numeric-only event boundary for GaoQiNianSan. Raw copies are included so the
++// caller can reconcile old aggregate rows using verified source coverage.
++#[derive(serde::Serialize)]
++#[serde(rename_all = "camelCase")]
++pub struct GQUsageRecord {
++    pub event_id: String, pub client: String, pub session_id: String,
++    pub model: String, pub timestamp: i64, pub input: i64, pub output: i64,
++    pub cache_read: i64, pub cache_write: i64, pub message_count: i32,
++    pub cost: f64, pub duration_ms: i64, pub workspace_path: Option<String>,
++}
++fn gq_dedup_kimi(messages: Vec<UnifiedMessage>) -> Vec<UnifiedMessage> {
++    let mut result: Vec<UnifiedMessage> = Vec::new();
++    let mut index: HashMap<String, usize> = HashMap::new();
++    for message in messages {
++        let key = message.dedup_key.as_ref().filter(|k| !k.trim().is_empty())
++            .map(|k| format!("{}\0{}", message.session_id, k));
++        if let Some(key) = key {
++            if let Some(&i) = index.get(&key) {
++                let old = &mut result[i];
++                old.tokens.input = old.tokens.input.max(message.tokens.input);
++                old.tokens.output = old.tokens.output.max(message.tokens.output);
++                old.tokens.cache_read = old.tokens.cache_read.max(message.tokens.cache_read);
++                old.tokens.cache_write = old.tokens.cache_write.max(message.tokens.cache_write);
++                old.cost = old.cost.max(message.cost);
++                continue;
++            }
++            index.insert(key, result.len());
++        }
++        result.push(message);
++    }
++    result
++}
++pub async fn gq_usage_records(options: ReportOptions) -> Result<Vec<GQUsageRecord>, String> {
++    use sha2::{Digest, Sha256};
++    let home = get_home_dir_string(&options.home_dir)?;
++    let clients = options.clients.clone().unwrap_or_default();
++    let scan = scanner::scan_all_clients_with_scanner_settings(&home, &clients,
++        options.use_env_roots, &options.scanner_settings);
++    let pricing = load_pricing_for_local_parse().await;
++    let mut records = Vec::new();
++    for (client, parser) in [
++        (ClientId::Antigravity, sessions::antigravity::parse_antigravity_file as AntigravitySourceParser),
++        (ClientId::AntigravityCli, sessions::antigravity_cli::parse_antigravity_cli_file as AntigravitySourceParser),
++        (ClientId::AntigravityExtension, sessions::antigravity_cli::parse_antigravity_extension_file as AntigravitySourceParser),
++        (ClientId::Kimi, sessions::kimi::parse_kimi_file as AntigravitySourceParser),
++    ] {
++        let mut paths = scan.get(client).clone(); paths.sort();
++        for path in paths {
++            let parser = if client == ClientId::Kimi && sessions::kimi::is_kimi_code_path(&path) {
++                sessions::kimi::parse_kimi_code_file as AntigravitySourceParser
++            } else { parser };
++            let mut lane = parser(&path);
++            if client == ClientId::Kimi {
++                let mut sources = vec![(path.clone(), lane)];
++                sessions::kimi::apply_code_workspaces(&mut sources);
++                lane = sources.pop().unwrap().1;
++            }
++            for (position, mut message) in lane.into_iter().enumerate() {
++                apply_pricing_if_available(&mut message, pricing.as_deref());
++                let is_kimi = client == ClientId::Kimi;
++                let key = message.dedup_key.as_deref().filter(|k| !k.trim().is_empty())
++                    .map(|k| if is_kimi { format!("kimi\0{}\0{}", message.session_id, k) } else {format!("antigravity\0{}", k)})
++                    // Without a provider ID, equal numbers alone never imply a copy.
++                    .unwrap_or_else(|| format!("{}\0{}\0{}\0{}", client.as_str(), path.display(), message.session_id, position));
++                let event_id = format!("{:x}", Sha256::digest(key.as_bytes()));
++                let session_id = if client == ClientId::AntigravityCli || client == ClientId::AntigravityExtension {
++                    format!("{}:{}", client.as_str(), message.session_id)
++                } else { message.session_id.clone() };
++                records.push(GQUsageRecord {event_id, client: if is_kimi {"kimi"} else {"antigravity"}.into(),
++                    session_id, model: message.model_id, timestamp: message.timestamp,
++                    input: message.tokens.input, output: message.tokens.output, cache_read: message.tokens.cache_read,
++                    cache_write: message.tokens.cache_write, message_count: message.message_count,
++                    cost: message.cost, duration_ms: message.duration_ms.unwrap_or(0), workspace_path: message.workspace_key});
++            }
++        }
++    }
++    Ok(records)
++}
+--- a/crates/tokscale-core/src/sessions/kimi.rs
++++ b/crates/tokscale-core/src/sessions/kimi.rs
+@@ -346,7 +346,7 @@
+     // turn-scoped usage.record to derive that call's response duration.
+     let mut pending_request_time_ms: Option<i64> = None;
+ 
+-    for_each_json_line(path, &mut |_index, trimmed| {
++    for_each_json_line(path, &mut |line_index, trimmed| {
+         let mut bytes = trimmed.as_bytes().to_vec();
+         let wire_line = match simd_json::from_slice::<KimiCodeWireLine>(&mut bytes) {
+             Ok(wl) => wl,
+@@ -432,6 +432,10 @@
+             0.0,
+         );
+         message.duration_ms = duration_ms;
++        // A wire position is local to its session and agent, not its storage root.
++        // Distinct calls with equal clocks/counts retain distinct positions.
++        message.dedup_key = Some(format!("gq-wire:{}:{}:{}", session_id,
++            path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()).unwrap_or("main"), line_index));
+         messages.push(message);
+     });
+ 
+@@ -453,7 +457,7 @@
+     let mut timestamp_sources: Vec<TimestampSource> = Vec::new();
+     let mut keyed_indices: HashMap<String, usize> = HashMap::new();
+ 
+-    for_each_json_line(path, &mut |_index, trimmed| {
++    for_each_json_line(path, &mut |line_index, trimmed| {
+         let mut bytes = trimmed.as_bytes().to_vec();
+         let wire_line = match simd_json::from_slice::<WireLine>(&mut bytes) {
+             Ok(wl) => wl,
+@@ -504,7 +508,12 @@
+             return;
+         };
+ 
+-        let dedup_key = payload.message_id;
++        let dedup_key = payload.message_id.filter(|id| !id.trim().is_empty()).or_else(|| {
++            use sha2::{Digest, Sha256};
++            // Session + wire position distinguishes two equal-valued calls;
++            // identical copies of this row retain the same content identity.
++            Some(format!("gq-status:{}:{}:{:x}", session_id, line_index, Sha256::digest(trimmed.as_bytes())))
++        });
+ 
+         let message = UnifiedMessage::new_with_dedup(
+             "kimi",
+--- a/crates/tokscale-core/src/message_cache.rs
++++ b/crates/tokscale-core/src/message_cache.rs
+@@ -1418,7 +1418,7 @@
+         // request's start. Untouched wire files keep valid fingerprints, so a
+         // warm v4 entry would keep replaying rows with no duration sample and
+         // the ms/1K column would stay empty for them.
+-        ClientId::Kimi => 5,
++        ClientId::Kimi => 6,
+         // v1->v2: cache-write now maps directly from `Input (w/ Cache Write)`
+         // instead of subtracting `Input (w/o Cache Write)`, and a numeric CSV
+         // `Cost` (including explicit zero) is retained as provider-reported so
+--- a/crates/tokscale-cli/src/main.rs
++++ b/crates/tokscale-cli/src/main.rs
+@@ -2361,6 +2361,8 @@
+         #[derive(serde::Serialize)]
+         #[serde(rename_all = "camelCase")]
+         struct ModelReportJson {
++            #[serde(skip_serializing_if = "Option::is_none")]
++            local_records: Option<Vec<tokscale_core::GQUsageRecord>>,
+             group_by: String,
+             entries: Vec<ModelUsageJson>,
+             /// Per-session facts for session-grouped reports, joined by
+@@ -2404,7 +2406,12 @@
+                 last_active_ms: s.last_active_ms,
+             })
+             .collect();
++        let local_records = if std::env::var("GQNS_USAGE_EVENTS").as_deref() == Ok("1") {
++            Some(rt.block_on(tokscale_core::gq_usage_records(context.report_options(GroupBy::ClientWorkspaceSession)))
++                .map_err(|e| anyhow::anyhow!(e))?)
++        } else { None };
+         let output = ModelReportJson {
++            local_records,
+             group_by: group_by.to_string(),
+             sessions,
+             workspaces,
