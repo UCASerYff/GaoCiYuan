@@ -98,20 +98,7 @@ import UniformTypeIdentifiers
             try FileManager.default.createDirectory(at:dataURL.deletingLastPathComponent(),withIntermediateDirectories:true)
             try JSONCoding.encoder.encode(library).write(to:dataURL,options:.atomic)
             try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:dataURL.path)
-            scheduleWidgetExport()
         } catch { notice = "保存失败：\(error.localizedDescription)" }
-    }
-    /// 小组件导出去抖：一轮刷新里多个账户连续落盘只合并导出一次，串行不叠加（写放大与导出风暴一起治）。
-    private var widgetExportScheduled = false
-    private func scheduleWidgetExport() {
-        guard !widgetExportScheduled else { return }
-        widgetExportScheduled = true
-        Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 600_000_000)
-            guard let self else { return }
-            self.widgetExportScheduled = false
-            _ = await self.exportWidgetSnapshot()
-        }
     }
     func upsert(_ account: Account, key: String = "") throws {
         guard !loadFailed else { throw MonitorError.message("请先恢复可用的数据备份。") }
@@ -308,7 +295,6 @@ import UniformTypeIdentifiers
                 for id in Set(library.accounts.map(\.id) + restored.accounts.map(\.id)) { revisions[id,default:0] += 1 }
                 library = restored; loadFailed = false; incoming.preferences?.apply()
                 let unknownConnections = Connection.takeUnknownFallbacks()
-                Task { await self.exportWidgetSnapshot() }
                 notice = "导入完成，原数据及所有文档均已保留。请检查账户连接后再开启自动同步。" + (unknownConnections.isEmpty ? "" : " 有 \(unknownConnections.count) 处连接方式无法识别，已回退为「本机软件自动读取」。")
             } catch { notice = "导入失败：\(error.localizedDescription)" }
         }

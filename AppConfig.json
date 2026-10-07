@@ -4,8 +4,6 @@
   "bundle_id": "com.gaoseries.GaoCiYuan",
   "executable": "GaoCiYuan",
   "scheme": "gaociyuan",
-  "widget_folder": "Widgets",
-  "widget": "GaoCiYuanWidgets",
   "group": "5G96498KGJ.com.gaoseries.GaoCiYuan",
   "preferences": "com.gaoseries.GaoCiYuan.Token"
 }

@@ -35,7 +35,6 @@ public enum TokenStatusLineBridge {
         // 3.33：app 启动即开始 agent 自动发现（扫描 + 定期重扫在 configure 内启动）。
         MemberDiscovery.shared.configure(store)
         Task {
-            _ = await store.exportWidgetSnapshot()
             await store.refreshAll()
         }
     }
@@ -66,7 +65,6 @@ public struct TokenModuleView: View {
             .environmentObject(store)
             .environmentObject(activity)
             .environmentObject(TokenRuntime.analytics)
-            .modifier(WidgetSetup(store: store))
             .modifier(FloatingPanelSetup(store: store, activity: activity))
             .onAppear(perform: handleRoute)
             .onChange(of: routeRevision) { _, _ in handleRoute() }
@@ -107,4 +105,3 @@ public struct TokenSettingsView: View {
             .environment(\.locale, Locale(identifier: GQNSLanguage.localeIdentifier))
     }
 }
-

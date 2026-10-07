@@ -9,10 +9,9 @@ SIGNING_IDENTITY=${GAO_SIGNING_IDENTITY:-A15B2B2D22B018CBC842063C9A8A58994664752
 mkdir -p "$BUILD/cache" "$BUILD/icon.iconset"
 if [[ "${1:-}" != "--skip-frameworks" ]]; then
     "$ROOT/scripts/build_framework.sh" > "$BUILD/framework-build.log" 2>&1 || { tail -60 "$BUILD/framework-build.log";exit 1;}
-    "$ROOT/scripts/build_widgets.sh" > "$BUILD/widget-build.log" 2>&1 || { tail -60 "$BUILD/widget-build.log";exit 1;}
 fi
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks" "$APP/Contents/PlugIns"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 for size in 16 32 128 256 512; do
     sips -z $size $size "$ROOT/Resources/GaoCiYuanIcon.png" --out "$BUILD/icon.iconset/icon_${size}x${size}.png" >/dev/null
     double=$((size*2))
@@ -27,8 +26,6 @@ cp "$ROOT/Resources/GaoCiYuanIcon.png" "$APP/Contents/Resources/"
 ditto "$BUILD/Frameworks/Token.framework" "$APP/Contents/Frameworks/Token.framework"
 for helper in "$APP"/Contents/Frameworks/Token.framework/Versions/A/Resources/UsageEngine/tokscale(N); do codesign --force --sign "$SIGNING_IDENTITY" --options runtime "$helper"; done
 codesign --force --sign "$SIGNING_IDENTITY" "$APP/Contents/Frameworks/Token.framework"
-ditto "$BUILD/PlugIns/GaoCiYuanWidgets.appex" "$APP/Contents/PlugIns/GaoCiYuanWidgets.appex"
-codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$ROOT/Widget.entitlements" "$APP/Contents/PlugIns/GaoCiYuanWidgets.appex"
 codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$ROOT/App.entitlements" "$APP"
 codesign --verify --deep --strict "$APP"
 echo "Built $APP"

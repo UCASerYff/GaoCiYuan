@@ -108,7 +108,7 @@ API 密钥	API key
 应用运行时自动同步	Sync automatically while running
 同步间隔	Sync interval
 剩余额度提醒阈值	Low-quota alert threshold
-提醒阈值按剩余 % 让总览、菜单栏、浮动条与小组件变色；系统通知按下方「额度告警阈值」的已用 % 档位另算。关闭应用后停止同步。手动账户不会被自动更新。	This threshold recolors the overview, menu bar, floating bar and widgets by remaining %; system notifications use the used-% steps under "Quota alert threshold" below. Quitting stops sync. Manual accounts are never updated automatically.
+提醒阈值按剩余 % 让总览、菜单栏与浮动条变色；系统通知按下方「额度告警阈值」的已用 % 档位另算。关闭应用后停止同步。手动账户不会被自动更新。	This threshold recolors the overview, menu bar and floating bar by remaining %; system notifications use the used-% steps under "Quota alert threshold" below. Quitting stops sync. Manual accounts are never updated automatically.
 外观与连接	Appearance & connection
 外观	Appearance
 跟随系统	System
@@ -160,7 +160,6 @@ Codex 官方服务	Official Codex service
 额度比例不等同于固定 Token 余额；保留官方独立额度池。	Quota percentages are not fixed token balances. Official quota pools remain separate.
 余额	Balance
 手动导入快照	Imported snapshot
-桌面小组件	Desktop widget
 全部账户	All accounts
 暂无账户	No accounts yet
 导入这份数据？	Import this data?
@@ -171,7 +170,6 @@ Codex 官方服务	Official Codex service
 平台响应格式不符，保留上次数据；请检查接口或升级连接器。	Unexpected platform response. Previous data was retained; check the API or update the connector.
 网络连接失败，请检查网络后重试。	Connection failed. Check your network and retry.
 请填写有效的 Team ID 或 AccessKey ID。	Enter a valid Team ID or AccessKey ID.
-关闭小组件	Close widget
 拖动空白处移动位置	Drag empty space to move
 Codex 可读取本机会员额度；API 用量和费用需组织 Admin Key。ChatGPT 聊天额度与 Codex 额度分别计算。	Local Codex reads membership quota pools. API reports require an organization Admin Key. ChatGPT chat limits and Codex limits are separate.
 API 用量与费用需组织 Admin Key；Pro / Max 会员额度可从官方用量页录入或通过快照文件同步。	API reports require an organization Admin Key. Enter Pro / Max membership quotas from the official usage page or sync a snapshot file.
@@ -270,12 +268,6 @@ Token 请输入非负整数。	Enter a nonnegative integer for tokens.
 来自当前可访问的官方用量页，可能有页面缓存；未读取登录凭据，不猜测重置时间。此记录代表浏览器当前页面，不区分同一浏览器内的不同登录账号。	From the accessible official usage page, which may be cached. No credentials are read or reset times guessed. This record represents the current browser page and does not distinguish logins within the same browser.
 请在官方用量页显示额度，应用会在获授权后自动读取。	Show quotas on the official usage page. The app reads them automatically once permission is granted.
 每月	Monthly
-系统小组件	System widget
-这是 macOS WidgetKit 小组件。请在桌面或通知中心进入“编辑小组件”，搜索“搞词元”，可添加小号、中号或大号额度总览。退出主应用后仍会保留最近一次同步结果。	This is a macOS WidgetKit widget. Choose Edit Widgets on the desktop or in Notification Center, search for GaoCiYuan, and add the small, medium, or large overview. The latest synced result remains visible after the main app quits.
-刷新小组件数据	Refresh widget data
-小组件数据已刷新。	Widget data refreshed.
-小组件数据写入失败，请重新打开应用后再试。	Could not write widget data. Reopen the app and try again.
-小组件仅包含账户名称和用量摘要，不包含 API 密钥、Cookie 或聊天内容。	The widget contains account names and usage summaries only. It never contains API keys, cookies, or chat content.
 搞词元 V1.8	GaoCiYuan V1.8
 添加 LLM 账户	Add LLM Account
 Agent 接入说明	Agent Connection Notice

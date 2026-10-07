@@ -23,7 +23,7 @@ SOURCES=("$SOURCE"/Sources/*.swift "$SOURCE"/Shared/*.swift(N) "$SOURCE/Module.s
 swiftc -swift-version 5 -parse-as-library -O -emit-library -emit-module \
     -module-name "$NAME" -sdk "$SDK" -target arm64-apple-macosx14.0 \
     -module-cache-path "$BUILD/cache" -load-plugin-library "$MACROS" \
-    -framework SwiftUI -framework AppKit -framework WidgetKit -framework Charts \
+    -framework SwiftUI -framework AppKit -framework Charts \
     -framework CryptoKit -framework AppIntents -framework WebKit \
     -framework UniformTypeIdentifiers -framework Security -framework PDFKit \
     -framework QuickLookUI -framework UserNotifications -framework Combine \

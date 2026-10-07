@@ -1,17 +1,17 @@
-# 搞词元 V4.01
+# 搞词元 V4.02
 
-独立 macOS AI 额度与用量管理应用，包含账户管理、采集分析和 WidgetKit 小组件。运行不依赖搞七廿三或其他六个应用；联动功能需要同时安装相关应用。
+独立 macOS AI 额度与用量管理应用，包含账户管理、采集分析和悬浮窗。运行不依赖搞七廿三或其他六个应用；联动功能需要同时安装相关应用。
 
 ## 下载与安装
 
-从 [Releases](https://github.com/UCASerYff/GaoCiYuan/releases/latest) 下载 `GaoCiYuan-4.01.zip` 和同名 `.sha256` 文件。仓库保存源码，安装包作为 Release 附件单独发布。
+从 [Releases](https://github.com/UCASerYff/GaoCiYuan/releases/latest) 下载 `GaoCiYuan-4.02.zip` 和同名 `.sha256` 文件。仓库保存源码，安装包作为 Release 附件单独发布。
 
 1. 支持 macOS 14 或更高版本、Apple Silicon；暂未提供 Intel 版本。
 2. 解压 ZIP，将 `搞词元.app` 拖入“应用程序”文件夹。
 3. 如果 macOS 拦截打开，请先确认软件来源，再进入“系统设置 → 隐私与安全性”，允许该应用打开。发行包使用 Apple Development 签名，未做 Apple 公证。
-4. 安装后运行一次，再从系统小组件列表添加本应用的小组件。整合版的小组件需要重新添加。
+4. 安装后运行一次，原有账户、用量账本及悬浮窗设置会继续沿用。V4.02 不再提供桌面或通知中心小组件。
 
-下载后可在文件所在目录运行 `shasum -a 256 -c GaoCiYuan-4.01.zip.sha256` 核验安装包。
+下载后可在文件所在目录运行 `shasum -a 256 -c GaoCiYuan-4.02.zip.sha256` 核验安装包。
 
 ## 功能
 
@@ -20,14 +20,14 @@
 - 内置 Tokscale 扫描引擎及本地修订，版本与源码补丁位于 Resources/UsageEngine。
 
 - 从菜单或 ⌘, 打开设置，提供外观、模块设置、备份与恢复。
-- 提供本应用对应的桌面/通知中心小组件。
+- 保留悬浮窗与菜单栏状态显示。
 
 ## 用户数据、附件与隐私
 
 源码及安装包不包含个人记录、账户配置、账单、健康数据、私人附件、API 密钥、浏览器会话或用户备份。新电脑首次打开时创建自己的资料库；GitHub 下载不能恢复个人数据。
 
 - 业务数据目录：`~/Library/Application Support/GaoSeries/Token/`。
-- 数据库或小组件镜像：`~/Library/Group Containers/5G96498KGJ.com.gaoseries.GaoCiYuan/`。
+- 兼容共享数据目录（保留旧镜像及备份兼容性）：`~/Library/Group Containers/5G96498KGJ.com.gaoseries.GaoCiYuan/`。
 - 设置保存在本应用的 UserDefaults 域；凭据由 macOS 钥匙串管理，不导出到普通备份文件。
 - 公开安装包会删除本机编译路径、源文件索引及扩展属性，再重新签名。签名证书的公开身份信息随软件发布，签名私钥不在仓库或安装包中。
 
@@ -43,7 +43,7 @@
 
 ## 从源码构建
 
-需要完整 Xcode、Python 3 和 Apple Silicon Mac。默认脚本使用项目配置的开发签名身份；自行构建需使用自己的 Apple Development 证书，并相应调整签名团队、App Group 权限及小组件工程配置。
+需要完整 Xcode、Python 3 和 Apple Silicon Mac。默认脚本使用项目配置的开发签名身份；自行构建需使用自己的 Apple Development 证书，并相应调整签名团队、App Group 权限。
 
 ```sh
 ./scripts/build.sh
@@ -56,7 +56,14 @@
 - `Sources/` 与 `Module.swift`：账户、采集、分析和界面逻辑。
 - `Resources/`：黑底白字图标、平台图标、翻译与 Tokscale 扫描引擎。
 - `Host/`：独立入口、设置、完整备份和联动服务。
-- `Widgets/`：小组件；`Tests/`：回归验证。
+- `Tests/`：回归验证。
+
+## V4.02
+
+- 移除全部 WidgetKit 桌面和通知中心小组件、快照导出及相关构建入口。
+- 安装升级时注销旧版小组件扩展，应用包不再包含小组件。
+- 保留悬浮窗、菜单栏、账户、累计用量、设置、原 App Group 及钥匙串凭据。
+- 版本从 V4.01 升至 V4.02，构建号从 2 升至 3。
 
 ## V4.01
 

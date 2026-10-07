@@ -532,7 +532,7 @@ enum AntigravityBridge {
         return URLSession(configuration: config, delegate: InsecureDelegate(), delegateQueue: nil)
     }()
 
-    // 进程发现结果短 TTL 缓存：状态面板 / 小组件导出的安装检测走缓存，避免每次保存都同步 spawn ps/lsof；
+    // 进程发现结果短 TTL 缓存：状态面板的安装检测走缓存，避免频繁同步 spawn ps/lsof；
     // 真实额度拉取（fetch）仍走实时 discoverServer，保证数据新鲜。
     private static var discoveryCache: (value: (pid: Int32, csrfToken: String, ports: [Int])?, at: Date)?
     private static let discoveryLock = NSLock()

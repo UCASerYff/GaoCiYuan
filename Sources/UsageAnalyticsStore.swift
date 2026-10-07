@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
-import WidgetKit
 
 enum UsageRange: String, CaseIterable, Identifiable {
     case today, week, month30, calendarMonth, all
@@ -54,7 +53,6 @@ struct UsageAnalyticsPreferences: Codable {
     private var scanTask: Task<Void, Never>?
     @Published private(set) var isLoadingSessions = false
     @Published private(set) var sessionOffset = 0
-    private var lastWidgetReload = Date.distantPast
     private var lastAttemptAt = Date.distantPast
     private var settingsURL: URL { directory.appendingPathComponent("usage-settings.json") }
     init(directory: URL) {
@@ -114,7 +112,6 @@ struct UsageAnalyticsPreferences: Codable {
                 guard version == revision else { return }
                 lastScanAt = scan.capturedAt; warnings = scan.warnings
                 reload()
-                try await writeWidget()
                 if let path = automaticExportPath {
                     do {
                         let identity = try await ledger.metadata().deviceID
@@ -191,25 +188,8 @@ struct UsageAnalyticsPreferences: Codable {
         panel.message = "选择另一台设备导出的搞词元用量 JSON；相同设备与会话重复导入不会重复累计。"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Task {
-            do { try await ledger.importFile(url); reload(); try await writeWidget() }
+            do { try await ledger.importFile(url); reload() }
             catch { errorMessage = "合并失败，现有记录保持不变：" + error.localizedDescription }
         }
-    }
-    private func writeWidget() async throws {
-        guard ProcessInfo.processInfo.environment["GAOCIYUAN_DATA_DIR"] == nil, let target = ActualTokenWidgetSnapshot.fileURL else { return }
-        let today = UsageRange.day(.now)
-        let summary = try await ledger.dashboard(fromDay: today, throughDay: today)
-        let from = UsageRange.day(Calendar.current.date(byAdding: .day, value: -13, to: .now) ?? .now)
-        let fortnight = try await ledger.dashboard(fromDay: from, throughDay: today)
-        var counts: [String:Int64] = [:]
-        for d in fortnight.days { counts[d.day, default: 0] += d.amounts.totalTokens }
-        let days = (0..<14).map { offset -> ActualTokenWidgetSnapshot.Day in
-            let day = UsageRange.day(Calendar.current.date(byAdding: .day, value: offset - 13, to: .now) ?? .now)
-            return .init(day: day, tokens: counts[day] ?? 0)
-        }
-        let value = ActualTokenWidgetSnapshot(updatedAt: .now, day: today, totalTokens: summary.total.totalTokens, input: summary.total.input, output: summary.total.output, cacheRead: summary.total.cacheRead, estimatedUSD: summary.total.costUSD, days: days)
-        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
-        try encoder.encode(value).write(to: target, options: .atomic)
-        if Date().timeIntervalSince(lastWidgetReload) > 900 { WidgetCenter.shared.reloadTimelines(ofKind: "ActualTokenUsageWidget"); lastWidgetReload = .now }
     }
 }

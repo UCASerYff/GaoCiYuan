@@ -302,7 +302,7 @@ struct SettingsPanel: View {
                     Text(L("按活跃度自适应同步（2–30 分钟；服务端计费类封顶 5 分钟）")).font(.caption).foregroundStyle(.secondary)
                 }
                 HStack { Text(L("剩余额度提醒阈值")); Slider(value:$store.library.warningThreshold,in:5...50,step:5).frame(width:200); Text(L("\(Int(store.library.warningThreshold))%")).monospacedDigit() }.onChange(of:store.library.warningThreshold) { _, _ in store.save() }
-                Text(L("提醒阈值按剩余 % 让总览、菜单栏、浮动条与小组件变色；系统通知按下方「额度告警阈值」的已用 % 档位另算。关闭应用后停止同步。手动账户不会被自动更新。")).font(.caption).foregroundStyle(.secondary)
+                Text(L("提醒阈值按剩余 % 让总览、菜单栏与浮动条变色；系统通知按下方「额度告警阈值」的已用 % 档位另算。关闭应用后停止同步。手动账户不会被自动更新。")).font(.caption).foregroundStyle(.secondary)
             }.frame(maxWidth:.infinity,alignment:.leading).panel()
             VStack(alignment:.leading,spacing:18) {
                 Label(L("屏幕边缘浮动条"),systemImage:"menubar.rectangle").font(.headline)
@@ -362,14 +362,6 @@ struct SettingsPanel: View {
                 HStack { Text(L("更新源地址")); TextField(L("留空则不自动检查"),text:$updateAppcastURL).frame(maxWidth:380) }
                 HStack { Text(L("签名公钥")); TextField(L("Ed25519 公钥（Base64）"),text:$updatePublicKey).frame(maxWidth:380) }
                 HStack { Button(L("立即检查")) { Task { await UpdateChecker.shared.checkNow(userInitiated:true) } }; Text(L("每 2 小时自动检查一次；发现新版本只提示并验证签名，绝不自动安装。")).font(.caption).foregroundStyle(.secondary) }
-            }.frame(maxWidth:.infinity,alignment:.leading).panel()
-            VStack(alignment:.leading,spacing:18) {
-                Label(L("系统小组件"),systemImage:"rectangle.3.group").font(.headline)
-                Text(L("这是 macOS WidgetKit 小组件。请在桌面或通知中心进入“编辑小组件”，搜索“搞词元”，可添加小号、中号或大号额度总览。退出主应用后仍会保留最近一次同步结果。")).font(.callout).foregroundStyle(.secondary)
-                HStack {
-                    Button(L("刷新小组件数据")) { Task { let ok = await store.exportWidgetSnapshot(); store.notice = ok ? L("小组件数据已刷新。") : L("小组件数据写入失败，请重新打开应用后再试。") } }
-                    Text(L("小组件仅包含账户名称和用量摘要，不包含 API 密钥、Cookie 或聊天内容。")).font(.caption).foregroundStyle(.secondary)
-                }
             }.frame(maxWidth:.infinity,alignment:.leading).panel()
             VStack(alignment:.leading,spacing:18) {
                 Label(L("数据与备份"),systemImage:"externaldrive").font(.headline)

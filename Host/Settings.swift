@@ -29,7 +29,7 @@ struct DataSettings:View {
     var body:some View {
         Form {
             Section("完整资料") {
-                Text("包含业务历史、游戏进度、PDF、Word、图片及数据目录内的全部附件；密钥继续由系统钥匙串保管。")
+                Text("包含业务历史、账户配置、PDF、Word、图片及数据目录内的全部附件；密钥继续由系统钥匙串保管。")
                 Button("导出完整资料…",action:export).disabled(busy)
                 Button("从完整资料恢复…",action:restore).disabled(busy)
                 if busy { ProgressView() }
@@ -41,7 +41,7 @@ struct DataSettings:View {
             }
             Section("数据目录") {
                 Button("打开数据目录") { reveal(AppDataLocations.appSupport) }
-                Button("打开小组件共享目录") { reveal(AppDataLocations.groupContainer) }
+                Button("打开兼容数据目录") { reveal(AppDataLocations.groupContainer) }
             }
         }.formStyle(.grouped)
     }
