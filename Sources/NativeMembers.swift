@@ -131,7 +131,7 @@ enum DoubaoBridge {
             if app.activationPolicy == .prohibited && bundle.isEmpty { continue }
             if AgentPlatformTable.matchesRunning(p, bundle: bundle, name: name) { return true }
         }
-        if p == .gemini, AntigravityBridge.cachedDiscoverServer() != nil {
+        if p == .gemini, (AntigravityBridge.cachedDiscoverServer() != nil || GeminiAntigravityBridge.isAgyRunning()) {
             return true
         }
         return false
@@ -214,7 +214,7 @@ enum DoubaoBridge {
     nonisolated private static let autoAddSpecs: [AutoAddSpec] = [
         AutoAddSpec(provider: .openai, connection: .codex, currency: "USD"),
         AutoAddSpec(provider: .claude, connection: .agentLocal, currency: "USD"),
-        AutoAddSpec(provider: .gemini, connection: .agentLocal, currency: "USD"),
+        AutoAddSpec(provider: .gemini, connection: .geminiApp, currency: "USD"),
         AutoAddSpec(provider: .kimi, connection: .kimiDesktop, currency: "CNY"),
         AutoAddSpec(provider: .doubao, connection: .agentLocal, currency: "CNY"),
         AutoAddSpec(provider: .dsh, connection: .dshHarness, currency: "CNY"),

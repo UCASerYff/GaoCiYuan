@@ -23,7 +23,7 @@ enum AlertRules { static func attention(_ account: Account, threshold: Double, a
             try check(!provider.name.isEmpty && !provider.note.isEmpty, "catalogue metadata missing")
         }
         try check(Connection.takeUnknownFallbacks().isEmpty, "new connections fell back to software detection")
-        for (provider, kind, connection) in [(Provider.openai, AccountKind.agent, Connection.codex), (.qwen, .llm, .aliyun), (.custom, .agent, .customAPI), (.cursor, .agent, .cursor)] {
+        for (provider, kind, connection) in [(Provider.openai, AccountKind.agent, Connection.codex), (.qwen, .llm, .aliyun), (.custom, .agent, .customAPI), (.cursor, .agent, .cursor), (.gemini, .agent, .geminiApp), (.gemini, .agent, .agentLocal)] {
             let old = Account(provider: provider, kind: kind, name: "Existing", connection: connection)
             let decoded = try decoder.decode(Account.self, from: encoder.encode(old))
             try check(Connection.available(decoded.provider, decoded.kind).contains(decoded.connection), "existing account route invalidated")

@@ -206,7 +206,7 @@ enum Provider: String, Codable, CaseIterable, Identifiable {
         case .deepseek: return "DeepSeek 按量 API：使用 API Key 查询账户余额。DeepSeek Harness 请使用独立的 Harness 入口。"
         case .kimi: return "Agent（Kimi Work / Kimi Code）：保存 Kimi Code 专用 Key 后自动读取官方额度，或经辅助功能只读读取本机 Kimi 桌面端订阅页（月度额度池，无需 Key），否则检测本机软件状态；LLM（API）支持 Moonshot Key 查询人民币余额与 Kimi Code 额度。"
         case .grok: return "Agent（Grok Bot）自动检测本机软件；LLM（API）需 xAI Management Key 查询本月费用与预付余额。"
-        case .gemini: return "Agent（Antigravity）自动检测本机软件环境；LLM（API）支持快照文件同步。"
+        case .gemini: return "Agent（Antigravity）：支持读取 Gemini 桌面端内置 Antigravity 或独立版 Antigravity 的 5 小时与每周配额；LLM（API）支持快照文件同步。"
         case .qwen: return "阿里云百炼 / 通义千问按量 API：查询云账户现金余额。Qoder 和 Alibaba Coding Plan 使用各自独立入口。"
         case .doubao: return "Agent（豆包 桌面端）经辅助功能只读读取「订阅与额度管理」页（头像 › 额度状态，后台导航 + 5 分钟节流 + 读完按返回恢复，前台使用中不打扰）：当前时段与近 7 天已用百分比、剩余重置机会、赠送时长截止；免费档无会员池不编造；LLM（API）支持火山引擎云账号余额自动查询。"
         case .glm: return "Agent（Zcode）自动读取 Coding Plan 额度；LLM（API）支持智谱开放平台 API。"
@@ -270,6 +270,7 @@ enum Connection: String, Codable, CaseIterable {
     case commandCode = "Command Code API"
     case dshHarness = "DeepSeek Harness 本机凭证"
     case workbuddyLocal = "WorkBuddy 积分余额（本机只读）"
+    case geminiApp = "Gemini App 中的 Antigravity"
     case customAPI = "自定义 API 余额查询（GET）"
     case openCodeQuota = "OpenCode 套餐额度"
     case clineQuota = "Cline 账户额度"
@@ -315,6 +316,7 @@ enum Connection: String, Codable, CaseIterable {
         case "Command Code API": self = .commandCode
         case "DeepSeek Harness 本机凭证": self = .dshHarness
         case "WorkBuddy 积分余额（本机只读）": self = .workbuddyLocal
+        case "Gemini App 中的 Antigravity", "Gemini 桌面端 Antigravity", "Gemini App 内置 Antigravity": self = .geminiApp
         case "自定义 API 余额查询（GET）": self = .customAPI
         case "自动读取快照文件": self = .file
         default:
@@ -387,6 +389,9 @@ enum Connection: String, Codable, CaseIterable {
             }
             if p == .workbuddy {
                 list.append(.workbuddyLocal)
+            }
+            if p == .gemini {
+                list.append(.geminiApp)
             }
             if p == .custom {
                 list.append(.customAPI)

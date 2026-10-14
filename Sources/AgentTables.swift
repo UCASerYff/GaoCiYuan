@@ -26,10 +26,10 @@ enum AgentPlatformTable {
                             appNames: ["Claude.app"],
                             cli: ["/usr/local/bin/claude", "/opt/homebrew/bin/claude", "~/.local/bin/claude"])
         case .gemini:
-            return Identity(exactBundles: ["com.google.antigravity"],
-                            exactNames: ["antigravity"],
-                            appNames: ["Antigravity.app"],
-                            cli: ["/usr/local/bin/antigravity", "/opt/homebrew/bin/antigravity", "~/.local/bin/antigravity"])
+            return Identity(exactBundles: ["com.google.antigravity", "com.google.GeminiMacOS"],
+                            exactNames: ["antigravity", "gemini", "agy"],
+                            appNames: ["Antigravity.app", "Antigravity IDE.app", "Gemini.app"],
+                            cli: ["/usr/local/bin/antigravity", "/opt/homebrew/bin/antigravity", "~/.local/bin/antigravity", "/Applications/Gemini.app/Contents/Helpers/agy"])
         case .grok:
             return Identity(exactBundles: ["com.anysphere.sand"],
                             bundleContains: ["xai"],

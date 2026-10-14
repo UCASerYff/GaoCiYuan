@@ -593,3 +593,16 @@ Bearer Token	Bearer Token
 个暂时无法同步	paused
 个历史数据	historical
 自动发现	Auto-discovered
+Gemini App 中的 Antigravity	Antigravity in Gemini App
+Gemini App 中的 Antigravity（推荐）	Antigravity in Gemini App (Recommended)
+Antigravity 独立 App	Antigravity Standalone App
+自动读取本机 Gemini 桌面端内置的 Antigravity 服务与配额（5 小时 / 每周额度池）。Gemini 运行且开启 Antigravity 时自动同步，无需配置 Key。	Automatically reads the Antigravity service and quotas (5-hour and weekly pools) embedded in the local Gemini desktop app. Syncs automatically when Gemini runs with Antigravity enabled; no API key needed.
+自动读取独立版 Antigravity（或 Antigravity IDE）本机会话与配额池。软件运行中自动保持同步。	Automatically reads the standalone Antigravity (or Antigravity IDE) local session and quota pools. Stays in sync automatically while running.
+Gemini 官方服务 · 仅展示 Gemini 原生模型额度池	Gemini official service · Shows Gemini native model quota only
+Gemini 官方服务	Gemini official service
+Gemini 已运行，等待 Antigravity 服务启动…	Gemini is running; waiting for Antigravity service to start…
+Gemini 暂未启动。启动后自动读取，不预填额度。	Gemini desktop is not running. It will sync automatically after launch.
+未找到运行中的 Gemini 桌面端 Antigravity 服务。请打开 Gemini 并确认 Antigravity 已启用后重试。	No running Gemini desktop Antigravity service found. Please launch Gemini and ensure Antigravity is enabled.
+未能获取 Gemini Antigravity 本机会话凭证。请在 Gemini 中查看 Antigravity 界面后重试。	Could not acquire Gemini Antigravity local session credentials. Please open the Antigravity view in Gemini and retry.
+Gemini Antigravity 服务已发现但端口未响应，请稍后重试。	Gemini Antigravity service found but port did not respond. Please try again later.
+

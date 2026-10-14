@@ -33,7 +33,7 @@ func L(_ text: String) -> String {
     var result = text
     for (from,to) in Localization.fragments { result = result.replacingOccurrences(of:from,with:to) }
     // Composite labels include official source names and quota windows.
-    for key in ["密钥无效或登录已过期","权限不足；管理接口需要组织 Admin Key","平台限流，请稍后刷新","服务不可用","Codex 官方服务","Codex 官方接口","Antigravity 本机服务","Claude Code 本机服务","Claude Code 官方接口","Claude Code 状态栏推送","Claude 桌面会话","Cursor 官方账号接口","GitHub Copilot 官方插件接口","Grok 账号官方接口","火山方舟官方签名 API","小米 MiMo 官方控制台接口","Devin 本机缓存","Devin 账单 API","Ollama 设置页","Command Code 官方接口","Devin 消息额度","Command Code 组织支出上限","Command Code 余额池（$）","DeepSeek Harness 官方接口","官方 OAuth 只读接口；额度比例不等同于固定 Token 余额。","豆包 本机服务","Kimi 桌面订阅页","Kimi 会员有效期","豆包 Work","豆包","快照文件","本机软件自动读取","每周","每月","5 小时","当前窗口","主要窗口","次要窗口","额度比例不等同于固定 Token 余额；保留官方独立额度池。","搞词元"] {
+    for key in ["密钥无效或登录已过期","权限不足；管理接口需要组织 Admin Key","平台限流，请稍后刷新","服务不可用","Codex 官方服务","Codex 官方接口","Antigravity 本机服务","Gemini 官方服务","Gemini App 中的 Antigravity","Claude Code 本机服务","Claude Code 官方接口","Claude Code 状态栏推送","Claude 桌面会话","Cursor 官方账号接口","GitHub Copilot 官方插件接口","Grok 账号官方接口","火山方舟官方签名 API","小米 MiMo 官方控制台接口","Devin 本机缓存","Devin 账单 API","Ollama 设置页","Command Code 官方接口","Devin 消息额度","Command Code 组织支出上限","Command Code 余额池（$）","DeepSeek Harness 官方接口","官方 OAuth 只读接口；额度比例不等同于固定 Token 余额。","豆包 本机服务","Kimi 桌面订阅页","Kimi 会员有效期","豆包 Work","豆包","快照文件","本机软件自动读取","每周","每月","5 小时","当前窗口","主要窗口","次要窗口","额度比例不等同于固定 Token 余额；保留官方独立额度池。","搞词元"] {
         if let value = Localization.table[key] { result = result.replacingOccurrences(of:key,with:value) }
     }
     result = result.replacingOccurrences(of:"上次数据已保留。",with:"Previous data was retained.")

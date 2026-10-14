@@ -181,7 +181,7 @@ struct AlertMemory: Codable, Equatable {
 
 enum AlertRules {
     /// 推送式路由：沉默是「没人用」，不是「读不到」。这些连接的失败一律不计入连续失败。
-    static let silentConnections: [Connection] = [.agentLocal, .claudeDesktop, .kimiDesktop]
+    static let silentConnections: [Connection] = [.agentLocal, .claudeDesktop, .kimiDesktop, .geminiApp]
 
     /// 错误文本 → 三态。清单里全是连接器自己抛的固定串：neutral = 没配好/没运行；
     /// answered = 服务明确回答「没有可报的」；其余一律 failure（限流/网络/凭证被拒/格式变更）。
@@ -195,6 +195,7 @@ enum AlertRules {
             "请在账户设置中保存 API 密钥", "未找到本机", "请安装并登录", "未找到 Command Code 凭证",
             "Cookie 缺少会话项", "Cookie 格式无法解析", "凭证格式应为", "凭证缺少组织",
             "请选择快照 JSON 文件", "套餐缓存缺少可靠的写入时间", "未能读取 Devin 保存的套餐缓存",
+            "未找到运行中的 Gemini", "未找到运行中的 Antigravity",
         ]
         if neutralPhrases.contains(where: { error.contains($0) }) { return .neutral }
         let answeredPhrases = [

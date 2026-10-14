@@ -28,7 +28,7 @@ struct AccountEditor: View {
                 }
                 TextField(L("账户名称"),text:$account.name)
                 TextField(L("套餐 / 组织备注"),text:$account.plan,prompt:Text(account.kind == .agent ? L("如 Plus、Pro、Max、Coding Plan") : L("如组织名称或项目名")))
-                Picker(L("连接方式"),selection:$account.connection) { ForEach(Connection.available(account.provider,account.kind),id:\.self) { Text(L($0 == .kimiDesktop ? "Kimi 桌面订阅页（推荐 · 免 Key）" : $0.rawValue)).tag($0) } }
+                Picker(L("连接方式"),selection:$account.connection) { ForEach(Connection.available(account.provider,account.kind),id:\.self) { Text(L($0 == .kimiDesktop ? "Kimi 桌面订阅页（推荐 · 免 Key）" : $0 == .geminiApp ? "Gemini App 中的 Antigravity（推荐）" : ($0 == .agentLocal && account.provider == .gemini ? "Antigravity 独立 App" : $0.rawValue))).tag($0) } }
                 integrationSettings
                 if account.connection.needsKey {
                     if [.aliyun,.volc,.xai,.volcArk].contains(account.connection) {
@@ -61,8 +61,15 @@ struct AccountEditor: View {
                     }
                     Text(L("DeepSeek 余额接口不含百分比。「充值以来峰值」以本机观测到的余额峰值为分母，余额上升视为充值重新计满；「我的预算」以上方本月预算数字为分母。")).font(.caption).foregroundStyle(.secondary)
                 }
+                if account.connection == .geminiApp {
+                    Text(L("自动读取本机 Gemini 桌面端内置的 Antigravity 服务与配额（5 小时 / 每周额度池）。Gemini 运行且开启 Antigravity 时自动同步，无需配置 Key。")).font(.callout).foregroundStyle(.secondary)
+                }
                 if account.connection == .agentLocal {
-                    Text(L("自动检测本机 \(account.provider.agentSoftware) 软件与 CLI 状态，自动保持同步，无需手动录入。")).font(.callout).foregroundStyle(.secondary)
+                    if account.provider == .gemini {
+                        Text(L("自动读取独立版 Antigravity（或 Antigravity IDE）本机会话与配额池。软件运行中自动保持同步。")).font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        Text(L("自动检测本机 \(account.provider.agentSoftware) 软件与 CLI 状态，自动保持同步，无需手动录入。")).font(.callout).foregroundStyle(.secondary)
+                    }
                 }
                 if account.connection == .codex {
                     Text(L("复用本机 Codex 已登录的会员账号，通过官方服务读取所有额度池。不读取聊天、不发起模型调用。")).font(.callout).foregroundStyle(.secondary)

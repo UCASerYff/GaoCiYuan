@@ -1,17 +1,17 @@
-# 搞词元 V4.02
+# 搞词元 V4.03
 
 独立 macOS AI 额度与用量管理应用，包含账户管理、采集分析和悬浮窗。运行不依赖搞七廿三或其他六个应用；联动功能需要同时安装相关应用。
 
 ## 下载与安装
 
-从 [Releases](https://github.com/UCASerYff/GaoCiYuan/releases/latest) 下载 `GaoCiYuan-4.02.zip` 和同名 `.sha256` 文件。仓库保存源码，安装包作为 Release 附件单独发布。
+从 [Releases](https://github.com/UCASerYff/GaoCiYuan/releases/latest) 下载 `GaoCiYuan-4.03.zip` 和同名 `.sha256` 文件。仓库保存源码，安装包作为 Release 附件单独发布。
 
 1. 支持 macOS 14 或更高版本、Apple Silicon；暂未提供 Intel 版本。
 2. 解压 ZIP，将 `搞词元.app` 拖入“应用程序”文件夹。
 3. 如果 macOS 拦截打开，请先确认软件来源，再进入“系统设置 → 隐私与安全性”，允许该应用打开。发行包使用 Apple Development 签名，未做 Apple 公证。
 4. 安装后运行一次，原有账户、用量账本及悬浮窗设置会继续沿用。V4.02 不再提供桌面或通知中心小组件。
 
-下载后可在文件所在目录运行 `shasum -a 256 -c GaoCiYuan-4.02.zip.sha256` 核验安装包。
+下载后可在文件所在目录运行 `shasum -a 256 -c GaoCiYuan-4.03.zip.sha256` 核验安装包。
 
 ## 功能
 
@@ -57,6 +57,13 @@
 - `Resources/`：黑底白字图标、平台图标、翻译与 Tokscale 扫描引擎。
 - `Host/`：独立入口、设置、完整备份和联动服务。
 - `Tests/`：回归验证。
+
+## V4.03
+
+- 增加入口：支持读取 Gemini 桌面端内置的 Antigravity 配额（5 小时 / 每周额度池）。
+- 保留原有独立版 Antigravity（或 Antigravity IDE）连接入口与自动发现。
+- 增强 Gemini / Antigravity 本机进程发现机制与会话凭证自动解析。
+- 版本从 V4.02 升至 V4.03，构建号从 3 升至 4。
 
 ## V4.02
 
