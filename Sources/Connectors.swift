@@ -35,10 +35,26 @@ final class NoRedirect: NSObject, URLSessionTaskDelegate {
 }
 enum Connectors {
     static var session: URLSession = {
-        let c = URLSessionConfiguration.ephemeral; c.timeoutIntervalForRequest = 25; c.timeoutIntervalForResource = 45
+        let c = URLSessionConfiguration.ephemeral; c.timeoutIntervalForRequest = 25; c.timeoutIntervalForResource = 45; c.httpShouldSetCookies = false; c.httpCookieStorage = nil; c.urlCache = nil; c.httpMaximumConnectionsPerHost = 2
         return URLSession(configuration:c,delegate:NoRedirect(),delegateQueue:nil)
     }()
     static func fetch(_ account: Account, userInitiated: Bool = false, keyOverride: String? = nil) async throws -> ConnectorResult {
+        try Task.checkCancellation()
+        return try await HTTPPolicyContext.$userInitiated.withValue(userInitiated) {
+            try await HTTPPolicyContext.$trigger.withValue(userInitiated ? "quota.manual" : "quota.automatic") {
+                try await HTTPPolicyContext.$operationIdentity.withValue(UUID().uuidString) {
+                    let route = account.id.uuidString + account.connection.rawValue + account.filePath + (account.scopeID ?? "") + (account.region ?? "") + String(describing:account.customConfig)
+                    let fingerprint = SHA256.hash(data:Data(route.utf8)).map { String(format:"%02x",$0) }.joined()
+                    return try await HTTPPolicyContext.$credentialIdentity.withValue(fingerprint) {
+                        let result = try await fetchImpl(account, userInitiated: userInitiated, keyOverride: keyOverride)
+                        try Task.checkCancellation()
+                        return result
+                    }
+                }
+            }
+        }
+    }
+    private static func fetchImpl(_ account: Account, userInitiated: Bool, keyOverride: String?) async throws -> ConnectorResult {
         if let tool = account.connection.toolBridgeID {
             let credential = account.connection == .kiroQuota ? "" : try suppliedKey(account, override: keyOverride)
             let snapshot = try await ProviderToolBridge.fetch(provider: tool, credential: credential, scope: account.scopeID, region: account.region)
@@ -145,18 +161,18 @@ enum Connectors {
     static func integer(_ value: Any?) throws -> Int64 {
         guard let n = number(value), n >= 0, n < Double(Int64.max / 4), n.rounded() == n else { throw schemaError }; return Int64(n)
     }
-    static func get(_ path: String, key: String, anthropic: Bool = false, rawAuth: Bool = false) async throws -> [String:Any] {
+    static func get(_ path: String, key: String, anthropic: Bool = false, rawAuth: Bool = false, timeout: TimeInterval = 25, category: HTTPBudgetKind = .quota) async throws -> [String:Any] {
         guard let url = URL(string:path), url.scheme == "https", ["api.openai.com","api.anthropic.com","api.deepseek.com","api.moonshot.cn","api.kimi.com","www.minimaxi.com","www.minimax.io","open.bigmodel.cn","api.z.ai","management-api.x.ai"].contains(url.host ?? "") else { throw schemaError }
-        var r = URLRequest(url:url); r.httpMethod = "GET"
+        var r = URLRequest(url:url); r.httpMethod = "GET"; r.timeoutInterval = timeout
         r.setValue("application/json", forHTTPHeaderField:"Accept")
         if anthropic { r.setValue(key,forHTTPHeaderField:"x-api-key"); r.setValue("2023-06-01",forHTTPHeaderField:"anthropic-version") }
         else { r.setValue(rawAuth ? key : "Bearer \(key)",forHTTPHeaderField:"Authorization") }
-        return try await send(r)
+        return try await send(r, category: category)
     }
-    static func send(_ r: URLRequest) async throws -> [String:Any] {
+    static func send(_ r: URLRequest, category: HTTPBudgetKind = .quota) async throws -> [String:Any] {
         let (data, response): (Data, URLResponse)
         // 取消（整轮超时）原样上抛，让调用方区分「被取消」与「真失败」。
-        do { (data, response) = try await session.data(for:r) } catch {
+        do { (data, response) = try await BoundedHTTP.data(for: r, session: session, timeout: min(45, r.timeoutInterval), category: category) } catch {
             if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
             throw MonitorError.message("网络连接失败，请检查网络后重试。")
         }
@@ -174,37 +190,30 @@ enum Connectors {
         guard let object = try JSONSerialization.jsonObject(with:data) as? [String:Any] else { throw schemaError }; return object
     }
     // V1.9 本机 OAuth 凭证路线的请求原语：https + 官方 host 白名单 + NoRedirect（复用 Connectors.session）+ 错误消毒。
-    // 瞬时网络错误重试 2 次（600ms 线性退避）；HTTP 状态码原样返回，由调用方区分 401/403（令牌失效，走回落链）。
+    // 单次请求，统一网络层负责跨入口退避；HTTP 状态交给调用方，自动请求不会反复续期同一失效凭据。
     // token 只出现在请求头，绝不落日志、不写盘。
     static let oauthHosts = ["chatgpt.com","api.anthropic.com","claude.ai","cursor.com","github.com","api.github.com","cli-chat-proxy.grok.com","platform.xiaomimimo.com","app.devin.ai","ollama.com","api.commandcode.ai","platform.deepseek.com"]
     static func sendOAuth(_ r: URLRequest) async throws -> (Data, HTTPURLResponse) {
         guard let url = r.url, url.scheme == "https", let host = url.host, oauthHosts.contains(host) else { throw schemaError }
-        for attempt in 0...2 {
-            do {
-                let (data, response) = try await session.data(for:r)
-                guard let http = response as? HTTPURLResponse else { throw schemaError }
-                return (data, http)
-            } catch let e as URLError {
-                // 取消不是瞬时错误：不重试不包装，原样上抛给调用方区分。
-                if e.code == .cancelled { throw e }
-                let transient: [URLError.Code] = [.networkConnectionLost,.timedOut,.cannotConnectToHost,.cannotFindHost,.dnsLookupFailed]
-                guard attempt < 2, transient.contains(e.code) else { break }
-                try? await Task.sleep(nanoseconds:UInt64(600_000_000 * (attempt + 1)))
-            } catch {
-                if error is CancellationError { throw error }
-                break
-            }
-        }
-        throw MonitorError.message("网络连接失败，请检查网络后重试。上次数据已保留。")
+        try Task.checkCancellation()
+        // One transport attempt. Shared host policy owns backoff; connector and
+        // fallback layers must not multiply retries of the same request.
+        let (data, response) = try await BoundedHTTP.data(for: r, session: session, timeout: min(45, r.timeoutInterval))
+        guard let http = response as? HTTPURLResponse else { throw schemaError }
+        return (data, http)
     }
+
     static func pages(_ path: String, key: String, anthropic: Bool = false) async throws -> [[String:Any]] {
         var items: [[String:Any]] = [], next: String? = nil, seen = Set<String>()
-        for _ in 0..<200 {
+        let started = Date()
+        for _ in 0..<64 {
+            try Task.checkCancellation()
+            guard Date().timeIntervalSince(started) < 90 else { throw HTTPBudgetError.deadline }
             var url = URLComponents(string:path)!
             if let next { var q = url.queryItems ?? []; q.append(.init(name:"page",value:next)); url.queryItems = q; url.percentEncodedQuery = url.percentEncodedQuery?.replacingOccurrences(of:"+",with:"%2B") }
-            let response = try await get(url.url!.absoluteString,key:key,anthropic:anthropic)
+            let response = try await get(url.url!.absoluteString,key:key,anthropic:anthropic,timeout:min(25,max(0.01,90-Date().timeIntervalSince(started))),category:.history)
             guard let buckets = response["data"] as? [[String:Any]] else { throw schemaError }
-            for bucket in buckets { guard let results = bucket["results"] as? [[String:Any]] else { throw schemaError }; items += results }
+            for bucket in buckets { guard let results = bucket["results"] as? [[String:Any]] else { throw schemaError }; guard items.count <= 200_000 - results.count else { throw HTTPBudgetError.responseTooLarge }; items += results }
             guard let more = response["has_more"] as? Bool else { throw schemaError }
             if !more { return items }
             guard let cursor = response["next_page"] as? String, !cursor.isEmpty, seen.insert(cursor).inserted else { throw schemaError }; next = cursor
@@ -431,6 +440,8 @@ enum CodexBridge {
         switch await fetchOverHTTP() {
         case .success(let s): return s
         case .needsFreshCredentials:
+            try Task.checkCancellation()
+            guard HTTPPolicyContext.userInitiated else { throw MonitorError.message("Codex 凭据缺失或已失效，已停止自动续期请求。请在 Codex 登录后手动同步；上次数据已保留。") }
             Log.connectors.error("codex auth.json route unavailable; falling back to app-server")
             return try await fetchViaAppServer()
         case .failed(let error): throw error
@@ -438,30 +449,37 @@ enum CodexBridge {
     }
     // V1.8 既有资产：官方文档化 codex app-server JSON-RPC（stdio 一次性会话），作为 401/403/缺凭证时的回落。
     static func fetchViaAppServer() async throws -> UsageSnapshot {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos:.utility).async {
-                do { continuation.resume(returning:try read()) } catch { continuation.resume(throwing:error) }
-            }
-        }
+        let cancellation = ConnectorCancellation()
+        return try await withTaskCancellationHandler(operation: {
+            let value = try await Task.detached(priority: .utility) { try read(cancellation: cancellation) }.value
+            try Task.checkCancellation()
+            return value
+        }, onCancel: { cancellation.cancel() })
     }
-    static func read() throws -> UsageSnapshot {
+    static func read(cancellation: ConnectorCancellation = ConnectorCancellation()) throws -> UsageSnapshot {
+        try cancellation.check()
         guard let path = executable else {
             if let reason = helperRejectionReason { throw MonitorError.message(reason) }
             throw MonitorError.message("未找到 Codex。请安装并登录 Codex，或在设置中选择可执行文件。")
         }
-        let process = Process(); process.executableURL = URL(fileURLWithPath:path); process.arguments = ["app-server","--listen","stdio://"]
         let input = Pipe(), output = Pipe()
-        process.standardInput = input; process.standardOutput = output; process.standardError = FileHandle.nullDevice
-        try process.run()
+        let pid = try spawnQuotaProcess(path: path, arguments: ["app-server","--listen","stdio://"], input: input, output: output)
+        cancellation.attachGroup(pid)
         let timer = DispatchSource.makeTimerSource(queue:.global(qos:.utility))
         timer.schedule(deadline:.now() + 35)
-        timer.setEventHandler { if process.isRunning { kill(process.processIdentifier,SIGKILL) } }; timer.resume()
-        defer { timer.cancel(); if process.isRunning { process.terminate() }; try? input.fileHandleForWriting.close(); try? output.fileHandleForReading.close() }
+        timer.setEventHandler { cancellation.cancel() }; timer.resume()
+        defer {
+            timer.cancel(); cancellation.finishGroup(pid)
+            try? input.fileHandleForWriting.close(); try? output.fileHandleForReading.close()
+        }
+        try cancellation.check()
         func send(_ value: [String:Any]) throws { var data = try JSONSerialization.data(withJSONObject:value); data.append(10); try input.fileHandleForWriting.write(contentsOf:data) }
         try send(["id":1,"method":"initialize","params":["clientInfo":["name":"gaociyuan","title":"搞词元","version":"0.6.0"]]])
         var buffer = Data()
         while true {
+            try cancellation.check()
             let chunk = output.fileHandleForReading.availableData
+            try cancellation.check()
             if chunk.isEmpty { throw MonitorError.message("Codex 读取超时或服务退出。请确认已登录且网络可用。") }
             buffer.append(chunk)
             if buffer.count > 4_000_000 { throw Connectors.schemaError }
@@ -711,13 +729,14 @@ enum AntigravityBridge {
     }
 
     static func ask(_ url: URL, csrfToken: String, parse: ([String: Any]) throws -> UsageSnapshot) async -> Probe {
+        guard !Task.isCancelled else { return .wrongPort }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(csrfToken, forHTTPHeaderField: "X-Codeium-Csrf-Token")
         req.httpBody = Data("{}".utf8)
         do {
-            let (data, resp) = try await session.data(for: req)
+            let (data, resp) = try await BoundedHTTP.data(for: req, session: session)
             guard let status = (resp as? HTTPURLResponse)?.statusCode else { return .wrongPort }
             switch status {
             case 200: break
@@ -736,15 +755,19 @@ enum AntigravityBridge {
     }
 
     static func fetch() async throws -> UsageSnapshot {
+        try Task.checkCancellation()
         // ps/lsof 发现进程与端口是同步子进程调用：卸载后台队列再进逐端口询问。
         let servers = await Task.detached(priority: .userInitiated) { discoverServers() }.value
+        try Task.checkCancellation()
         guard !servers.isEmpty else {
             throw MonitorError.message("未找到运行中的 Antigravity 服务。请打开 Antigravity 后重试。")
         }
         var answeredEmpty = false
         var somethingAnswered = false
         for server in servers {
+            try Task.checkCancellation()
             for port in server.ports {
+                try Task.checkCancellation()
                 if let url = URL(string: "https://127.0.0.1:\(port)/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary") {
                     switch await ask(url, csrfToken: server.csrfToken, parse: { try parseSummary($0) }) {
                     case .hit(let snapshot): return snapshot
@@ -832,12 +855,14 @@ enum GeminiAntigravityBridge {
     static func resolveCsrfToken(ports: [Int]) async -> String? {
         let regex = try? NSRegularExpression(pattern: #"\"csrfToken\"\s*:\s*\"([a-zA-Z0-9-]+)\""#)
         for port in ports {
+            guard !Task.isCancelled else { return nil }
             for scheme in ["http", "https"] {
+                guard !Task.isCancelled else { return nil }
                 guard let url = URL(string: "\(scheme)://127.0.0.1:\(port)/") else { continue }
                 var req = URLRequest(url: url)
                 req.timeoutInterval = 3
                 do {
-                    let (data, _) = try await AntigravityBridge.session.data(for: req)
+                    let (data, _) = try await BoundedHTTP.data(for: req, session: AntigravityBridge.session, maxBytes: 262_144, timeout: 3, category: .providerPage)
                     if let html = String(data: data, encoding: .utf8), let regex = regex,
                        let m = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
                        let r = Range(m.range(at: 1), in: html) {
@@ -853,7 +878,9 @@ enum GeminiAntigravityBridge {
     }
 
     static func fetch(_ account: Account, userInitiated: Bool = false) async throws -> ConnectorResult {
+        try Task.checkCancellation()
         let candidates = await Task.detached(priority: .userInitiated) { discoverCandidates() }.value
+        try Task.checkCancellation()
         if candidates.isEmpty {
             let geminiRunning = isGeminiAppRunning()
             if geminiRunning {
@@ -879,6 +906,7 @@ enum GeminiAntigravityBridge {
         var answeredEmpty = false
         var somethingAnswered = false
         for port in allPorts {
+            try Task.checkCancellation()
             for scheme in ["http", "https"] {
                 if let url = URL(string: "\(scheme)://127.0.0.1:\(port)/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary") {
                     switch await AntigravityBridge.ask(url, csrfToken: csrfToken, parse: {
@@ -1088,6 +1116,7 @@ enum ClaudeBridge {
 
 enum AgentBridge {
     static func fetch(_ account: Account, userInitiated: Bool = false) async throws -> ConnectorResult {
+        try Task.checkCancellation()
         let p = account.provider
         switch p {
         case .openai:
@@ -1101,10 +1130,13 @@ enum AgentBridge {
             do {
                 return .snapshot(try await AntigravityBridge.fetch())
             } catch {
+                try Task.checkCancellation()
+                if error is CancellationError || (error as? URLError)?.code == .cancelled { throw CancellationError() }
                 if let geminiSnap = try? await GeminiAntigravityBridge.fetch(account, userInitiated: userInitiated),
                    case .snapshot = geminiSnap {
                     return geminiSnap
                 }
+                try Task.checkCancellation()
                 let status = detectLocalAgent(account)
                 if status.available {
                     return .status(status.message)

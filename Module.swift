@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import Foundation
 import UserNotifications
 
@@ -25,18 +26,30 @@ public enum TokenStatusLineBridge {
     static let activity = AgentActivityMonitor()
     static let analytics = UsageAnalyticsStore(directory: store.dataURL.deletingLastPathComponent())
     static var started = false
+    static var lifecycleObservers: [NSObjectProtocol] = []
     static func start() {
         guard !started, ProcessInfo.processInfo.environment["GAOQINIANSAN_INTEGRATION_TEST"] != "1" else { return }
         started = true
         // 点击系统通知打开主窗口（代理全程仅这一个用途；授权只在用户打开通知开关时请求）。
         // The application owns the single notification delegate.
         activity.start()
+        store.start()
+        analytics.setAutomaticRefreshEnabled(store.library.autoRefresh)
+        store.automaticRefreshChanged = { enabled in analytics.setAutomaticRefreshEnabled(enabled) }
         analytics.start()
+        let workspace = NSWorkspace.shared.notificationCenter
+        lifecycleObservers.append(workspace.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { store.setSuspended(true); analytics.setSuspended(true); UpdateChecker.shared.stop(); BoundedHTTP.cancelAll() }
+        })
+        lifecycleObservers.append(workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { store.setSuspended(false); analytics.setSuspended(false) }
+        })
+        lifecycleObservers.append(NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { store.stop(); analytics.stop(); MemberDiscovery.shared.stop(); UpdateChecker.shared.stop(); BoundedHTTP.cancelAll() }
+        })
         // 3.33：app 启动即开始 agent 自动发现（扫描 + 定期重扫在 configure 内启动）。
         MemberDiscovery.shared.configure(store)
-        Task {
-            await store.refreshAll()
-        }
+        if store.library.autoRefresh { Task { await store.refreshAll() } }
     }
 }
 

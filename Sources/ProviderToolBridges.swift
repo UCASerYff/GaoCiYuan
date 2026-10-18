@@ -67,7 +67,7 @@ enum ProviderToolBridge {
         var request=URLRequest(url:url);request.httpMethod=method;request.httpBody=body;request.timeoutInterval=20
         request.setValue("application/json",forHTTPHeaderField:"Accept");request.setValue(browserAgent,forHTTPHeaderField:"User-Agent")
         for (name,value) in headers {request.setValue(value,forHTTPHeaderField:name)}
-        let (data,response)=try await Connectors.session.data(for:request)
+        let (data,response)=try await BoundedHTTP.data(for: request, session: Connectors.session)
         try Task.checkCancellation()
         guard let http=response as? HTTPURLResponse else {throw Connectors.schemaError}
         guard (200..<300).contains(http.statusCode) else {throw HTTPFailure(status:http.statusCode)}

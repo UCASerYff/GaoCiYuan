@@ -2,6 +2,8 @@
 
 The base remains Tokscale 4.17.0 at revision `37e347fedf8fee1059742e9fffa2deb8b4ad3bc9`. `pin.json` records the original binary SHA-256, patched source binary SHA-256, patch SHA-256 and toolchain. App packaging signs the executable again with the app's Apple Development identity.
 
+The Swift wrapper now forces cached-only public pricing on all local scans; explicit bounded public-price updates, subprocess cancellation and numeric report reuse are documented in [NETWORK-POLICY.md](NETWORK-POLICY.md). This policy does not require changing or downloading the bundled CLI.
+
 `gqns-3.66.patch` contains these local changes:
 
 - Deduplicate Kimi messages across wire files within the same session. Provider message IDs distinguish progressive snapshots; Kimi Code and ID-less legacy records use session/agent/wire-position provenance. Two equal-valued calls in different positions or sessions remain separate. Rebuild only the Kimi parser cache after introducing the keys.

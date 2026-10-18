@@ -10,6 +10,9 @@ struct UsageSourceSettingsView: View {
     @State private var selectedClientID = "codex"
     @State private var detectedIDs = Set<String>()
     @State private var validationError: String?
+    @State private var priceTask: Task<Void, Never>?
+    @State private var updatingPrices = false
+    @State private var pricingStatus: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,7 +24,7 @@ struct UsageSourceSettingsView: View {
                 }
                 Spacer()
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("保存并采集") { save() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                Button("保存设置") { save() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
             }.padding(22)
             Divider()
             ScrollView {
@@ -41,6 +44,7 @@ struct UsageSourceSettingsView: View {
             priceDrafts = draft.engine.modelPrices.map(UsagePriceDraft.init)
             refreshDetectedPaths()
         }
+        .onDisappear { priceTask?.cancel() }
         .onChange(of: store.errorMessage) { _, value in
             if let value { validationError = value }
         }
@@ -146,8 +150,29 @@ struct UsageSourceSettingsView: View {
             }
             Text("单位为美元 / 百万 Token。模型名需与明细中的名称完全一致；留空不设定此项，填写 0 表示该项免费。至少填写输入或输出价格；缺少计费类型时保留原估价。")
                 .font(.caption).foregroundStyle(.secondary)
+            Text("本地历史扫描只读取已有价格缓存，不自动下载价格表。更新公开价格会联网访问 LiteLLM 和 models.dev；过期价格会标明时效，未知费用显示未定价。Cursor 官方历史仍需单独启用联网。")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button(updatingPrices ? "正在更新公开价格…" : "更新公开价格（联网）") {
+                    updatingPrices = true; pricingStatus = nil
+                    priceTask = Task {
+                        do {
+                            let result = try await HTTPPolicyContext.$userInitiated.withValue(true) {
+                                try await HTTPPolicyContext.$trigger.withValue("pricing.manual") {
+                                    try await UsageEngine.refreshPublicPrices()
+                                }
+                            }
+                            pricingStatus = result.message
+                        } catch is CancellationError { pricingStatus = "已取消，原价格缓存保留。" }
+                        catch { pricingStatus = error.localizedDescription }
+                        updatingPrices = false
+                    }
+                }.disabled(updatingPrices)
+                if updatingPrices { Button("取消更新") { priceTask?.cancel() } }
+            }
+            if let pricingStatus { Text(pricingStatus).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
             if priceDrafts.isEmpty {
-                Text("当前使用公开模型价格表；无法定价的模型显示“未定价”。")
+                Text("当前使用本机已缓存的公开价格；没有可核验价格的模型显示“未定价”。")
                     .font(.callout).foregroundStyle(.secondary)
             }
             ForEach($priceDrafts) { $row in

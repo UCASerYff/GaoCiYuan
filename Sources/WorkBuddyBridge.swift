@@ -114,7 +114,7 @@ enum WorkBuddyAX {
     }
 
     /// 读取积分余额。allowPrompt 仅在用户手动同步或首次同步该连接器时为 true。
-    static func collect(accountID: UUID, allowPrompt: Bool = false) -> CollectOutcome {
+    static func collect(accountID: UUID, allowPrompt: Bool = false, allowNavigation: Bool = false) -> CollectOutcome {
         guard let app = runningApp() else { return .notRunning }
         guard AXIsProcessTrusted() else {
             if allowPrompt {
@@ -128,6 +128,7 @@ enum WorkBuddyAX {
 
         // 弹层正好开着（或页面本身就有积分行）：直接只读，不导航。
         if let credits = parseCredits(lines: windowLines(axApp)) { return .observation(credits) }
+        guard allowNavigation else { return .noCredits }
 
         // 前台使用中不打扰：状态而非错误（同 Kimi/豆包桥）。
         if app.isActive { return .foregroundBusy }
@@ -166,14 +167,16 @@ enum WorkBuddyBridge {
             return .status("距上次同步不足 5 分钟，本次沿用上次数据。")
         }
         // 授权弹窗只在用户手动同步或首次同步该连接器时触发，定时轮询不弹窗。
-        let allowPrompt = userInitiated || account.lastAttempt == nil
+        try Task.checkCancellation()
+        let allowPrompt = userInitiated
         // AX 遍历含 usleep，卸载到后台队列，不占协作线程池与主线程。
         let accountID = account.id
         let outcome: WorkBuddyAX.CollectOutcome = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
-                continuation.resume(returning: WorkBuddyAX.collect(accountID: accountID, allowPrompt: allowPrompt))
+                continuation.resume(returning: WorkBuddyAX.collect(accountID: accountID, allowPrompt: allowPrompt, allowNavigation: userInitiated))
             }
         }
+        try Task.checkCancellation()
         switch outcome {
         case .notRunning:
             return .status("WorkBuddy 暂未启动。启动本机软件后自动读取积分余额，不预填数值。")
@@ -186,6 +189,7 @@ enum WorkBuddyBridge {
         case .throttled:
             return .status("距上次自动读取不足 5 分钟，本次沿用上次数据。")
         case .noCredits:
+            if !userInitiated { return .status("WorkBuddy 当前页面未显示积分，自动同步不会打开账户弹层；可打开后重读或手动同步，上次数据已保留。") }
             throw MonitorError.message("未能读取 WorkBuddy 积分余额（页面结构可能已变化）。上次数据已保留。")
         case .observation(let credits):
             return .snapshot(try snapshot(credits: credits))

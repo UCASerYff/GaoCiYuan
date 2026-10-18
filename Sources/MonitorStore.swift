@@ -3,7 +3,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 @MainActor final class MonitorStore: ObservableObject {
-    @Published var library: Library
+    @Published var library: Library {
+        didSet {
+            reconcileRefreshTasks()
+            if oldValue.autoRefresh != library.autoRefresh { automaticRefreshChanged?(library.autoRefresh) }
+        }
+    }
     @Published var refreshing = Set<UUID>()
     @Published var notice: String?
     private(set) var loadFailed = false
@@ -11,10 +16,25 @@ import UniformTypeIdentifiers
     let alerts: AlertCenter
     private var timer: Timer?
     private var revisions: [UUID:Int] = [:]
+    private struct RefreshFlight {
+        let token: UUID
+        let account: Account
+        let automatic: Bool
+        let task: Task<Void, Never>
+    }
+    typealias Fetch = @MainActor (Account, Bool) async throws -> ConnectorResult
+    private let fetch: Fetch
+    private let refreshCoordinator = RefreshCoordinator<ConnectorResult>()
+    private var refreshTasks: [UUID: RefreshFlight] = [:]
+    private var suspended = false
+    var automaticRefreshChanged: ((Bool) -> Void)?
     // 阶段 3B：自适应节奏的信号记忆（内存态，重启后从封顶重新开始——只会偏保守，不会偏吵）。
     private var lastChanges: [UUID:Date] = [:]
     private var lastUserActions: [UUID:Date] = [:]
-    init(directory: URL? = nil) {
+    init(directory: URL? = nil, fetch: @escaping Fetch = { account, userInitiated in
+        try await Connectors.fetch(account, userInitiated: userInitiated)
+    }) {
+        self.fetch = fetch
         let root = directory
             ?? ProcessInfo.processInfo.environment["GAOCIYUAN_DATA_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("GaoSeries/Token")
@@ -76,9 +96,49 @@ import UniformTypeIdentifiers
                 if changed { save() }
             } catch { library = Library(); loadFailed = true; notice = "数据文件读取失败，原文件已保留，暂时禁止写入。请从备份恢复。\n\(error.localizedDescription)" }
         } else { library = Library() }
-        if directory == nil {
-            timer = Timer.scheduledTimer(withTimeInterval:60,repeats:true) { [weak self] _ in Task { @MainActor in await self?.refreshDue() } }
+    }
+    func start() {
+        guard timer == nil, ProcessInfo.processInfo.environment["GAOQINIANSAN_INTEGRATION_TEST"] != "1" else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.refreshDue() }
         }
+    }
+    func setSuspended(_ value: Bool) {
+        suspended = value
+        if value { cancelRefreshes() }
+    }
+    func stop() {
+        timer?.invalidate(); timer = nil
+        setSuspended(true)
+    }
+    private func cancelRefreshes(automaticOnly: Bool = false) {
+        for (_, flight) in refreshTasks where !automaticOnly || flight.automatic { flight.task.cancel() }
+    }
+    private func reconcileRefreshTasks() {
+        for (id, flight) in refreshTasks {
+            guard let current = library.accounts.first(where: { $0.id == id }), current.enabled,
+                  Self.sameSource(current, flight.account), !suspended,
+                  !flight.automatic || library.autoRefresh else { flight.task.cancel(); continue }
+        }
+    }
+    nonisolated private static func sameSource(_ lhs: Account, _ rhs: Account) -> Bool {
+        lhs.provider == rhs.provider && lhs.kind == rhs.kind && lhs.connection == rhs.connection &&
+        lhs.filePath == rhs.filePath && lhs.scopeID == rhs.scopeID && lhs.region == rhs.region && lhs.customConfig == rhs.customConfig
+    }
+    nonisolated private static func requestKey(_ account: Account) -> String {
+        // These routes read the single logged-in account on this Mac and accept no
+        // per-account credential/scope. Other routes must never share credentials.
+        switch account.connection {
+        case .codex, .cursor, .grokAccount, .devinApp: return "local." + account.connection.rawValue
+        default: return account.id.uuidString
+        }
+    }
+    nonisolated private static func serviceKey(_ account: Account) -> String {
+        if account.connection == .customAPI, let url = account.customConfig?.url,
+           let host = URL(string: url)?.host { return "host." + host.lowercased() }
+        if [.newAPIQuota, .sub2APIQuota].contains(account.connection),
+           let host = URL(string: account.filePath)?.host { return "host." + host.lowercased() }
+        return "provider." + account.provider.rawValue
     }
     // 纯函数校验：不访问实例状态，标记 nonisolated 供 DataTransfer 后台线程直接调用。
     nonisolated static func validate(_ lib: Library) throws {
@@ -108,7 +168,7 @@ import UniformTypeIdentifiers
             var edited = account
             let current = copy.accounts[i]
             edited.history = current.history
-            if current.connection == edited.connection && current.filePath == edited.filePath && current.scopeID == edited.scopeID && current.region == edited.region && key.isEmpty {
+            if Self.sameSource(current, edited) && key.isEmpty {
                 edited.snapshot = current.snapshot; edited.lastAttempt = current.lastAttempt; edited.error = current.error; edited.statusNote = current.statusNote
             } else { edited.snapshot = nil; edited.lastAttempt = nil; edited.error = nil; edited.statusNote = nil }
             connectionChanged = current.connection != edited.connection
@@ -118,7 +178,12 @@ import UniformTypeIdentifiers
         if !key.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty { try KeyVault.save(key.trimmingCharacters(in:.whitespacesAndNewlines),id:account.id) }
         // 切换连接方式且未提供新密钥时，清理旧连接残留的钥匙串条目。
         else if connectionChanged { KeyVault.delete(account.id) }
-        revisions[account.id,default:0] += 1; library = copy; save()
+        if let current = library.accounts.first(where: { $0.id == account.id }),
+           !Self.sameSource(current, account) || current.enabled != account.enabled || !key.isEmpty {
+            revisions[account.id, default: 0] += 1
+            refreshTasks[account.id]?.task.cancel()
+        }
+        library = copy; save()
     }
     func remove(_ id: UUID) {
         guard !loadFailed else { return }
@@ -152,14 +217,34 @@ import UniformTypeIdentifiers
         library.accounts[i].statusNote = message; library.accounts[i].error = nil; library.accounts[i].lastAttempt = Date(); save()
     }
     func refresh(_ id: UUID, userInitiated: Bool = false) async {
-        guard !loadFailed, !refreshing.contains(id), let a = library.accounts.first(where:{$0.id == id}), a.enabled else { return }
+        guard !Task.isCancelled, !loadFailed, !suspended, userInitiated || library.autoRefresh,
+              !refreshing.contains(id), let a = library.accounts.first(where: { $0.id == id }), a.enabled else { return }
         if userInitiated { lastUserActions[id] = Date() }
-        let revision = revisions[id,default:0]
-        refreshing.insert(id); defer { refreshing.remove(id) }
+        let revision = revisions[id, default: 0], token = UUID()
+        refreshing.insert(id)
+        let task = Task { [self] in
+            await performRefresh(a, revision: revision, token: token, userInitiated: userInitiated)
+        }
+        refreshTasks[id] = RefreshFlight(token: token, account: a, automatic: !userInitiated, task: task)
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+    }
+    private func performRefresh(_ a: Account, revision: Int, token: UUID, userInitiated: Bool) async {
+        let id = a.id
+        defer {
+            if refreshTasks[id]?.token == token { refreshTasks.removeValue(forKey: id); refreshing.remove(id) }
+        }
         do {
-            let result = try await Connectors.fetch(a, userInitiated: userInitiated)
-            // Ignore responses after the user changed the account's connection while fetching.
-            guard revisions[id,default:0] == revision, let current = library.accounts.first(where:{$0.id == id}), current.connection == a.connection, current.filePath == a.filePath else { return }
+            let result = try await refreshCoordinator.perform(request: Self.requestKey(a) + (userInitiated ? ".manual" : ".automatic"), service: Self.serviceKey(a)) { [fetch] in
+                try await HTTPPolicyContext.$userInitiated.withValue(userInitiated) {
+                    try await HTTPPolicyContext.$trigger.withValue(userInitiated ? "quota.manual" : "quota.automatic") {
+                        try await fetch(a, userInitiated)
+                    }
+                }
+            }
+            try Task.checkCancellation()
+            guard revisions[id, default: 0] == revision,
+                  let current = library.accounts.first(where: { $0.id == id }), current.enabled,
+                  Self.sameSource(current, a), userInitiated || library.autoRefresh, !suspended else { return }
             switch result {
             case .snapshot(let s):
                 let outcome: AlertOutcome
@@ -182,8 +267,10 @@ import UniformTypeIdentifiers
             }
         } catch {
             // 整轮 180 秒上限取消在途刷新不是账户故障：不计错误、不进连续失败、不覆盖旧读数。
-            if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
-            if revisions[id,default:0] == revision, let i = library.accounts.firstIndex(where:{$0.id == id}), library.accounts[i].connection == a.connection {
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return }
+            if revisions[id, default: 0] == revision, !suspended, userInitiated || library.autoRefresh,
+               let i = library.accounts.firstIndex(where: { $0.id == id }), library.accounts[i].enabled,
+               Self.sameSource(library.accounts[i], a) {
                 // 与 updateStatus 对称：落 error 时清掉旧 statusNote，避免「前台使用中」等状态残留盖住新错误。
                 library.accounts[i].error = error.localizedDescription; library.accounts[i].statusNote = nil; library.accounts[i].lastAttempt = Date(); save()
                 alerts.observe(account: library.accounts[i], outcome: AlertRules.standing(connection: a.connection, error: error.localizedDescription))
@@ -215,10 +302,11 @@ import UniformTypeIdentifiers
         }
     }
     func refreshAll(userInitiated: Bool = false) async {
+        guard !suspended, userInitiated || library.autoRefresh else { return }
         await refreshGroup(library.accounts.filter { $0.enabled }.map(\.id), userInitiated: userInitiated)
     }
     func refreshDue() async {
-        guard library.autoRefresh else { return }
+        guard !suspended, library.autoRefresh else { return }
         // 固定/自适应是用户偏好，存 UserDefaults，不进 Library schema（保持存档兼容）。
         let fixed = TokenBundle.defaults.bool(forKey: "refreshFixedInterval")
         let ids = Self.dueIDs(accounts: active, fixed: fixed, refreshMinutes: library.refreshMinutes, changes: lastChanges, actions: lastUserActions)

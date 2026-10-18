@@ -194,15 +194,18 @@ enum KimiDesktopBridge {
     }
 
     static func fetch(_ account: Account, userInitiated: Bool = false) async throws -> ConnectorResult {
-        let allowPrompt = userInitiated || account.lastAttempt == nil
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                do { continuation.resume(returning: try read(accountID: account.id, allowPrompt: allowPrompt)) } catch { continuation.resume(throwing: error) }
-            }
-        }
+        let cancellation = ConnectorCancellation()
+        return try await withTaskCancellationHandler(operation: {
+            let result = try await Task.detached(priority:.utility) {
+                try read(accountID:account.id, allowPrompt:userInitiated, allowNavigation:userInitiated, cancellation:cancellation)
+            }.value
+            try Task.checkCancellation()
+            return result
+        }, onCancel:{cancellation.cancel()})
     }
 
-    static func read(accountID: UUID, allowPrompt: Bool = false) throws -> ConnectorResult {
+    static func read(accountID: UUID, allowPrompt: Bool = false, allowNavigation: Bool = false, cancellation: ConnectorCancellation = ConnectorCancellation()) throws -> ConnectorResult {
+        try cancellation.check()
         guard let app = runningApp() else {
             throw MonitorError.message("Kimi 桌面端未运行。启动后将在下次同步自动补读；上次数据已保留。")
         }
@@ -229,8 +232,10 @@ enum KimiDesktopBridge {
         }
         usleep(1_500_000)
 
+        try cancellation.check()
         var obs = parse(lines: windowLines(axApp))
         if !obs.hasPageMarkers {
+            guard allowNavigation else { return .status("Kimi 当前页面未显示额度，自动同步不会打开订阅页；可打开订阅页后重读或手动同步，上次数据已保留。") }
             if app.isActive {
                 // 设计内跳过，不是失败：状态消息，不触发总览告警与菜单栏红点。
                 return .status("Kimi 前台使用中，稍后自动补读；上次数据已保留。")
@@ -238,6 +243,7 @@ enum KimiDesktopBridge {
             guard !navigationThrottled(accountID) else {
                 return .status("距上次自动导航不足 5 分钟，本次沿用上次数据。")
             }
+            try cancellation.check()
             markNavigated(accountID)
             var opened = false
             var mb: CFTypeRef?
@@ -252,10 +258,12 @@ enum KimiDesktopBridge {
                 throw MonitorError.message("未能后台打开 Kimi 设置页（菜单项不可用）。上次数据已保留。")
             }
             usleep(1_300_000)
+            try cancellation.check()
             obs = parse(lines: windowLines(axApp))
             if !obs.hasPageMarkers, pressInWindows(axApp, role: "AXLink", title: "我的订阅") {
                 usleep(1_000_000)
-                obs = parse(lines: windowLines(axApp))
+                try cancellation.check()
+            obs = parse(lines: windowLines(axApp))
             }
             // Leave the page the way we found it: press「返回」, best effort.
             _ = pressInWindows(axApp, role: "AXButton", title: "返回")

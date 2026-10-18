@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import CoreFoundation
 import Darwin
 
 // The scanner uses a pinned Tokscale base plus the bundled GQNS dedup patch.
@@ -179,7 +180,7 @@ struct UsageClientDefinition: Identifiable, Sendable {
 }
 
 enum UsageEngineFailure: LocalizedError {
-    case missingBinary, timeout, cancelled, oversized, malformed, invalidConfiguration(String), process(Int32)
+    case missingBinary, timeout, cancelled, oversized, malformed, invalidConfiguration(String), process(Int32), pricing(String)
     var errorDescription: String? {
         switch self {
         case .missingBinary: return "本地用量采集引擎缺失，请重新安装当前版本。"
@@ -189,6 +190,7 @@ enum UsageEngineFailure: LocalizedError {
         case .malformed: return "采集结果不完整，已有历史保持不变。"
         case .invalidConfiguration(let message): return message
         case .process(let code): return "本地用量引擎未能完成采集（退出码 \(code)）。已有历史保持不变。"
+        case .pricing(let message): return message
         }
     }
 }
@@ -197,17 +199,379 @@ private final class UsageEngineBundleMarker: NSObject {}
 private final class UsageScanCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
+    private let deadline = Date().addingTimeInterval(180)
     func cancel() { lock.lock(); cancelled = true; lock.unlock() }
-    func check() throws { lock.lock(); let value = cancelled; lock.unlock(); if value { throw UsageEngineFailure.cancelled } }
+    func check() throws {
+        lock.lock(); let value = cancelled; lock.unlock()
+        if value { throw CancellationError() }
+        if Date() >= deadline { throw UsageEngineFailure.timeout }
+    }
+}
+
+struct UsagePriceRefreshSummary: Sendable {
+    var fetchedAt: Date
+    var updatedSources: [String]
+    var warnings: [String]
+    var message: String {
+        "已更新 " + updatedSources.joined(separator: "、") + " 公开价格；后续本地采集只读取缓存。" +
+        (warnings.isEmpty ? "" : "\n" + warnings.joined(separator: "\n"))
+    }
 }
 
 enum UsageEngine {
     static let revision = "37e347fedf8fee1059742e9fffa2deb8b4ad3bc9+gqns-3.66"
     static let sourceSHA256 = "3989f5d1eee31842070f484f5fbf996e52ac38c1b86596d7abee64bb8bc2e2c0"
-    static let privacyNotice = "本地工具仅分析本机用量记录，不上传会话、提示词或项目路径。Cursor 需单独启用，仅向 cursor.com 官方接口发送现有登录态读取用量。引擎会下载 LiteLLM、OpenRouter 和 models.dev 的公开价格表；费用为估算，并非订阅实际账单。分析数据库不保存正文、标题和原始路径；引擎可重建缓存含会话标题与项目路径，仅保存在本机。"
+    static let privacyNotice = "本地工具仅分析本机用量记录，不上传会话、提示词或项目路径。历史采集仅使用本机价格缓存和自定义价格，不自动下载价格表；点击“更新公开价格”才会请求 LiteLLM 和 models.dev 两个公开 JSON，每源最多 16 MiB，不再逐模型请求 OpenRouter。旧的 OpenRouter 缓存仍可用于估算。缓存过期会明确提示，未定价保持未知；费用为估算，并非订阅实际账单。Cursor 需单独启用，仅向 cursor.com 官方接口发送现有登录态读取用量。分析数据库不保存正文、标题和原始路径；引擎可重建缓存含会话标题与项目路径，仅保存在本机。"
     static var defaultConfigurationDirectory: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("GaoSeries/TokenUsageEngine", isDirectory: true)
+    }
+
+    /// This is the only public-price network entry point. History scans never
+    /// call it, including cold-cache scans. Do not call it from an auto timer.
+    static func refreshPublicPrices(configurationDirectory: URL? = nil, session suppliedSession: URLSession? = nil) async throws -> UsagePriceRefreshSummary {
+        let directory = configurationDirectory ?? defaultConfigurationDirectory
+        let limiter = UsageScanCancellation()
+        let previous = try await withTaskCancellationHandler(operation: {
+            try await Task.detached(priority: .utility) {
+                try withDirectoryLock(directory, cancellation: limiter) { () -> UsagePriceRefreshSummary? in
+                    let stateURL = directory.appendingPathComponent("pricing-refresh-state.json")
+                    if let state = try? JSONDecoder().decode(PriceRefreshState.self, from: Data(contentsOf: stateURL)), state.attemptedAt <= Date(), state.nextAllowedAt > Date() {
+                        let cachedSourcesExist = state.sources.allSatisfy { label in
+                            guard let source = PublicPriceSource.allCases.first(where: { $0.label == label }),
+                                  let data = try? Data(contentsOf: directory.appendingPathComponent("cache/" + source.filename)),
+                                  let receiptData = try? Data(contentsOf: directory.appendingPathComponent("cache/" + source.filename + ".receipt.json")),
+                                  let receipt = try? JSONSerialization.jsonObject(with: receiptData) as? [String: Any] else { return false }
+                            return receipt["sha256"] as? String == digest(data)
+                        }
+                        if state.success && !state.sources.isEmpty && cachedSourcesExist {
+                            return .init(fetchedAt: state.completedAt ?? state.attemptedAt,
+                                updatedSources: state.sources, warnings: ["公开价格仍在 1 小时缓存有效期内，本次没有联网。"])
+                        }
+                        if !state.success { throw UsageEngineFailure.pricing("公开价格正在更新或处于失败退避期；至少间隔 15 分钟再重试。原缓存继续保留。") }
+                    }
+                    let now = Date()
+                    let state = PriceRefreshState(attemptedAt: now, nextAllowedAt: now.addingTimeInterval(15 * 60), success: false, sources: [])
+                    try JSONEncoder().encode(state).write(to: stateURL, options: .atomic)
+                    return nil
+                }
+            }.value
+        }, onCancel: { limiter.cancel() })
+        if let previous { return previous }
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.httpCookieStorage = nil
+        sessionConfiguration.urlCache = nil
+        sessionConfiguration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        let session = suppliedSession ?? URLSession(configuration: sessionConfiguration)
+        defer { if suppliedSession == nil { session.invalidateAndCancel() } }
+        var updated: [String] = [], warnings: [String] = []
+        let fetchedAt = Date()
+        for source in PublicPriceSource.allCases {
+            try Task.checkCancellation()
+            do {
+                var request = URLRequest(url: source.url)
+                request.setValue("application/json", forHTTPHeaderField: "Accept")
+                let (bytes, response) = try await HTTPPolicyContext.$trigger.withValue("pricing.manual") {
+                    try await HTTPPolicyContext.$userInitiated.withValue(true) {
+                        try await BoundedHTTP.data(for: request, session: session,
+                            maxBytes: 16 * 1024 * 1024, timeout: 45, category: .pricing)
+                    }
+                }
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                    throw UsageEngineFailure.pricing(source.label + " 价格接口未成功返回，原缓存保留。")
+                }
+                let rows = try normalizedPublicPrices(bytes, source: source)
+                let cache = try JSONSerialization.data(withJSONObject: ["timestamp": Int(fetchedAt.timeIntervalSince1970), "data": rows], options: [.sortedKeys])
+                let cancellation = UsageScanCancellation()
+                try await withTaskCancellationHandler(operation: {
+                    try await Task.detached(priority: .utility) {
+                        try withDirectoryLock(directory, cancellation: cancellation) {
+                            try cancellation.check()
+                            let root = directory.appendingPathComponent("cache", isDirectory: true)
+                            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                            let target = root.appendingPathComponent(source.filename)
+                            try cache.write(to: target, options: .atomic)
+                            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+                            // A receipt binds the validated normalized cache to
+                            // its public source, retrieval time and SHA-256.
+                            let receipt: [String: Any] = ["source": source.url.absoluteString, "fetchedAt": fetchedAt.timeIntervalSince1970,
+                                "sha256": digest(cache), "downloadSHA256": digest(bytes), "models": rows.count]
+                            try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
+                                .write(to: root.appendingPathComponent(source.filename + ".receipt.json"), options: .atomic)
+                        }
+                    }.value
+                }, onCancel: { cancellation.cancel() })
+                updated.append(source.label)
+            } catch is CancellationError { throw CancellationError() }
+            catch { warnings.append(source.label + " 更新失败，继续保留原价格缓存。") }
+        }
+        try Task.checkCancellation()
+        guard !updated.isEmpty else { throw UsageEngineFailure.pricing("公开价格未更新；原缓存和历史费用保持不变。请稍后手动重试。") }
+        let state = PriceRefreshState(attemptedAt: fetchedAt, completedAt: Date(),
+            nextAllowedAt: Date().addingTimeInterval(warnings.isEmpty ? 3600 : 15 * 60), success: warnings.isEmpty, sources: updated)
+        // A cancelled/failed update leaves the initial 15-minute retry lease.
+        // A partial success also keeps the shorter retry interval.
+        try JSONEncoder().encode(state).write(to: directory.appendingPathComponent("pricing-refresh-state.json"), options: .atomic)
+        return .init(fetchedAt: fetchedAt, updatedSources: updated, warnings: warnings)
+    }
+
+    private struct PriceRefreshState: Codable, Sendable {
+        var attemptedAt: Date
+        var completedAt: Date? = nil
+        var nextAllowedAt: Date
+        var success: Bool
+        var sources: [String]
+    }
+    private enum PublicPriceSource: String, CaseIterable, Sendable {
+        case litellm, modelsDev
+        var label: String { self == .litellm ? "LiteLLM" : "models.dev" }
+        var filename: String { self == .litellm ? "pricing-litellm.json" : "pricing-models-dev.json" }
+        var url: URL { URL(string: self == .litellm
+            ? "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+            : "https://models.dev/api.json")! }
+    }
+    private static func normalizedPublicPrices(_ data: Data, source: PublicPriceSource) throws -> [String: [String: Double]] {
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any], root.count <= 100_000 else { throw UsageEngineFailure.malformed }
+        let fields: Set<String> = ["input_cost_per_token", "input_cost_per_token_above_128k_tokens", "input_cost_per_token_above_200k_tokens", "input_cost_per_token_above_256k_tokens", "input_cost_per_token_above_272k_tokens", "output_cost_per_token", "output_cost_per_token_above_128k_tokens", "output_cost_per_token_above_200k_tokens", "output_cost_per_token_above_256k_tokens", "output_cost_per_token_above_272k_tokens", "cache_creation_input_token_cost", "cache_creation_input_token_cost_above_200k_tokens", "cache_creation_input_token_cost_above_1hr", "cache_creation_input_token_cost_above_1hr_above_200k_tokens", "cache_read_input_token_cost", "cache_read_input_token_cost_above_200k_tokens", "cache_read_input_token_cost_above_272k_tokens"]
+        func rate(_ value: Any?) -> Double? {
+            guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(), number.doubleValue.isFinite, number.doubleValue >= 0 else { return nil }
+            return number.doubleValue
+        }
+        var rows: [String: [String: Double]] = [:]
+        switch source {
+        case .litellm:
+            for (model, item) in root where !model.isEmpty && model.count <= 1000 {
+                guard let item = item as? [String: Any] else { continue }
+                let values = item.filter { fields.contains($0.key) }
+                // Invalid published rate data must not replace the last good
+                // cache with a partial "free" interpretation.
+                guard values.allSatisfy({ $0.value is NSNull || rate($0.value) != nil }) else { throw UsageEngineFailure.malformed }
+                let prices = values.compactMapValues { rate($0) }
+                if prices["input_cost_per_token"] != nil || prices["output_cost_per_token"] != nil { rows[model] = prices }
+            }
+        case .modelsDev:
+            for (provider, value) in root {
+                guard let providerData = value as? [String: Any], let models = providerData["models"] as? [String: Any], models.count <= 100_000 else { continue }
+                for (key, model) in models {
+                    guard let model = model as? [String: Any], let cost = model["cost"] as? [String: Any] else { continue }
+                    let id = (model["id"] as? String) ?? key
+                    guard !id.isEmpty, id.count <= 1000, let input = rate(cost["input"]), let output = rate(cost["output"]) else { continue }
+                    var prices = ["input_cost_per_token": input / 1_000_000, "output_cost_per_token": output / 1_000_000]
+                    for (field, target) in [("cache_read", "cache_read_input_token_cost"), ("cache_write", "cache_creation_input_token_cost")] {
+                        if let value = cost[field], !(value is NSNull) {
+                            guard let number = rate(value) else { throw UsageEngineFailure.malformed }
+                            prices[target] = number / 1_000_000
+                        }
+                    }
+                    rows[(provider + "/" + id).lowercased()] = prices
+                }
+            }
+        }
+        guard !rows.isEmpty, rows.count <= 100_000 else { throw UsageEngineFailure.malformed }
+        return rows
+    }
+
+    private static func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+
+    /// Serializes the CLI's shared custom pricing and caches across windows,
+    /// tasks and processes. Waiting is cancellable and has the scan's deadline.
+    private static func withDirectoryLock<T>(_ directory: URL, cancellation: UsageScanCancellation, operation: () throws -> T) throws -> T {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let descriptor = open(directory.appendingPathComponent(".gqns-scan.lock").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { throw UsageEngineFailure.invalidConfiguration("用量引擎缓存锁无法创建，已有历史保持不变。") }
+        defer { _ = flock(descriptor, LOCK_UN); close(descriptor) }
+        while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+            guard errno == EWOULDBLOCK || errno == EAGAIN else { throw UsageEngineFailure.malformed }
+            try cancellation.check(); Thread.sleep(forTimeInterval: 0.05)
+        }
+        try cancellation.check()
+        return try operation()
+    }
+
+    private struct PriceCacheState {
+        var signature: String
+        var warnings: [String]
+    }
+    private static func priceCacheState(directory: URL) -> PriceCacheState {
+        var signatures: [String] = [], notices: [String] = []
+        let now = Date()
+        for (label, filename) in [("LiteLLM", "pricing-litellm.json"), ("OpenRouter", "pricing-openrouter.json"), ("models.dev", "pricing-models-dev.json")] {
+            let file = directory.appendingPathComponent("cache/" + filename)
+            guard let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 32 * 1024 * 1024,
+                  let data = try? Data(contentsOf: file),
+                  let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let timestamp = value["timestamp"] as? NSNumber, timestamp.doubleValue <= now.timeIntervalSince1970,
+                  let models = value["data"] as? [String: Any], !models.isEmpty else {
+                signatures.append(filename + ":missing")
+                notices.append(label + " 无可用的本机价格缓存")
+                continue
+            }
+            let hash = digest(data)
+            signatures.append(filename + ":" + hash)
+            let age = now.timeIntervalSince1970 - timestamp.doubleValue
+            if age > 3600 {
+                let formatter = DateFormatter(); formatter.dateFormat = "yyyy-MM-dd HH:mm"
+                notices.append(label + " 使用旧价格缓存（" + formatter.string(from: Date(timeIntervalSince1970: timestamp.doubleValue)) + "）")
+            }
+            if let receiptData = try? Data(contentsOf: directory.appendingPathComponent("cache/" + filename + ".receipt.json")),
+               let receipt = try? JSONSerialization.jsonObject(with: receiptData) as? [String: Any],
+               receipt["sha256"] as? String != hash {
+                notices.append(label + " 缓存与上次下载摘要不同，费用仅作为本机估算参考")
+            }
+        }
+        let warnings = notices.isEmpty ? [] : [notices.joined(separator: "；") + "。历史采集不会自动联网；可手动更新公开价格。未定价保持未知，旧历史费用保留。"]
+        return .init(signature: digest(Data(signatures.joined(separator: "\n").utf8)), warnings: warnings)
+    }
+
+    private struct SourceFileStamp: Codable {
+        var attributes: String
+        var contentSHA256: String
+    }
+    private struct SourceManifest: Codable {
+        var files: [String: SourceFileStamp]
+        var signature: String
+    }
+    // These source roots have been checked against the pinned scanner. Other
+    // clients can discover relocated databases or tool-specific lookup paths;
+    // do not guess that a UI discovery-path list is an exhaustive manifest.
+    private static let reportCacheClients: Set<String> = ["codex", "claude", "kimi"]
+    private struct ScanCache: Codable {
+        var key: String
+        var probedAt: Date
+        var manifest: SourceManifest
+        var representedDays: [String]
+        var scan: UsageEngineScan
+    }
+    private static func loadScanCache(directory: URL, key: String) -> ScanCache? {
+        let file = directory.appendingPathComponent("last-numeric-scan-v1.json")
+        guard let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 200 * 1024 * 1024,
+              let bytes = try? Data(contentsOf: file, options: .mappedIfSafe),
+              let result = try? JSONDecoder().decode(ScanCache.self, from: bytes), result.key == key,
+              result.scan.days.count <= 1_000_000, result.scan.sessions.count <= 1_000_000 else { return nil }
+        return result
+    }
+    private static func saveScanCache(_ cache: ScanCache, directory: URL) {
+        // This is disposable derived data, never the ledger or an input log.
+        // Failed cache writes may cost extra work; they must not fail an ingest.
+        guard let bytes = try? JSONEncoder().encode(cache), bytes.count <= 200 * 1024 * 1024 else { return }
+        let target = directory.appendingPathComponent("last-numeric-scan-v1.json")
+        do {
+            try bytes.write(to: target, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+        } catch {}
+    }
+
+    /// Content hashes, not just day aggregates, guard session/report reuse.
+    /// Unchanged inode/mtime/ctime/size tuples can reuse a previously computed
+    /// hash; new/changed files are streamed, bounded to 512 MiB/15 s per pass.
+    /// Any unreadable source, mutation during hashing, excessive file count or
+    /// work budget disables reuse, rather than interpreting missing data as 0.
+    private static func sourceManifest(configuration: UsageEngineConfiguration, home: URL,
+        environment: [String: String], configRoot: URL, previous: SourceManifest?,
+        cancellation: UsageScanCancellation) throws -> SourceManifest? {
+        let fm = FileManager.default
+        let selected = UsageClientDefinition.all.filter { configuration.enabledClientIDs.contains($0.id) && $0.id != "cursor" }
+        for item in selected where !reportCacheClients.contains(item.id) {
+            let paths = UsageClientDefinition.resolvedPaths(for: item, homeDirectory: home, environment: environment) + (configuration.customPaths[item.id] ?? [])
+            if paths.contains(where: { path in
+                var info = stat()
+                return path.withCString { Darwin.lstat($0, &info) } == 0 || errno != ENOENT
+            }) { return nil }
+        }
+        var roots = selected.filter { reportCacheClients.contains($0.id) }.flatMap { item -> [String] in
+            var paths = UsageClientDefinition.resolvedPaths(for: item, homeDirectory: home, environment: environment)
+            if item.id == "kimi" {
+                // The UI discovery root is an entire application data folder.
+                // Only this narrower tree is a scanner input on macOS.
+                paths.removeAll { $0 == home.appendingPathComponent("Library/Application Support/kimi-desktop").path }
+                paths.append(home.appendingPathComponent("Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions").path)
+            }
+            return paths + (configuration.customPaths[item.id] ?? [])
+        }
+        if configuration.enabledClientIDs.contains("codex") {
+            let headless = environment["TOKSCALE_HEADLESS_DIR"].map { [$0] } ?? [home.appendingPathComponent(".config/tokscale/headless").path, home.appendingPathComponent("Library/Application Support/tokscale/headless").path]
+            roots += headless.map { URL(fileURLWithPath: $0).appendingPathComponent("codex").path }
+        }
+        roots += ["settings.json", "recovered-usage-v1.json"].flatMap {
+            [configRoot.appendingPathComponent($0).path, home.appendingPathComponent(".config/tokscale/" + $0).path]
+        }
+        // Scanner settings can add arbitrary roots without changing the app's
+        // own configuration. Include known selected-client extras, or abandon
+        // reuse when another selected client's dynamic database is involved.
+        for settings in [configRoot.appendingPathComponent("settings.json"), home.appendingPathComponent(".config/tokscale/settings.json")] {
+            if !fm.fileExists(atPath: settings.path) { continue }
+            guard let size = try? settings.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 1024 * 1024,
+                  let bytes = try? Data(contentsOf: settings), let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { return nil }
+            guard let scanner = object["scanner"] as? [String: Any] else { continue }
+            if configuration.enabledClientIDs.contains("opencode"), let paths = scanner["opencodeDbPaths"] as? [String], !paths.isEmpty { return nil }
+            if let extra = scanner["extraScanPaths"] as? [String: [String]] {
+                for (client, paths) in extra where configuration.enabledClientIDs.contains(canonicalClient(client)) && !paths.isEmpty {
+                    guard reportCacheClients.contains(canonicalClient(client)), paths.allSatisfy({ $0.hasPrefix("/") }) else { return nil }
+                    roots += paths
+                }
+            }
+        }
+        // SQLite can change solely in a WAL before checkpointing the main DB.
+        roots += roots.filter { ["db", "sqlite", "sqlite3", "vscdb"].contains(URL(fileURLWithPath: $0).pathExtension) }.flatMap { [$0 + "-wal", $0 + "-shm"] }
+        var pending = Array(Set(roots)).sorted().map { URL(fileURLWithPath: $0) }
+        var visited = Set<String>(), files: [String: SourceFileStamp] = [:], signatures: [String] = []
+        var bytesRead: Int64 = 0, visitedCount = 0
+        let deadline = Date().addingTimeInterval(15)
+        func attributes(_ path: String) throws -> (String, Int64, mode_t) {
+            var info = stat()
+            guard path.withCString({ Darwin.lstat($0, &info) }) == 0 else { throw UsageEngineFailure.malformed }
+            return ("\(info.st_dev):\(info.st_ino):\(info.st_size):\(info.st_mtimespec.tv_sec):\(info.st_mtimespec.tv_nsec):\(info.st_ctimespec.tv_sec):\(info.st_ctimespec.tv_nsec)", info.st_size, info.st_mode)
+        }
+        do {
+            while let input = pending.popLast() {
+                try cancellation.check()
+                visitedCount += 1
+                guard visitedCount <= 50_000, Date() < deadline else { return nil }
+                let canonical = input.resolvingSymlinksInPath().standardizedFileURL
+                guard visited.insert(canonical.path).inserted else { continue }
+                let id = digest(Data(canonical.path.utf8))
+                var directory: ObjCBool = false
+                if !fm.fileExists(atPath: canonical.path, isDirectory: &directory) {
+                    // Distinguish a genuinely absent root from an unreadable
+                    // root. Never turn EACCES into a reusable empty snapshot.
+                    var metadata = stat()
+                    if lstat(canonical.path, &metadata) != 0 && errno == ENOENT { signatures.append(id + ":absent"); continue }
+                    return nil
+                }
+                if directory.boolValue {
+                    let entries = try fm.contentsOfDirectory(at: canonical, includingPropertiesForKeys: nil)
+                    signatures.append(id + ":directory")
+                    pending.append(contentsOf: entries)
+                    continue
+                }
+                let (before, length, mode) = try attributes(canonical.path)
+                guard mode & S_IFMT == S_IFREG else { return nil }
+                let hash: String
+                if let saved = previous?.files[id], saved.attributes == before { hash = saved.contentSHA256 }
+                else {
+                    bytesRead += max(0, length)
+                    guard bytesRead <= 512 * 1024 * 1024 else { return nil }
+                    let handle = try FileHandle(forReadingFrom: canonical)
+                    defer { try? handle.close() }
+                    var hasher = SHA256()
+                    var consumed: Int64 = 0
+                    while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+                        try cancellation.check()
+                        consumed += Int64(chunk.count)
+                        guard Date() < deadline, bytesRead - max(0, length) + consumed <= 512 * 1024 * 1024 else { return nil }
+                        hasher.update(data: chunk)
+                    }
+                    bytesRead += consumed - max(0, length)
+                    hash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+                    guard try attributes(canonical.path).0 == before else { return nil }
+                }
+                files[id] = .init(attributes: before, contentSHA256: hash)
+                signatures.append(id + ":" + hash)
+            }
+            return .init(files: files, signature: digest(Data(signatures.sorted().joined(separator: "\n").utf8)))
+        } catch is CancellationError { throw CancellationError() }
+        catch UsageEngineFailure.timeout { throw UsageEngineFailure.timeout }
+        catch { return nil }
     }
 
     static func scan(configuration: UsageEngineConfiguration, engineURL: URL? = nil,
@@ -222,35 +586,81 @@ enum UsageEngine {
                     knownDayFingerprints: knownDayFingerprints, cancellation: cancellation, onProgress: onProgress)
             }.value
         }, onCancel: { cancellation.cancel() })
+        try Task.checkCancellation()
         if configuration.enabledClientIDs.contains("cursor") {
             try Task.checkCancellation()
             do {
                 let batch = try await CursorUsageBridge.fetch(onProgress: onProgress)
                 result.cursorEvents = batch.events
+                if batch.reusedCache {
+                    let formatter = DateFormatter(); formatter.dateFormat = "yyyy-MM-dd HH:mm"
+                    result.warnings.append("Cursor 本次复用 " + formatter.string(from: batch.fetchedAt) + " 的完整历史缓存，未重新查询官方历史。")
+                }
                 if batch.unmeteredEvents > 0 { result.warnings.append("Cursor 官方导出中有 \(batch.unmeteredEvents) 条事件没有 Token 计量，未计入用量或费用，不能视为零用量。") }
                 result.clients.append("cursor")
                 result.warnings.append("Cursor 费用采用官方计量价值（含套餐内用量），不是实际扣款；仅覆盖官方仍可导出的历史，数据可能延迟。")
             } catch is CancellationError { throw CancellationError() }
             catch { result.warnings.append("Cursor 用量未更新：" + error.localizedDescription + " 已入库历史保留。") }
         }
+        try Task.checkCancellation()
         return result
     }
 
     private static func scanSynchronously(configuration: UsageEngineConfiguration, engineURL: URL?,
         configurationDirectory: URL?, homeDirectory: URL?, knownDayFingerprints: [String: String],
         cancellation: UsageScanCancellation, onProgress: (@Sendable (String, Int, Int) -> Void)?) throws -> UsageEngineScan {
+        let root = configurationDirectory ?? defaultConfigurationDirectory
+        return try withDirectoryLock(root, cancellation: cancellation) {
+            try scanLocked(configuration: configuration, engineURL: engineURL, configurationDirectory: root,
+                homeDirectory: homeDirectory, knownDayFingerprints: knownDayFingerprints,
+                cancellation: cancellation, onProgress: onProgress)
+        }
+    }
+
+    private static func scanLocked(configuration: UsageEngineConfiguration, engineURL: URL?,
+        configurationDirectory: URL, homeDirectory: URL?, knownDayFingerprints: [String: String],
+        cancellation: UsageScanCancellation, onProgress: (@Sendable (String, Int, Int) -> Void)?) throws -> UsageEngineScan {
         let clients = try validatedClients(configuration).filter { $0 != "cursor" }
         if clients.isEmpty { return .init(capturedAt: Date(), days: [], sessions: [], clients: [], warnings: []) }
         let binary = engineURL ?? Bundle(for: UsageEngineBundleMarker.self).url(forResource: "tokscale", withExtension: nil, subdirectory: "UsageEngine")
         guard let binary, FileManager.default.isExecutableFile(atPath: binary.path) else { throw UsageEngineFailure.missingBinary }
-        let configRoot = configurationDirectory ?? defaultConfigurationDirectory
+        let configRoot = configurationDirectory
         try FileManager.default.createDirectory(at: configRoot, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let selectedDefinitions = UsageClientDefinition.all.filter { clients.contains($0.id) }
         let scanClients = selectedDefinitions.flatMap(\.effectiveScanIDs).joined(separator: ",")
         var environment = safeEnvironment()
         environment["TOKSCALE_CONFIG_DIR"] = configRoot.path
+        // Verified against the pinned core/lib.rs load_pricing_for_local_parse.
+        // This bypasses every public-price fetch, even when cache is absent or
+        // stale. Merely warming a cache does not provide this guarantee.
+        environment["TOKSCALE_PRICING_CACHE_ONLY"] = "1"
         environment["TOKSCALE_EXTRA_DIRS"] = try extraDirectories(configuration)
         try writePricing(configuration.modelPrices, directory: configRoot)
+        let pricing = priceCacheState(directory: configRoot)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let binaryAttributes = try FileManager.default.attributesOfItem(atPath: binary.path)
+        let key = digest(try encoder.encode(configuration) + Data((revision + "|scan-cache-v2|" + binary.path + "|" +
+            String(describing: binaryAttributes[.modificationDate]) + "|" + String(describing: binaryAttributes[.size]) + "|" +
+            (homeDirectory ?? FileManager.default.homeDirectoryForCurrentUser).path + "|" +
+            TimeZone.current.identifier + "|" + pricing.signature + "|" + environment.sorted(by: { $0.key < $1.key }).map { $0.key + "=" + $0.value }.joined(separator: "\n")).utf8))
+        let cached = loadScanCache(directory: configRoot, key: key)
+        var source = try sourceManifest(configuration: configuration, home: homeDirectory ?? FileManager.default.homeDirectoryForCurrentUser,
+            environment: homeDirectory == nil ? environment : [:], configRoot: configRoot, previous: cached?.manifest, cancellation: cancellation)
+        let canReuseDayRows = cached.map { cache in
+            cache.scan.dayFingerprints.keys.allSatisfy { knownDayFingerprints[$0] == cache.scan.dayFingerprints[$0] || cache.representedDays.contains($0) }
+        } ?? false
+        func resultFromCache(_ cache: ScanCache) -> UsageEngineScan {
+            var result = cache.scan
+            result.days = result.days.filter { knownDayFingerprints[$0.day] != result.dayFingerprints[$0.day] }
+            result.warnings += pricing.warnings
+            result.warnings.append("本机源日志内容未变，复用上次完整数值报告；价格未联网刷新。")
+            return result
+        }
+        if Set(clients).isSubset(of: reportCacheClients), let cached, let source, canReuseDayRows, source.signature == cached.manifest.signature,
+           Date().timeIntervalSince(cached.probedAt) < 30, Date() >= cached.probedAt {
+            onProgress?("源日志未变化，复用已核验报告", 0, 0)
+            return resultFromCache(cached)
+        }
         let base = ["--client", scanClients, "--no-spinner"] + (homeDirectory.map { ["--home", $0.path] } ?? [])
         let runID = UUID().uuidString
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("gqns-usage-\(runID)", isDirectory: true)
@@ -261,8 +671,10 @@ enum UsageEngine {
         let graph = try runJSON(RawGraph.self, binary: binary, arguments: ["graph"] + base,
                                environment: environment, temporary: temporary, cancellation: cancellation)
         guard graph.contributions.count <= 100_000 else { throw UsageEngineFailure.oversized }
+        let observedClients = Set(graph.contributions.flatMap { $0.clients.map { canonicalClient($0.client) } })
+        if !observedClients.isSubset(of: reportCacheClients) { source = nil }
         let fingerprintEncoder = JSONEncoder(); fingerprintEncoder.outputFormatting = [.sortedKeys]
-        let fingerprintSeed = try fingerprintEncoder.encode(configuration).base64EncodedString() + revision
+        let fingerprintSeed = try fingerprintEncoder.encode(configuration).base64EncodedString() + revision + pricing.signature
         var fingerprints: [String: String] = [:]
         for day in graph.contributions {
             guard validDay(day.date) else { throw UsageEngineFailure.malformed }
@@ -271,6 +683,13 @@ enum UsageEngine {
             let rowSignatures = try day.clients.map { try fingerprintEncoder.encode($0).base64EncodedString() }.sorted()
             let contents = Data((day.date + rowSignatures.joined(separator: "\n")).utf8)
             fingerprints[day.date] = SHA256.hash(data: Data(fingerprintSeed.utf8) + contents).map { String(format: "%02x", $0) }.joined()
+        }
+        if let cached, let source, canReuseDayRows, source.signature == cached.manifest.signature,
+           fingerprints == cached.scan.dayFingerprints {
+            var renewed = cached; renewed.probedAt = Date()
+            saveScanCache(renewed, directory: configRoot)
+            onProgress?("历史与源日志未变化，复用会话报告", 0, 0)
+            return resultFromCache(cached)
         }
         let calendar = Calendar.current
         let today = dayKey(capturedAt)
@@ -311,8 +730,24 @@ enum UsageEngine {
         }
         if sessions.contains(where: { ["commandcode", "kiro"].contains($0.client) }) { warnings.append("Command Code 的词元来自文本估算，Kiro 部分记录也可能含估算值；统计精度取决于工具日志。") }
         if clients.contains("mimo") { warnings.append("MiMo 可能保存 Claude 导入的副本，同时启用这两个工具时可能重复统计。") }
-        return .init(capturedAt: capturedAt, days: days, sessions: sessions, clients: clients,
+        var scan = UsageEngineScan(capturedAt: capturedAt, days: days, sessions: sessions, clients: clients,
                      warnings: warnings, dayFingerprints: fingerprints, localUsage: affected.isEmpty ? nil : local)
+        // Do not publish a reusable snapshot if a source changed while the CLI
+        // was working, could not be read, or exceeded the hashing work budget.
+        let after: SourceManifest?
+        if let source {
+            after = try sourceManifest(configuration: configuration, home: homeDirectory ?? FileManager.default.homeDirectoryForCurrentUser,
+                environment: homeDirectory == nil ? environment : [:], configRoot: configRoot, previous: source, cancellation: cancellation)
+        } else { after = nil }
+        if let source, let after, source.signature == after.signature {
+            var complete = scan
+            let refreshed = Set(changedDays)
+            complete.days = (cached?.scan.days.filter { !refreshed.contains($0.day) && fingerprints[$0.day] != nil } ?? []) + days
+            let represented = Set((cached?.representedDays ?? []).filter { fingerprints[$0] != nil }).union(changedDays)
+            saveScanCache(.init(key: key, probedAt: Date(), manifest: after, representedDays: represented.sorted(), scan: complete), directory: configRoot)
+        }
+        scan.warnings += pricing.warnings
+        return scan
     }
 
     static func decodeReportData(_ data: Data, prices: [UsageModelPrice] = []) throws -> [UsageSessionRow] {
@@ -466,30 +901,66 @@ enum UsageEngine {
         defer { try? FileManager.default.removeItem(at: output); try? FileManager.default.removeItem(at: errorOutput) }
         let out = try FileHandle(forWritingTo: output), err = try FileHandle(forWritingTo: errorOutput)
         defer { try? out.close(); try? err.close() }
-        let process = Process(); process.executableURL = binary; process.arguments = arguments
-        process.environment = environment; process.standardOutput = out; process.standardError = err
-        process.standardInput = FileHandle.nullDevice
-        try process.run()
-        let deadline = Date().addingTimeInterval(180)
+        // Foundation Process cannot establish a process group before exec.
+        // Spawn into our own group so cancellation/timeout kills this CLI and
+        // any helper descendants, without touching another app's processes.
+        var actions: posix_spawn_file_actions_t?
+        var attributes: posix_spawnattr_t?
+        guard posix_spawn_file_actions_init(&actions) == 0 else { throw UsageEngineFailure.malformed }
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        guard posix_spawnattr_init(&attributes) == 0 else { throw UsageEngineFailure.malformed }
+        defer { posix_spawnattr_destroy(&attributes) }
+        guard posix_spawn_file_actions_adddup2(&actions, out.fileDescriptor, STDOUT_FILENO) == 0,
+              posix_spawn_file_actions_adddup2(&actions, err.fileDescriptor, STDERR_FILENO) == 0,
+              posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0) == 0,
+              posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0,
+              posix_spawnattr_setpgroup(&attributes, 0) == 0 else { throw UsageEngineFailure.malformed }
+        let argv = ([binary.path] + arguments).map { strdup($0) } + [nil]
+        let envp = environment.sorted(by: { $0.key < $1.key }).map { strdup($0.key + "=" + $0.value) } + [nil]
+        defer { argv.forEach { free($0) }; envp.forEach { free($0) } }
+        var pid: pid_t = 0
+        let launched = argv.withUnsafeBufferPointer { args in
+            envp.withUnsafeBufferPointer { env in
+                posix_spawn(&pid, binary.path, &actions, &attributes,
+                    UnsafeMutablePointer(mutating: args.baseAddress!), UnsafeMutablePointer(mutating: env.baseAddress!))
+            }
+        }
+        guard launched == 0 else { throw UsageEngineFailure.process(launched) }
+        var status: Int32 = 0
+        var reaped = false
+        func waitForExit() throws -> Bool {
+            let result = waitpid(pid, &status, WNOHANG)
+            if result == pid { reaped = true; return true }
+            if result < 0 && errno != EINTR { throw UsageEngineFailure.malformed }
+            return false
+        }
         do {
-            while process.isRunning {
+            while try !waitForExit() {
                 try cancellation.check()
-                if Date() >= deadline { throw UsageEngineFailure.timeout }
                 let size = (try? output.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 let errorSize = (try? errorOutput.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 if size > 200 * 1024 * 1024 || errorSize > 1024 * 1024 { throw UsageEngineFailure.oversized }
                 Thread.sleep(forTimeInterval: 0.1)
             }
         } catch {
-            if process.isRunning { process.terminate() }
+            _ = kill(-pid, SIGTERM)
             let grace = Date().addingTimeInterval(1)
-            while process.isRunning && Date() < grace { Thread.sleep(forTimeInterval: 0.05) }
-            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-            process.waitUntilExit()
+            while !reaped && Date() < grace {
+                if (try? waitForExit()) == true { break }
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            // Send KILL to the group even if its leader already exited: its
+            // descendants may still hold a network request or inherited pipe.
+            _ = kill(-pid, SIGKILL)
+            if !reaped { while waitpid(pid, &status, 0) < 0 && errno == EINTR {} }
             throw error
         }
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { throw UsageEngineFailure.process(process.terminationStatus) }
+        _ = kill(-pid, SIGTERM)
+        _ = kill(-pid, SIGKILL)
+        try cancellation.check()
+        let signal = status & 0x7f
+        let exitCode = signal == 0 ? (status >> 8) & 0xff : 128 + signal
+        guard exitCode == 0 else { throw UsageEngineFailure.process(exitCode) }
         try out.synchronize()
         let size = (try output.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         guard size <= 200 * 1024 * 1024 else { throw UsageEngineFailure.oversized }

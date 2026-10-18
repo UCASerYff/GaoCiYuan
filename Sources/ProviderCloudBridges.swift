@@ -53,7 +53,7 @@ enum ProviderCloudHTTP {
         request.setValue("application/json", forHTTPHeaderField: "Accept"); request.setValue(agent, forHTTPHeaderField: "User-Agent")
         for (key,value) in headers { request.setValue(try secret(value), forHTTPHeaderField: key) }
         let (data,response): (Data,URLResponse)
-        do { (data,response) = try await Connectors.session.data(for: request) }
+        do { (data,response) = try await BoundedHTTP.data(for: request, session: Connectors.session) }
         catch is CancellationError { throw CancellationError() }
         catch { if (error as? URLError)?.code == .cancelled { throw CancellationError() }; throw MonitorError.message("\(provider) 网络请求未完成，请稍后重试。上次数据已保留。") }
         guard let http = response as? HTTPURLResponse else { throw Connectors.schemaError }

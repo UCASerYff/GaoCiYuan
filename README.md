@@ -1,17 +1,17 @@
-# 搞词元 V4.03
+# 搞词元 V4.04
 
 独立 macOS AI 额度与用量管理应用，包含账户管理、采集分析和悬浮窗。运行不依赖搞七廿三或其他六个应用；联动功能需要同时安装相关应用。
 
 ## 下载与安装
 
-从 [Releases](https://github.com/UCASerYff/GaoCiYuan/releases/latest) 下载 `GaoCiYuan-4.03.zip` 和同名 `.sha256` 文件。仓库保存源码，安装包作为 Release 附件单独发布。
+从 [Releases](https://github.com/UCASerYff/GaoCiYuan/releases/latest) 下载 `GaoCiYuan-4.04.zip` 和同名 `.sha256` 文件。仓库保存源码，安装包作为 Release 附件单独发布。
 
 1. 支持 macOS 14 或更高版本、Apple Silicon；暂未提供 Intel 版本。
 2. 解压 ZIP，将 `搞词元.app` 拖入“应用程序”文件夹。
 3. 如果 macOS 拦截打开，请先确认软件来源，再进入“系统设置 → 隐私与安全性”，允许该应用打开。发行包使用 Apple Development 签名，未做 Apple 公证。
 4. 安装后运行一次，原有账户、用量账本及悬浮窗设置会继续沿用。V4.02 不再提供桌面或通知中心小组件。
 
-下载后可在文件所在目录运行 `shasum -a 256 -c GaoCiYuan-4.03.zip.sha256` 核验安装包。
+下载后可在文件所在目录运行 `shasum -a 256 -c GaoCiYuan-4.04.zip.sha256` 核验安装包。
 
 ## 功能
 
@@ -57,6 +57,17 @@
 - `Resources/`：黑底白字图标、平台图标、翻译与 Tokscale 扫描引擎。
 - `Host/`：独立入口、设置、完整备份和联动服务。
 - `Tests/`：回归验证。
+
+## V4.04
+
+- 启动、账户发现及历史自动采集遵守总自动同步开关；关闭、睡眠和退出取消自动任务，明确手动操作仍可执行。
+- 额度刷新合并重复在途请求并限制并发；HTTP 分类别在接收流中执行响应大小、全局/服务并发、时间及周期预算，认证失败停止自动轮询，限流遵守 Retry-After。
+- 本地历史扫描只读取价格缓存；公开价格更新改为明确手动联网，只访问 LiteLLM 与 models.dev，不展开逐模型 OpenRouter 请求。重复日志复用可核验数值缓存，未知费用保持未定价。
+- Cursor 仅复用已完整分页的账户隔离缓存；没有可靠服务端增量游标证据，不以跳页或提前停止冒充完整历史。
+- 更新检查与 ZIP 下载分离，显式点击才下载；提供进度、取消、同版去重、签名验证和失败退避。
+- 自动读取 Kimi、豆包及 WorkBuddy 时不打开订阅页或账户弹层；页面未显示额度时保留上次真实读数并说明原因。
+- 设置中可导出最近 512 条脱敏 HTTP 计量；系统进程计量脚本为 `scripts/observe_network.py`。本进程、CLI 后代、浏览器和整机流量须分别归因。
+- 排查与验证边界见 [NETWORK-AUDIT.md](NETWORK-AUDIT.md)。本次未运行应用冒烟，也未宣称复现或解决未经计量确认的“4m/s”具体根因。
 
 ## V4.03
 

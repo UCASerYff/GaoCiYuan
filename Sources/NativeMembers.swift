@@ -12,6 +12,24 @@ struct AgentObservation: Identifiable {
     var snapshot: UsageSnapshot?
 }
 
+private final class DoubaoHelperCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    private var process: Process?
+    func run(_ value: Process) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard !cancelled else { throw CancellationError() }
+        try value.run()
+        process = value
+    }
+    func cancel() {
+        lock.lock(); defer { lock.unlock() }
+        cancelled = true
+        if let process, process.isRunning { kill(process.processIdentifier, SIGKILL) }
+    }
+    func clear() { lock.lock(); process = nil; lock.unlock() }
+}
+
 enum DoubaoBridge {
     // AX 遍历、导航与解析已收敛到 DoubaoAX（与 doubao-reader 助手编译同一文件）。
     // V2.1 升级到 Kimi 桥标准：前台避让 / 5 分钟 per-account 导航节流 / 读完按「返回」恢复 / 不再 unhide。
@@ -40,7 +58,7 @@ enum DoubaoBridge {
     }
 
     // helper 兜底：主进程读取失败时试独立 helper（其 TCC 授权与主 app 相互独立）。
-    private static func readFromDedicatedHelper() -> DoubaoAX.Observation? {
+    private static func readFromDedicatedHelper(cancellation: DoubaoHelperCancellation) -> DoubaoAX.Observation? {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
         let helper = appSupport?.appendingPathComponent("GaoSeries/Token/bin/doubao-reader").path ?? ""
         guard !helper.isEmpty, FileManager.default.isExecutableFile(atPath: helper) else { return nil }
@@ -55,31 +73,48 @@ enum DoubaoBridge {
         timer.schedule(deadline: .now() + 35)
         timer.setEventHandler { if p.isRunning { kill(p.processIdentifier, SIGKILL) } }
         timer.resume()
-        defer { timer.cancel(); if p.isRunning { p.terminate() } }
+        defer { timer.cancel(); if p.isRunning { p.terminate() }; cancellation.clear() }
         do {
-            try p.run()
+            try cancellation.run(p)
             p.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             guard !data.isEmpty,
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let obs = DoubaoReaderPayload.parse(obj) else { return nil }
             return obs.hasPageMarkers ? obs : nil
-        } catch {
+        } catch is CancellationError { return nil }
+        catch {
             Log.connectors.error("doubao helper read failed")
         }
         return nil
     }
 
+    private static func readFromDedicatedHelper() async throws -> DoubaoAX.Observation? {
+        try Task.checkCancellation()
+        let cancellation = DoubaoHelperCancellation()
+        let result: DoubaoAX.Observation? = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    continuation.resume(returning: readFromDedicatedHelper(cancellation: cancellation))
+                }
+            }
+        } onCancel: { cancellation.cancel() }
+        try Task.checkCancellation()
+        return result
+    }
+
     static func fetch(_ account: Account, userInitiated: Bool = false) async throws -> ConnectorResult {
-        // 授权弹窗只在用户手动同步或首次同步该连接器时触发，定时轮询不弹窗。
-        let allowPrompt = userInitiated || account.lastAttempt == nil
+        try Task.checkCancellation()
+        // 自动采集不弹授权窗口，也不通过旧版 helper 隐式导航原应用。
+        let allowPrompt = userInitiated
         // AX 遍历含 usleep 与子进程等待，卸载到后台队列，不占协作线程池与主线程。
         let accountID = account.id
         let outcome: DoubaoAX.CollectOutcome = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
-                continuation.resume(returning: DoubaoAX.collect(accountID: accountID, allowPrompt: allowPrompt))
+                continuation.resume(returning: DoubaoAX.collect(accountID: accountID, allowPrompt: allowPrompt, allowNavigation: userInitiated))
             }
         }
+        try Task.checkCancellation()
         switch outcome {
         case .notRunning:
             return .status("豆包 暂未启动。启动本机软件后自动读取，不预填额度。")
@@ -92,7 +127,10 @@ enum DoubaoBridge {
         case .throttled:
             return .status("距上次自动导航不足 5 分钟，本次沿用上次数据。")
         case .noPage:
-            if let obs = readFromDedicatedHelper() {
+            guard userInitiated else {
+                return .status("当前页面未显示豆包额度，自动同步保留上次数据；可手动点「立即同步」读取。")
+            }
+            if let obs = try await readFromDedicatedHelper() {
                 return .snapshot(try snapshot(obs))
             }
             throw MonitorError.message("未能读取豆包订阅与额度管理页（页面结构可能已变化）。上次数据已保留。")
@@ -109,16 +147,33 @@ enum DoubaoBridge {
     private weak var store: MonitorStore?
 
     private var rescanTimer: Timer?
+    private var scanRequest: Task<Void, Never>?
+    private var scanWork: Task<[AgentObservation], Never>?
+    private var generation = 0
 
     func configure(_ store: MonitorStore) {
+        guard self.store !== store || rescanTimer == nil else { return }
+        generation += 1
         self.store = store
-        Task { await scan() }
+        scanRequest?.cancel()
+        scanRequest = Task { await scan() }
         // 3.33：定期重扫（10 分钟）——新装/新登录的 agent 在下一轮自动接入，无需用户手动添加。
         if rescanTimer == nil {
             rescanTimer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
-                Task { @MainActor in await self?.scan() }
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.scanRequest?.cancel()
+                    self.scanRequest = Task { await self.scan() }
+                }
             }
         }
+    }
+
+    func stop() {
+        generation += 1
+        rescanTimer?.invalidate(); rescanTimer = nil
+        scanRequest?.cancel(); scanWork?.cancel()
+        store = nil
     }
 
     nonisolated static func isAgentRunning(_ p: Provider, in runningApps: [NSRunningApplication]) -> Bool {
@@ -168,14 +223,16 @@ enum DoubaoBridge {
     }
 
     func scan() async {
-        guard !scanning else { return }
-        scanning = true; defer { scanning = false }
+        guard !Task.isCancelled, !scanning else { return }
+        let version = generation
+        scanning = true; defer { scanning = false; scanWork = nil }
         // 进程发现可能 spawn 子进程（ps/lsof），整个扫描卸载到后台队列，不占主线程。
-        let list: [AgentObservation] = await Task.detached(priority: .utility) {
+        let worker = Task.detached(priority: .utility) {
             let runningApps = NSWorkspace.shared.runningApplications
             let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
             var result: [AgentObservation] = []
             for p in Provider.allCases {
+                if Task.isCancelled { break }
                 guard Self.isAgentInstalled(p, in: runningApps) else {
                     continue
                 }
@@ -193,7 +250,10 @@ enum DoubaoBridge {
                 ))
             }
             return result
-        }.value
+        }
+        scanWork = worker
+        let list = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+        guard !Task.isCancelled, !worker.isCancelled, version == generation else { return }
         observations = list
         autoAddAccountsIfNeeded()
     }

@@ -201,7 +201,7 @@ enum DoubaoAX {
     }
 
     /// 读取订阅与额度管理页。allowPrompt 仅在用户手动同步或首次同步该连接器时为 true。
-    static func collect(accountID: UUID, allowPrompt: Bool = false) -> CollectOutcome {
+    static func collect(accountID: UUID, allowPrompt: Bool = false, allowNavigation: Bool = false) -> CollectOutcome {
         guard let app = runningApp() else { return .notRunning }
         guard AXIsProcessTrusted() else {
             if allowPrompt {
@@ -216,6 +216,7 @@ enum DoubaoAX {
         // 页面正好开着：直接只读，不导航。
         var obs = parse(lines: windowLines(axApp))
         if obs.hasPageMarkers { return .observation(obs) }
+        guard allowNavigation else { return .noPage }
 
         // 前台使用中不打扰：状态而非错误（同 Kimi 桥）。
         if app.isActive { return .foregroundBusy }

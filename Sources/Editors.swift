@@ -264,11 +264,13 @@ struct AccountEditor: View {
                 account.snapshot = nil; account.error = nil; account.lastAttempt = nil
             }
             try store.upsert(account,key:key); dismiss()
-            if account.enabled { let id = account.id; Task { await store.refresh(id) } }
+            if account.enabled { let id = account.id; Task { await store.refresh(id, userInitiated: true) } }
         } catch { self.error = error.localizedDescription }
     }
 }
 struct SettingsPanel: View {
+    @ObservedObject private var updateChecker = UpdateChecker.shared
+    @State private var networkExportStatus: String?
     @EnvironmentObject var store: MonitorStore
     // 语言已收拢到 app 级设置中心（gqns.language），此处不再有语言 Picker。
     @AppStorage("codexPath", store: TokenBundle.defaults) var codexPath = ""
@@ -366,9 +368,46 @@ struct SettingsPanel: View {
             }.frame(maxWidth:.infinity,alignment:.leading).panel()
             VStack(alignment:.leading,spacing:18) {
                 Label(L("检查更新"),systemImage:"arrow.down.circle").font(.headline)
-                HStack { Text(L("更新源地址")); TextField(L("留空则不自动检查"),text:$updateAppcastURL).frame(maxWidth:380) }
-                HStack { Text(L("签名公钥")); TextField(L("Ed25519 公钥（Base64）"),text:$updatePublicKey).frame(maxWidth:380) }
-                HStack { Button(L("立即检查")) { Task { await UpdateChecker.shared.checkNow(userInitiated:true) } }; Text(L("每 2 小时自动检查一次；发现新版本只提示并验证签名，绝不自动安装。")).font(.caption).foregroundStyle(.secondary) }
+                HStack { Text(L("更新源地址")); TextField(L("留空则不自动检查"),text:$updateAppcastURL).onChange(of:updateAppcastURL) { _, _ in updateChecker.configurationChanged() }.frame(maxWidth:380) }
+                HStack { Text(L("签名公钥")); TextField(L("Ed25519 公钥（Base64）"),text:$updatePublicKey).onChange(of:updatePublicKey) { _, _ in updateChecker.configurationChanged() }.frame(maxWidth:380) }
+                HStack { Button(L("立即检查")) { Task { await UpdateChecker.shared.checkNow(userInitiated:true) } }; Text(L("检查仅获取更新元数据；点击下载后才获取安装包并验证签名，不自动安装。")).font(.caption).foregroundStyle(.secondary) }
+                if let version = updateChecker.availableVersion {
+                    HStack {
+                        Text("可下载版本：" + version).font(.caption)
+                        Button("下载并验证") { Task { await updateChecker.downloadAvailableUpdate() } }.disabled(updateChecker.downloading)
+                    }
+                }
+                if updateChecker.downloading {
+                    HStack {
+                        if let expected = updateChecker.downloadExpectedBytes, expected > 0 {
+                            ProgressView(value:Double(updateChecker.downloadReceivedBytes),total:Double(expected))
+                        } else { ProgressView() }
+                        Text(ByteCountFormatter.string(fromByteCount:updateChecker.downloadReceivedBytes,countStyle:.file)).font(.caption)
+                        Button("取消下载") { updateChecker.cancelDownload() }
+                    }
+                }
+                if let error = updateChecker.lastError { Text(error).font(.caption).foregroundStyle(.secondary) }
+
+            }.frame(maxWidth:.infinity,alignment:.leading).panel()
+            VStack(alignment:.leading,spacing:14) {
+                Label("网络诊断",systemImage:"network").font(.headline)
+                Text("关闭自动同步会停止额度刷新和历史自动采集；手动同步、价格更新、更新检查仍可由你触发。后台不会自动打开其他应用的订阅页。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("诊断仅保留本进程最近 512 条请求的脱敏来源、触发原因、状态和字节计量，不记录凭据、查询参数或正文。CLI 和原应用/浏览器流量需配合系统 PID 计量；缺失系统字节指标时不会用 Token 数或解压字节冒充。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("导出脱敏网络计量…") {
+                    let panel = NSSavePanel(); panel.nameFieldStringValue = "搞词元-网络计量.json"
+                    guard panel.runModal() == .OK, let destination = panel.url else { return }
+                    Task {
+                        do {
+                            let data = try await HTTPDiagnostics.shared.exportedData()
+                            try data.write(to:destination,options:.atomic)
+                            try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:destination.path)
+                            networkExportStatus = "已导出脱敏计量；仅包含启用本版本后发生的请求。"
+                        } catch { networkExportStatus = "导出未完成：" + error.localizedDescription }
+                    }
+                }
+                if let networkExportStatus { Text(networkExportStatus).font(.caption).foregroundStyle(.secondary) }
             }.frame(maxWidth:.infinity,alignment:.leading).panel()
             VStack(alignment:.leading,spacing:18) {
                 Label(L("数据与备份"),systemImage:"externaldrive").font(.headline)

@@ -51,19 +51,31 @@ struct UsageAnalyticsPreferences: Codable {
     private var queryRevision = 0
     private var settingsFailed = false
     private var scanTask: Task<Void, Never>?
+    private var scanToken: UUID?
+    private var scanIsAutomatic = false
+    private var automaticRefreshEnabled = true
+    private var suspended = false
+    private var pendingAutomaticScan = false
+    private var needsReindex = false
+    typealias Scan = (UsageEngineConfiguration, URL, [String: String], @escaping @Sendable (String, Int, Int) -> Void) async throws -> UsageEngineScan
+    private let scan: Scan
     @Published private(set) var isLoadingSessions = false
     @Published private(set) var sessionOffset = 0
     private var lastAttemptAt = Date.distantPast
     private var settingsURL: URL { directory.appendingPathComponent("usage-settings.json") }
-    init(directory: URL) {
+    init(directory: URL, scan: @escaping Scan = { configuration, cache, known, progress in
+        try await UsageEngine.scan(configuration: configuration, configurationDirectory: cache,
+                                   knownDayFingerprints: known, onProgress: progress)
+    }) {
         self.directory = directory
+        self.scan = scan
         ledger = UsageLedger(directory: directory)
         readPreferences()
         automaticExportPath = TokenBundle.defaults.string(forKey: "actualUsageAutoExportDirectory")
         restoreObserver = NotificationCenter.default.addObserver(forName: UsageLedger.didRestoreNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.revision += 1; self.scanTask?.cancel()
+                self.revision += 1; self.scanTask?.cancel(); self.pendingAutomaticScan = false
                 self.readPreferences()
                 // An imported backup must not silently authorize writes to an external folder.
                 self.disableAutomaticExport()
@@ -72,7 +84,9 @@ struct UsageAnalyticsPreferences: Codable {
         }
     }
     private func readPreferences() {
-        guard FileManager.default.fileExists(atPath: settingsURL.path) else { return }
+        guard FileManager.default.fileExists(atPath: settingsURL.path) else {
+            preferences = UsageAnalyticsPreferences(); settingsFailed = false; return
+        }
         do { preferences = try JSONDecoder().decode(UsageAnalyticsPreferences.self, from: Data(contentsOf: settingsURL)); settingsFailed = false }
         catch { settingsFailed = true; errorMessage = "用量采集设置读取失败，原文件已保留。请检查完整备份。" }
     }
@@ -80,36 +94,72 @@ struct UsageAnalyticsPreferences: Codable {
         guard !started, ProcessInfo.processInfo.environment["GAOQINIANSAN_INTEGRATION_TEST"] != "1" else { return }
         started = true
         reload()
-        if preferences.automaticallyScan && !settingsFailed { refresh() }
+        if mayAutomaticallyScan { refresh(userInitiated: false) }
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.preferences.automaticallyScan, !self.settingsFailed,
+                guard let self, self.mayAutomaticallyScan,
                       Date().timeIntervalSince(max(self.lastScanAt ?? .distantPast, self.lastAttemptAt)) >= Double(max(2, self.preferences.refreshMinutes)) * 60 else { return }
-                self.refresh()
+                self.refresh(userInitiated: false)
             }
         }
     }
-    func refresh(forceReindex: Bool = false) {
-        guard !isRefreshing, !settingsFailed else { return }
+    private var mayAutomaticallyScan: Bool {
+        automaticRefreshEnabled && preferences.automaticallyScan && !settingsFailed && !suspended
+    }
+    func setAutomaticRefreshEnabled(_ enabled: Bool) {
+        automaticRefreshEnabled = enabled
+        if !enabled {
+            pendingAutomaticScan = false
+            if scanIsAutomatic { scanTask?.cancel() }
+        }
+    }
+    func setSuspended(_ value: Bool) {
+        suspended = value
+        if value { pendingAutomaticScan = false; revision += 1; scanTask?.cancel() }
+    }
+    func stop() {
+        timer?.invalidate(); timer = nil; started = false
+        setSuspended(true)
+    }
+    private func finishScan(_ token: UUID) {
+        guard scanToken == token else { return }
+        scanToken = nil; scanTask = nil; scanIsAutomatic = false
+        isRefreshing = false; progressMessage = nil
+        if pendingAutomaticScan && mayAutomaticallyScan {
+            pendingAutomaticScan = false
+            refresh(forceReindex: needsReindex, userInitiated: false)
+        }
+    }
+    func refresh(forceReindex: Bool = false, userInitiated: Bool = true) {
+        guard !isRefreshing, !settingsFailed, !suspended, userInitiated || mayAutomaticallyScan else { return }
         lastAttemptAt = .now
         isRefreshing = true; errorMessage = nil; progressMessage = "正在检查本机用量日志…"
         let version = revision; let generation = UsageLedger.restoreGeneration(); let configuration = preferences.engine
+        let reindex = forceReindex || needsReindex, token = UUID()
+        scanToken = token; scanIsAutomatic = !userInitiated
         scanTask = Task { [self] in
-            defer { self.isRefreshing = false; self.progressMessage = nil }
+            defer { self.finishScan(token) }
             do {
-                let known = forceReindex ? [:] : try await ledger.knownDayFingerprints()
+                try Task.checkCancellation()
+                let known = reindex ? [:] : try await ledger.knownDayFingerprints()
+                try Task.checkCancellation()
                 let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("GaoSeries/TokenUsageEngine")
-                let scan = try await UsageEngine.scan(configuration: configuration, configurationDirectory: cache, knownDayFingerprints: known, onProgress: { [weak self] text, done, total in
-                    Task { @MainActor in
-                        guard let self, self.revision == version else { return }
-                        self.progressMessage = total > 0 ? "\(text) · \(done)/\(total) 天" : text
+                let scan = try await HTTPPolicyContext.$userInitiated.withValue(userInitiated) {
+                    try await HTTPPolicyContext.$trigger.withValue(userInitiated ? "history.manual" : "history.automatic") {
+                        try await self.scan(configuration, cache, known, { [weak self] text, done, total in
+                            Task { @MainActor in
+                                guard let self, self.revision == version, self.scanToken == token else { return }
+                                self.progressMessage = total > 0 ? "\(text) · \(done)/\(total) 天" : text
+                            }
+                        })
                     }
-                })
+                }
                 try Task.checkCancellation()
                 guard version == revision else { return }
                 try await ledger.ingest(scan, expectedGeneration: generation)
                 try Task.checkCancellation()
                 guard version == revision else { return }
+                needsReindex = false
                 lastScanAt = scan.capturedAt; warnings = scan.warnings
                 reload()
                 if let path = automaticExportPath {
@@ -117,7 +167,9 @@ struct UsageAnalyticsPreferences: Codable {
                         let identity = try await ledger.metadata().deviceID
                         let target = URL(fileURLWithPath: path, isDirectory: true).appendingPathComponent("搞词元-用量-\(identity).json")
                         try await ledger.export(to: target)
-                    } catch { errorMessage = "用量已保存，但自动导出失败：" + error.localizedDescription }
+                    } catch {
+                        if !Task.isCancelled, version == revision { errorMessage = "用量已保存，但自动导出失败：" + error.localizedDescription }
+                    }
                 }
             } catch is CancellationError {} catch {
                 if version == revision && !Task.isCancelled { errorMessage = "采集未完成，已保存的历史仍然保留。\n" + error.localizedDescription }
@@ -157,11 +209,19 @@ struct UsageAnalyticsPreferences: Codable {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try JSONEncoder().encode(candidate).write(to: settingsURL, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: settingsURL.path)
+            let engineChanged = preferences.engine != candidate.engine
+            let wasAutomatic = preferences.automaticallyScan
             preferences = candidate; settingsFailed = false
             showSourceSettings = false
-            if isRefreshing { revision += 1; scanTask?.cancel() }
-            // Fingerprints include usage counts, not prices; explicit rescan refreshes custom pricing.
-            Task { while isRefreshing { try? await Task.sleep(nanoseconds: 100_000_000) }; refresh(forceReindex: true) }
+            if engineChanged {
+                // Prices are not part of source fingerprints; next authorized scan reindexes.
+                needsReindex = true; revision += 1; scanTask?.cancel()
+            } else if !candidate.automaticallyScan && scanIsAutomatic { scanTask?.cancel() }
+            pendingAutomaticScan = mayAutomaticallyScan && (engineChanged || !wasAutomatic)
+            if pendingAutomaticScan && !isRefreshing {
+                pendingAutomaticScan = false
+                refresh(forceReindex: needsReindex, userInitiated: false)
+            }
         } catch { errorMessage = "采集设置保存失败：" + error.localizedDescription }
     }
     func chooseAutomaticExportDirectory() {

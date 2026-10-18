@@ -80,7 +80,7 @@ enum CustomBridge {
             }
         }
         // 走共享会话：NoRedirect 委托（凭证不随重定向外泄）+ 25s/45s 超时。
-        let (data, response) = try await Connectors.session.data(for: request)
+        let (data, response) = try await BoundedHTTP.data(for: request, session: Connectors.session)
         guard let http = response as? HTTPURLResponse else { throw Connectors.schemaError }
         guard (200..<300).contains(http.statusCode) else {
             switch http.statusCode {
