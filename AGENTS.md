@@ -6,7 +6,7 @@
   1. 改动前：优先读取并核验当前软件运行状态、Git 工作区状态与 Info.plist 当前版本号。
   2. 修改后：版本号在 Info.plist 中递增 0.01、构建号增加 1，并同步更新相关文档（如 README.md）。
   3. 产物规范：安装包（dist/ 目录下的 ZIP 与 SHA256）及所有附属源码完整保留在当前项目文件夹下。
-  4. 卸载与清理：更新版本时卸载/替换旧版程序，安装校验通过后彻底清理旧程序、历史回滚备份、中间生成文件及构建缓存（如 build.noindex、.release.noindex、.install.noindex、rollback/ 等），绝不删除或损坏用户数据。
+  4. 卸载与清理：更新版本时卸载/替换旧版程序，安装校验通过后清理展开旧程序及可重建的中间构建（如 build.noindex、.release.noindex、.install.noindex）；旧程序先在 rollback.noindex 中保存并核验压缩归档、摘要与恢复收据。必须保留完整安全备份、归档与恢复能力，不删除或损坏用户数据。
   5. 代码与发布推送：全部工作完成后，提交并推送（git push）至对应 GitHub 仓库。
 - 使用 scripts/build.sh 构建本模块及应用，并以已授权 Apple Development 团队 5G96498KGJ 签名。桌面小组件已移除，不得重新引入 WidgetKit 扩展；悬浮窗须保留。
 - 用户数据位于 ~/Library/Application Support/GaoSeries/Token/ 与 App Group 5G96498KGJ.com.gaoseries.GaoCiYuan；凭据保留原系统钥匙串服务。

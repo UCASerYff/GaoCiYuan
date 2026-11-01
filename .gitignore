@@ -3,6 +3,7 @@ dist/
 .release.noindex/
 .install.noindex/
 rollback/
+rollback.noindex/
 .DS_Store
 *.xcuserstate
 xcuserdata/
