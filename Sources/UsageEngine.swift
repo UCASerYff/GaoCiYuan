@@ -634,6 +634,12 @@ enum UsageEngine {
         // This bypasses every public-price fetch, even when cache is absent or
         // stale. Merely warming a cache does not provide this guarantee.
         environment["TOKSCALE_PRICING_CACHE_ONLY"] = "1"
+        // The pinned ARM64 SQLite has the mutex-initialization publication
+        // race described in denoland/deno#37045 (observed null callback/PC).
+        // Local SQLite lanes run sequentially or in the global Rayon pool;
+        // serialize parsing until the CLI can initialize SQLite before workers.
+        // Directory discovery's separate pool only enumerates filesystem paths.
+        environment["RAYON_NUM_THREADS"] = "1"
         environment["TOKSCALE_EXTRA_DIRS"] = try extraDirectories(configuration)
         try writePricing(configuration.modelPrices, directory: configRoot)
         let pricing = priceCacheState(directory: configRoot)
