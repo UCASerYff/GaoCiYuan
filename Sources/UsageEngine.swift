@@ -71,6 +71,9 @@ struct LocalUsageBatch: Codable, Sendable {
     var coverageSessions: [UsageSessionRow]
     var baselineDays: [UsageDayRow]? = nil
     var baselineSessions: [UsageSessionRow]? = nil
+    // Provenance for known observations retained after an exact unknown rescan.
+    // Export it so a later legacy import cannot consume unrelated unknown usage.
+    var retainedUnknownEventIDs: [String]? = nil
 }
 
 struct UsageModelPrice: Codable, Sendable, Equatable {

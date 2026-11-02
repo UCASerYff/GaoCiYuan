@@ -212,7 +212,9 @@ actor UsageLedger {
             guard records <= 200_000 else {throw UsageLedgerError.invalid("用量 JSON 超过 20 万条，请用完整应用备份迁移全部历史。")}
             try write(encoder.encode(value))
         }
-        try literal("{\"format\":3,\"exportedAt\":")
+        // Older readers ignore the provenance field. A new envelope version
+        // makes them reject this export before they can silently discard it.
+        try literal("{\"format\":4,\"exportedAt\":")
         try write(encoder.encode(Date()))
         try literal(",\"devices\":[")
         try withDB { db in
@@ -237,7 +239,7 @@ actor UsageLedger {
                 }
                 try literal("]")
                 if let local = try Self.readLocalUsage(db, deviceID:device.id) {
-                    records += local.events.count + local.coverageDays.count + local.coverageSessions.count + (local.baselineDays?.count ?? 0) + (local.baselineSessions?.count ?? 0)
+                    records += local.events.count + local.coverageDays.count + local.coverageSessions.count + (local.baselineDays?.count ?? 0) + (local.baselineSessions?.count ?? 0) + (local.retainedUnknownEventIDs?.count ?? 0)
                     guard records <= 200_000 else {throw UsageLedgerError.invalid("用量 JSON 超过 20 万条，请使用完整应用备份。")}
                     try literal(",\"localUsage\":"); try write(encoder.encode(local))
                 }
@@ -287,8 +289,9 @@ actor UsageLedger {
         let data=try handle.read(upToCount:64 * 1_024 * 1_024 + 1) ?? Data()
         guard data.count <= 64 * 1_024 * 1_024 else {throw UsageLedgerError.invalid("用量 JSON 超过 64 MB。")}
         let archive = try decoder.decode(UsageLedgerArchive.self, from:data)
-        guard [1,2,3].contains(archive.format), archive.devices.count <= 64, Set(archive.devices.map(\.id)).count == archive.devices.count,
-              archive.devices.reduce(0, { $0 + $1.days.count + $1.sessions.count + ($1.cursorEvents?.count ?? 0) + ($1.localUsage?.events.count ?? 0) + ($1.localUsage?.coverageDays.count ?? 0) + ($1.localUsage?.coverageSessions.count ?? 0) + ($1.localUsage?.baselineDays?.count ?? 0) + ($1.localUsage?.baselineSessions?.count ?? 0) }) <= 200_000 else { throw UsageLedgerError.invalid("用量包格式、设备或记录数量无效。") }
+        guard [1,2,3,4].contains(archive.format), archive.devices.count <= 64, Set(archive.devices.map(\.id)).count == archive.devices.count,
+              archive.devices.reduce(0, { $0 + $1.days.count + $1.sessions.count + ($1.cursorEvents?.count ?? 0) + ($1.localUsage?.events.count ?? 0) + ($1.localUsage?.coverageDays.count ?? 0) + ($1.localUsage?.coverageSessions.count ?? 0) + ($1.localUsage?.baselineDays?.count ?? 0) + ($1.localUsage?.baselineSessions?.count ?? 0) + ($1.localUsage?.retainedUnknownEventIDs?.count ?? 0) }) <= 200_000 else { throw UsageLedgerError.invalid("用量包格式、设备或记录数量无效。") }
+        guard archive.format >= 4 || archive.devices.allSatisfy({$0.localUsage?.retainedUnknownEventIDs == nil}) else {throw UsageLedgerError.invalid("用量包的模型保留标记与格式不符，请使用新版应用重新导出。已有历史保持不变。")}
         for device in archive.devices {
             try Self.validateDevice(id: device.id, name: device.name)
             try Self.validate(days: device.days, sessions: device.sessions)
@@ -492,6 +495,9 @@ actor UsageLedger {
                   event.timestamp.timeIntervalSince1970 > 0, event.timestamp <= Date().addingTimeInterval(86400), event.durationMS >= 0 else {throw UsageLedgerError.invalid("本机事件身份或时间无效。")}
             try validate(days:[],sessions:[.init(client:event.client,sessionID:event.sessionID,model:event.model,projectKey:event.projectKey,projectLabel:event.projectLabel,firstActive:event.timestamp,lastActive:event.timestamp,amounts:event.amounts,timedTokens:0,timedDurationMS:event.durationMS)])
         }
+        let retained=batch.retainedUnknownEventIDs ?? []
+        let knownEvents=Set(batch.events.filter {$0.client == "antigravity" && specificAntigravityModel($0.model)}.map(\.eventID))
+        guard retained.count <= batch.events.count, Set(retained).count == retained.count, Set(retained).isSubset(of:knownEvents) else {throw UsageLedgerError.invalid("本机事件来源标记无效。")}
         guard (batch.coverageDays + (batch.baselineDays ?? [])).allSatisfy({batch.clients.contains($0.client)}),
               (batch.coverageSessions + (batch.baselineSessions ?? [])).allSatisfy({batch.clients.contains($0.client)}) else {throw UsageLedgerError.invalid("事件覆盖范围无效。")}
     }
@@ -515,9 +521,18 @@ actor UsageLedger {
         }
         var events:[LocalUsageEvent]=[]
         try query(db,"SELECT event_id,client,session_id,model,timestamp,project_key,project_label,duration_ms,\(columns) FROM local_events WHERE device_id=? ORDER BY client,event_id",[.text(deviceID)]) {stmt in
-            events.append(.init(eventID:string(stmt,0),client:string(stmt,1),sessionID:string(stmt,2),model:string(stmt,3),timestamp:Date(timeIntervalSince1970:sqlite3_column_double(stmt,4)),projectKey:optionalString(stmt,5),projectLabel:optionalString(stmt,6),durationMS:sqlite3_column_int64(stmt,7),amounts:amounts(stmt,8)))
+            events.append(localEvent(stmt))
         }
-        return try .init(clients:clients,events:events,coverageDays:days("local_coverage_days"),coverageSessions:sessions("local_coverage_sessions"),baselineDays:days("local_baseline_days"),baselineSessions:sessions("local_baseline_sessions"))
+        var retained:[String]=[]
+        let prefix="retainedUnknown." + deviceID + "."
+        try query(db,"SELECT key FROM metadata WHERE key LIKE ? ORDER BY key",[.text(prefix + "%")]) {retained.append(String(string($0,0).dropFirst(prefix.count)))}
+        return try .init(clients:clients,events:events,coverageDays:days("local_coverage_days"),coverageSessions:sessions("local_coverage_sessions"),baselineDays:days("local_baseline_days"),baselineSessions:sessions("local_baseline_sessions"),retainedUnknownEventIDs:retained.isEmpty ? nil : retained)
+    }
+    private static func specificAntigravityModel(_ model:String) -> Bool {
+        !["", "unknown", "gemini-default"].contains(model.trimmingCharacters(in:.whitespacesAndNewlines).lowercased())
+    }
+    private static func localEvent(_ stmt: OpaquePointer) -> LocalUsageEvent {
+        .init(eventID:string(stmt,0),client:string(stmt,1),sessionID:string(stmt,2),model:string(stmt,3),timestamp:Date(timeIntervalSince1970:sqlite3_column_double(stmt,4)),projectKey:optionalString(stmt,5),projectLabel:optionalString(stmt,6),durationMS:sqlite3_column_int64(stmt,7),amounts:amounts(stmt,8))
     }
     private static func writeLocalUsage(_ db: OpaquePointer, deviceID: String, batch: LocalUsageBatch, importing: Bool = false) throws {
         for client in batch.clients {
@@ -532,10 +547,24 @@ actor UsageLedger {
         }
         try writeRows(db,deviceID:deviceID,days:batch.baselineDays ?? [],sessions:batch.baselineSessions ?? [],prefix:"local_baseline_")
         try writeRows(db,deviceID:deviceID,days:batch.coverageDays,sessions:batch.coverageSessions,prefix:"local_coverage_")
-        for event in batch.events {
-            var oldModel:String?
-            try query(db,"SELECT model FROM local_events WHERE device_id=? AND client=? AND event_id=?",[.text(deviceID),.text(event.client),.text(event.eventID)]) {oldModel=string($0,0)}
-            guard oldModel == nil || oldModel == event.model else {throw UsageLedgerError.invalid("同一用量事件的模型信息冲突，已保留历史。")}
+        var retained=Set(batch.retainedUnknownEventIDs ?? [])
+        for var event in batch.events {
+            var previous:LocalUsageEvent?
+            try query(db,"SELECT event_id,client,session_id,model,timestamp,project_key,project_label,duration_ms,\(columns) FROM local_events WHERE device_id=? AND client=? AND event_id=?",[.text(deviceID),.text(event.client),.text(event.eventID)]) {previous=localEvent($0)}
+            if let old=previous, old.model != event.model {
+                // Antigravity can lose its file-wide model inference when a
+                // conversation later gains a second model. An otherwise exact
+                // unknown observation must not erase an already saved fact.
+                let unchanged = old.sessionID == event.sessionID && old.timestamp == event.timestamp &&
+                    old.amounts.input == event.amounts.input && old.amounts.output == event.amounts.output &&
+                    old.amounts.cacheRead == event.amounts.cacheRead && old.amounts.cacheWrite == event.amounts.cacheWrite &&
+                    old.amounts.reasoning == event.amounts.reasoning && old.amounts.messageCount == event.amounts.messageCount
+                if !importing && event.client == "antigravity" && event.model == "unknown" &&
+                    specificAntigravityModel(old.model) && event.amounts.costUSD == nil && unchanged {
+                    retained.insert(old.eventID)
+                    event=old // Keep its model, price, clock, project and duration.
+                } else {throw UsageLedgerError.invalid("同一用量事件的模型信息冲突，已保留历史。")}
+            }
             let fields=["input","output","cache_read","cache_write","reasoning","messages","duration_ms"].map {"\($0)=MAX(local_events.\($0),excluded.\($0))"}.joined(separator:",")
             let cost=importing ? "cost=COALESCE(local_events.cost,excluded.cost)" : "cost=CASE WHEN excluded.input>=local_events.input AND excluded.output>=local_events.output AND excluded.cache_read>=local_events.cache_read AND excluded.cache_write>=local_events.cache_write THEN excluded.cost WHEN local_events.cost IS NULL OR excluded.cost IS NULL THEN NULL ELSE MAX(local_events.cost,excluded.cost) END"
             let values:[Value]=[.text(deviceID),.text(event.client),.text(event.eventID),.text(event.sessionID),.text(event.model),.double(event.timestamp.timeIntervalSince1970),event.projectKey.map(Value.text) ?? .null,event.projectLabel.map(Value.text) ?? .null,.integer(event.durationMS)] + amountValues(event.amounts)
@@ -543,7 +572,24 @@ actor UsageLedger {
             // the same response to a new surface. Only numeric completeness grows.
             try query(db,"INSERT INTO local_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(device_id,client,event_id) DO UPDATE SET \(fields),\(cost)",values)
         }
+        for id in retained {
+            try query(db,"INSERT INTO metadata VALUES(?, '1') ON CONFLICT(key) DO NOTHING",[.text("retainedUnknown." + deviceID + "." + id)])
+        }
         guard let saved=try readLocalUsage(db,deviceID:deviceID) else {return}
+        let marked=Set(saved.retainedUnknownEventIDs ?? [])
+        let markedEvents=saved.events.filter {$0.client == "antigravity" && marked.contains($0.eventID)}
+        guard markedEvents.count == marked.count, markedEvents.allSatisfy({specificAntigravityModel($0.model)}) else {throw UsageLedgerError.invalid("本机事件来源标记无效。")}
+        for event in markedEvents {
+            // Check on every rebuild, including future legacy imports and JSON
+            // round trips. Raw unknown coverage cannot consume an unrelated old
+            // unknown balance in a session with this retained known observation.
+            for table in ["local_baseline_days", "local_baseline_sessions"] {
+                var ambiguous=false
+                let timing=table.hasSuffix("sessions") ? " OR timed_tokens>0 OR duration_ms>0" : ""
+                try query(db,"SELECT 1 FROM \(table) WHERE device_id=? AND client='antigravity' AND session_id=? AND model='unknown' AND (input>0 OR output>0 OR cache_read>0 OR cache_write>0 OR reasoning>0 OR messages>0 OR cost>0\(timing)) LIMIT 1",[.text(deviceID),.text(event.sessionID)]) {_ in ambiguous=true}
+                guard !ambiguous else {throw UsageLedgerError.invalid("同一用量事件的模型信息冲突，已保留历史。")}
+            }
+        }
         func sessionKey(_ client:String,_ session:String,_ model:String)->String {[client,session,model].joined(separator:"\0")}
         let dayCoverage=Dictionary(uniqueKeysWithValues:saved.coverageDays.map {($0.day + "\0" + sessionKey($0.client,$0.sessionID,$0.model),$0.amounts)})
         let sessionCoverage=Dictionary(uniqueKeysWithValues:saved.coverageSessions.map {(sessionKey($0.client,$0.sessionID,$0.model),$0.amounts)})
