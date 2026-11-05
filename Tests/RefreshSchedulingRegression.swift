@@ -16,7 +16,7 @@ enum HTTPPolicyContext {
 enum Log { struct Sink { func error(_ text: String) {} }; static let store = Sink() }
 func L(_ text: String) -> String { text }
 enum KeyVault { static func save(_ value: String, id: UUID) throws {}; static func delete(_ id: UUID) {} }
-enum MemberDiscovery { static func rememberRemoval(_ provider: Provider) {} }
+enum MemberDiscovery { static func rememberRemoval(_ account: Account) {} }
 enum Connectors { static func fetch(_ account: Account, userInitiated: Bool) async throws -> ConnectorResult { fatalError("Unexpected real fetch") } }
 enum DeepSeekBasis { static func apply(account: inout Account, snapshot: inout UsageSnapshot) {} }
 enum AlertOutcome { case reading(UsageSnapshot), neutral }

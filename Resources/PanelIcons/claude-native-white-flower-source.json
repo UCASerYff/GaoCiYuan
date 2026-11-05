@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "source_app": "Claude.app",
+  "source_bundle_id": "com.anthropic.claudefordesktop",
+  "source_version": "2.31226.1",
+  "source_resource": "Contents/Resources/TrayIconTemplate-Dark@3x.png",
+  "target_resource": "Resources/PanelIcons/claude-native-white-flower.png",
+  "pixel_width": 72,
+  "pixel_height": 72,
+  "has_alpha": true,
+  "bytes": 4004,
+  "sha256": "2f49a540e997e57ef3ceebc55bc325b2f62651b2dcc48d3753ef31fb0602e2a4",
+  "extraction": "byte-for-byte copy of existing native white-flower resource; no generation, tracing, recoloring, resizing or background removal",
+  "scope": "floating panel rail and detail card only; rendered in original colors on neutral dark backing"
+}

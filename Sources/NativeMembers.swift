@@ -150,20 +150,47 @@ enum DoubaoBridge {
     private var scanRequest: Task<Void, Never>?
     private var scanWork: Task<[AgentObservation], Never>?
     private var generation = 0
+    private var rescanPending = false
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var activationObserver: NSObjectProtocol?
+    private let defaults: UserDefaults
+    private let scanOperation: @Sendable () async -> [AgentObservation]
+
+    init() {
+        defaults = TokenBundle.defaults
+        scanOperation = { Self.collectObservations() }
+    }
+
+    // Isolated fixtures supply observations instead of querying this Mac's apps.
+    init(defaults: UserDefaults, scanOperation: @escaping @Sendable () async -> [AgentObservation]) {
+        self.defaults = defaults
+        self.scanOperation = scanOperation
+    }
 
     func configure(_ store: MonitorStore) {
         guard self.store !== store || rescanTimer == nil else { return }
         generation += 1
         self.store = store
         scanRequest?.cancel()
-        scanRequest = Task { await scan() }
+        scanWork?.cancel()
+        requestScan()
+        if workspaceObservers.isEmpty {
+            let center = NSWorkspace.shared.notificationCenter
+            for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification, NSWorkspace.didWakeNotification] {
+                workspaceObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.requestScan() }
+                })
+            }
+            activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.requestScan() }
+            }
+        }
         // 3.33：定期重扫（10 分钟）——新装/新登录的 agent 在下一轮自动接入，无需用户手动添加。
         if rescanTimer == nil {
             rescanTimer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
                 Task { @MainActor in
                     guard let self else { return }
-                    self.scanRequest?.cancel()
-                    self.scanRequest = Task { await self.scan() }
+                    self.requestScan()
                 }
             }
         }
@@ -173,7 +200,26 @@ enum DoubaoBridge {
         generation += 1
         rescanTimer?.invalidate(); rescanTimer = nil
         scanRequest?.cancel(); scanWork?.cancel()
+        for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        workspaceObservers.removeAll()
+        if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
+        activationObserver = nil
+        rescanPending = false
         store = nil
+    }
+
+    /// An event during a scan requests one subsequent pass, rather than being lost
+    /// at the scanning guard or cancelling a useful in-flight discovery.
+    func requestScan() {
+        guard store != nil else { return }
+        if scanning { rescanPending = true; return }
+        guard scanRequest == nil else { rescanPending = true; return }
+        scanRequest = Task { [weak self] in
+            guard let self else { return }
+            await self.scan()
+            self.scanRequest = nil
+            if self.rescanPending, self.store != nil { self.requestScan() }
+        }
     }
 
     nonisolated static func isAgentRunning(_ p: Provider, in runningApps: [NSRunningApplication]) -> Bool {
@@ -222,40 +268,43 @@ enum DoubaoBridge {
         return false
     }
 
-    func scan() async {
-        guard !Task.isCancelled, !scanning else { return }
-        let version = generation
-        scanning = true; defer { scanning = false; scanWork = nil }
-        // 进程发现可能 spawn 子进程（ps/lsof），整个扫描卸载到后台队列，不占主线程。
-        let worker = Task.detached(priority: .utility) {
-            let runningApps = NSWorkspace.shared.runningApplications
-            let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
-            var result: [AgentObservation] = []
-            for p in Provider.allCases {
-                if Task.isCancelled { break }
-                guard Self.isAgentInstalled(p, in: runningApps) else {
-                    continue
-                }
-                let isRunning = Self.isAgentRunning(p, in: runningApps)
-                let candidates = AgentPlatformTable.cliCandidates(p, home: home, appSupport: "", includeDedicatedHelper: false)
-                let cli = candidates.first { !$0.isEmpty && FileManager.default.isExecutableFile(atPath: $0) }
-                result.append(AgentObservation(
-                    id: p.rawValue,
-                    provider: p,
-                    softwareName: p.agentSoftware,
-                    isRunning: isRunning,
-                    cliPath: cli,
-                    status: isRunning ? "软件运行中" : "未启动",
-                    snapshot: nil
-                ))
-            }
-            return result
+    nonisolated private static func collectObservations() -> [AgentObservation] {
+        let runningApps = NSWorkspace.shared.runningApplications
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
+        var result: [AgentObservation] = []
+        for p in Provider.allCases {
+            if Task.isCancelled { break }
+            guard Self.isAgentInstalled(p, in: runningApps) else { continue }
+            let isRunning = Self.isAgentRunning(p, in: runningApps)
+            let candidates = AgentPlatformTable.cliCandidates(p, home: home, appSupport: "", includeDedicatedHelper: false)
+            let cli = candidates.first { !$0.isEmpty && FileManager.default.isExecutableFile(atPath: $0) }
+            result.append(AgentObservation(id: p.rawValue, provider: p, softwareName: p.agentSoftware,
+                                           isRunning: isRunning, cliPath: cli,
+                                           status: isRunning ? "软件运行中" : "未启动", snapshot: nil))
         }
-        scanWork = worker
-        let list = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
-        guard !Task.isCancelled, !worker.isCancelled, version == generation else { return }
-        observations = list
-        autoAddAccountsIfNeeded()
+        return result
+    }
+
+    func scan() async {
+        guard !Task.isCancelled else { return }
+        if scanning { rescanPending = true; return }
+        repeat {
+            rescanPending = false
+            let version = generation
+            scanning = true
+            // Discovery can spawn ps/lsof; keep it away from the main actor.
+            let operation = scanOperation
+            let worker = Task.detached(priority: .utility) { await operation() }
+            scanWork = worker
+            let list = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+            scanWork = nil
+            scanning = false
+            guard !Task.isCancelled else { return }
+            if !worker.isCancelled, version == generation {
+                observations = list
+                autoAddAccountsIfNeeded()
+            }
+        } while rescanPending && store != nil
     }
 
     /// dsh 自动接入：检测到本机 DeepSeek Harness 已安装且登录凭证可解析时，自动建立一个
@@ -275,14 +324,16 @@ enum DoubaoBridge {
         AutoAddSpec(provider: .openai, connection: .codex, currency: "USD"),
         AutoAddSpec(provider: .claude, connection: .agentLocal, currency: "USD"),
         AutoAddSpec(provider: .gemini, connection: .geminiApp, currency: "USD"),
+        AutoAddSpec(provider: .grok, connection: .agentLocal, currency: "USD"),
         AutoAddSpec(provider: .kimi, connection: .kimiDesktop, currency: "CNY"),
         AutoAddSpec(provider: .doubao, connection: .agentLocal, currency: "CNY"),
         AutoAddSpec(provider: .dsh, connection: .dshHarness, currency: "CNY"),
         AutoAddSpec(provider: .workbuddy, connection: .workbuddyLocal, currency: "CNY"),
     ]
-    nonisolated static func autoAddFlagKey(_ p: Provider) -> String { "autoAdd.\(p.rawValue).done" }
-    nonisolated static func autoAddDone(_ p: Provider) -> Bool {
-        let defaults = TokenBundle.defaults
+    nonisolated static func autoAddFlagKey(_ p: Provider) -> String {
+        p == .grok ? "autoAdd.grokBot.done" : "autoAdd.\(p.rawValue).done"
+    }
+    nonisolated static func autoAddDone(_ p: Provider, defaults: UserDefaults = TokenBundle.defaults) -> Bool {
         if defaults.bool(forKey: autoAddFlagKey(p)) { return true }
         // 旧版一次性标记键兼容（3.2x 的 dsh/WorkBuddy 专用流程）。
         switch p {
@@ -291,10 +342,17 @@ enum DoubaoBridge {
         default: return false
         }
     }
-    /// 用户手动移除账户时记住选择：该 provider 的自动接入永久结论化，下次扫描不再复活。
-    nonisolated static func rememberRemoval(_ p: Provider) {
+    /// The Grok Bot route is independent of the Grok account pool and xAI API.
+    nonisolated static func matchesAutomaticRoute(_ account: Account, provider: Provider) -> Bool {
+        guard account.provider == provider else { return false }
+        return provider != .grok || (account.kind == .agent && account.connection == .agentLocal)
+    }
+    /// 用户移除 Bot 后不再自动接入；删除账号池/API 不改变 Bot 的选择。
+    nonisolated static func rememberRemoval(_ account: Account, defaults: UserDefaults = TokenBundle.defaults) {
+        let p = account.provider
         guard autoAddSpecs.contains(where: { $0.provider == p }) else { return }
-        TokenBundle.defaults.set(true, forKey: autoAddFlagKey(p))
+        guard matchesAutomaticRoute(account, provider: p) else { return }
+        defaults.set(true, forKey: autoAddFlagKey(p))
     }
     /// 各 agent 的接入可行性信号（绝不触发钥匙串授权弹窗，只看不碰凭证）：
     /// 默认要求「已安装/运行中」；dsh 额外要求凭证文件可解析；
@@ -314,25 +372,31 @@ enum DoubaoBridge {
     }
     private func autoAddAccountsIfNeeded() {
         guard let store else { return }
-        let defaults = TokenBundle.defaults
-        let runningApps = NSWorkspace.shared.runningApplications
         for spec in Self.autoAddSpecs {
-            if store.library.accounts.contains(where: { $0.provider == spec.provider }) {
+            if let existing = store.library.accounts.first(where: { Self.matchesAutomaticRoute($0, provider: spec.provider) }) {
                 // 已有账户（手动或更早版本添加）：结论化，不改动其 autoDiscovered 标记。
-                if !Self.autoAddDone(spec.provider) { defaults.set(true, forKey: Self.autoAddFlagKey(spec.provider)) }
+                if !Self.autoAddDone(spec.provider, defaults: defaults) { defaults.set(true, forKey: Self.autoAddFlagKey(spec.provider)) }
+                // Bot discovery events also update its local status in the rail.
+                if spec.provider == .grok, store.library.autoRefresh {
+                    Task { await store.refresh(existing.id) }
+                }
                 continue
             }
-            guard !Self.autoAddDone(spec.provider) else { continue }
-            let installed = Self.isAgentInstalled(spec.provider, in: runningApps)
+            guard !Self.autoAddDone(spec.provider, defaults: defaults) else { continue }
+            let installed = observations.contains { $0.provider == spec.provider }
             guard Self.autoAddEligible(spec.provider, installed: installed) else { continue }
             var account = Account(provider: spec.provider, kind: .agent, name: spec.provider.defaultAgentName,
                                   connection: spec.connection, currency: spec.currency)
             account.autoDiscovered = true
+            if spec.provider == .grok {
+                let running = observations.contains { $0.provider == .grok && $0.isRunning }
+                account.statusNote = GrokBotBridge.status(installed: installed, running: running)
+            }
             do {
                 try store.upsert(account)
                 defaults.set(true, forKey: Self.autoAddFlagKey(spec.provider))
                 Log.store.info("auto-discovered agent account added")
-                Task { await store.refresh(account.id) }
+                if store.library.autoRefresh { Task { await store.refresh(account.id) } }
             } catch {
                 Log.store.error("auto-add account failed")
             }

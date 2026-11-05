@@ -542,7 +542,7 @@ struct PanelRingView: View {
                         .rotationEffect(.degrees(-90))
                         .shadow(color: color.opacity(0.30), radius: 1.5)
                 }
-                ProviderMark(provider: account.provider, size: 18)
+                PanelProviderMark(provider: account.provider, size: 18)
                 if working {
                     Circle().fill(Theme.teal).frame(width: 6, height: 6)
                         .shadow(color: Theme.teal.opacity(0.7), radius: 2)
@@ -578,7 +578,7 @@ struct PanelDetailCard: View {
         TimelineView(.periodic(from: .now, by: 30)) { _ in
             VStack(alignment: .leading, spacing: 9) {
                 HStack(spacing: 8) {
-                    if account.provider == .custom { CustomAccountMark(name: account.name, accountID: account.id, size: 22) } else { ProviderMark(provider: account.provider, size: 22) }
+                    if account.provider == .custom { CustomAccountMark(name: account.name, accountID: account.id, size: 22) } else { PanelProviderMark(provider: account.provider, size: 22) }
                     Text(account.name).font(.callout.weight(.semibold)).lineLimit(1)
                     if activity.isWorking(AgentActivity.Subject(account: account)) {
                         Circle().fill(Theme.teal).frame(width: 7, height: 7)

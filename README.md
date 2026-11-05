@@ -1,17 +1,17 @@
-# 搞词元 V4.07
+# 搞词元 V4.08
 
 独立 macOS AI 额度与用量管理应用，包含账户管理、采集分析和悬浮窗。运行不依赖搞七廿三或其他六个应用；联动功能需要同时安装相关应用。
 
 ## 下载与安装
 
-从 [Releases](https://github.com/UCASerYff/GaoCiYuan/releases/latest) 下载 `GaoCiYuan-4.07.zip` 和同名 `.sha256` 文件。仓库保存源码，安装包作为 Release 附件单独发布。
+从 [Releases](https://github.com/UCASerYff/GaoCiYuan/releases/latest) 下载 `GaoCiYuan-4.08.zip` 和同名 `.sha256` 文件。仓库保存源码，安装包作为 Release 附件单独发布。
 
 1. 支持 macOS 14 或更高版本、Apple Silicon；暂未提供 Intel 版本。
 2. 解压 ZIP，将 `搞词元.app` 拖入“应用程序”文件夹。
 3. 如果 macOS 拦截打开，请先确认软件来源，再进入“系统设置 → 隐私与安全性”，允许该应用打开。发行包使用 Apple Development 签名，未做 Apple 公证。
 4. 安装后运行一次，原有账户、用量账本及悬浮窗设置会继续沿用。V4.02 不再提供桌面或通知中心小组件。
 
-下载后可在文件所在目录运行 `shasum -a 256 -c GaoCiYuan-4.07.zip.sha256` 核验安装包。
+下载后可在文件所在目录运行 `shasum -a 256 -c GaoCiYuan-4.08.zip.sha256` 核验安装包。
 
 ## 功能
 
@@ -57,6 +57,13 @@
 - `Resources/`：黑底白字图标、平台图标、翻译与 Tokscale 扫描引擎。
 - `Host/`：独立入口、设置、完整备份和联动服务。
 - `Tests/`：回归验证。
+
+## V4.08
+
+- 悬浮窗 Claude 标记使用本机正式 Claude 的原生透明白花，并增加中性对比底，方便在浅色和深色背景识别。
+- Grok Bot 使用真实安装身份自动发现并加入悬浮窗，启动、退出及重新激活时刷新；独立保留用户删除选择。
+- Bot 的安装/运行状态、Grok CLI 本地历史和 Grok 账号共用额度池保持不同语义。尚无可读取的 Bot 数值时明确等待记录，不产生零用量或借用共用池数字。
+- 版本升至 V4.08，构建号升至 9，沿用现有资料路径和钥匙串身份。
 
 ## V4.07
 

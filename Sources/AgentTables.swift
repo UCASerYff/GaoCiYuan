@@ -34,7 +34,7 @@ enum AgentPlatformTable {
             return Identity(exactBundles: ["com.anysphere.sand"],
                             bundleContains: ["xai"],
                             exactNames: ["grok bot", "grok"],
-                            appNames: ["Grok.app"])
+                            appNames: ["Grok Bot.app", "Grok.app"])
         case .deepseek:
             // DeepSeek Harness（com.deepseek.dsh）自 2.9 起由独立 .dsh 平台检测，
             // 这里必须排除，否则「本机 Agent 软件状态」网格会出现两行 DeepSeek Harness。

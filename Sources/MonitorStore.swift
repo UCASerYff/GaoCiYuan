@@ -188,7 +188,7 @@ import UniformTypeIdentifiers
     func remove(_ id: UUID) {
         guard !loadFailed else { return }
         // 3.33：移除可自动发现的 agent 账户时记住选择，下次扫描不再自动加回。
-        if let provider = library.accounts.first(where: { $0.id == id })?.provider { MemberDiscovery.rememberRemoval(provider) }
+        if let account = library.accounts.first(where: { $0.id == id }) { MemberDiscovery.rememberRemoval(account) }
         revisions[id,default:0] += 1; library.accounts.removeAll { $0.id == id }; save(); KeyVault.delete(id); alerts.forget(account: id)
     }
     func updateSnapshot(_ s: UsageSnapshot, for id: UUID) throws {
