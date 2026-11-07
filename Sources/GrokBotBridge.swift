@@ -8,10 +8,19 @@ enum GrokBotBridge {
         GrokBotUsageReport.discoveryStatus(installed: installed, running: running)
     }
 
-    static func fetch(now: Date = Date(), provider: GrokBotUsageSnapshotProviding = GrokBotUsageFileProvider()) -> ConnectorResult {
+    static func isUsageRoute(_ account: Account) -> Bool {
+        account.provider == .grok && account.kind == .agent && account.connection == .agentLocal
+    }
+
+    static func fetch(now: Date = Date(), userInitiated: Bool = false, provider: GrokBotUsageSnapshotProviding = GrokBotUsageFileProvider()) -> ConnectorResult {
         let apps = NSWorkspace.shared.runningApplications
         let running = MemberDiscovery.isAgentRunning(.grok, in: apps)
         let installed = MemberDiscovery.isAgentInstalled(.grok, in: apps)
+        // Periodic refresh keeps the installed/running sentence already shown.
+        // It does not open the snapshot, so a manual reading is not replaced.
+        guard GrokBotUsageReport.shouldReadOnRefresh(userInitiated: userInitiated) else {
+            return .status(status(installed: installed, running: running))
+        }
         return .status(GrokBotUsageReport.connectorStatus(provider.load(now: now), installed: installed, running: running))
     }
 }

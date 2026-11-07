@@ -1,5 +1,10 @@
 import CoreFoundation
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// Read-only ingestion for a future Grok Bot usage report.
 ///
@@ -81,9 +86,26 @@ enum GrokBotUsageReport {
         contractFileURL(home: URL(fileURLWithPath: homePath, isDirectory: true))
     }
 
+    /// Automatic account refresh must not open the file. Only an explicit user
+    /// action reads it. There is no launch read: nothing in the app fetches a
+    /// manual-only provider once at startup.
+    static func shouldReadOnRefresh(userInitiated: Bool) -> Bool { userInitiated }
+
+    static func manualButtonTitle(refreshing: Bool) -> String {
+        refreshing ? "正在读取最近一次快照…" : "读取最近一次快照"
+    }
+
     static func ingest(_ data: Data, now: Date, timeZone: TimeZone) -> Result<Reading, Rejection> {
         guard data.count <= maximumBytes else { return .failure(.tooLarge) }
         guard !data.isEmpty else { return .failure(.invalid("文件为空")) }
+        let tokens: [String: String]
+        switch scanTopLevel(data) {
+        case .failure(let rejection): return .failure(rejection)
+        case .success(let found): tokens = found
+        }
+        if let usedToken = tokens["weeklyPercentUsed"], !usedTokenIsJSONNumber(usedToken) {
+            return .failure(.invalid("weeklyPercentUsed 必须为 0 到 100 的数字"))
+        }
         let root: Any
         do { root = try JSONSerialization.jsonObject(with: data) }
         catch { return .failure(.invalid("不是 JSON 对象")) }
@@ -93,7 +115,7 @@ enum GrokBotUsageReport {
         guard keys == required else { return .failure(.invalid(keys.isSuperset(of: required) ? "含有未约定的字段" : "缺少约定字段")) }
         // JSON numbers do not keep a difference between 1 and 1.0 after parsing.
         // The raw token must be an integer so a fractional schema cannot pass.
-        guard schemaTokenAccepted(data), jsonExactInteger(object["schema"]) == schemaVersion else {
+        guard tokens["schema"] == "1", jsonExactInteger(object["schema"]) == schemaVersion else {
             return .failure(.invalid("schema 必须为整数 1"))
         }
         guard object["source"] as? String == sourceIdentifier else { return .failure(.invalid("source 必须为 grok-bot-usage-report")) }
@@ -102,7 +124,8 @@ enum GrokBotUsageReport {
         }
         guard capturedAt <= now.addingTimeInterval(futureSkew) else { return .failure(.invalid("capturedAt 晚于当前时间")) }
         guard let plan = normalizedPlan(object["plan"]) else { return .failure(.invalid("plan 为空或含控制字符")) }
-        guard let used = jsonFiniteNumber(object["weeklyPercentUsed"]), (0...100).contains(used) else {
+        guard let usedToken = tokens["weeklyPercentUsed"], usedTokenIsJSONNumber(usedToken),
+              let used = jsonFiniteNumber(object["weeklyPercentUsed"]), (0...100).contains(used) else {
             return .failure(.invalid("weeklyPercentUsed 必须为 0 到 100 的数字"))
         }
         let resetsAt: Date?
@@ -144,13 +167,14 @@ enum GrokBotUsageReport {
     /// User-facing sentence. Current reports use the display line. Stale and
     /// reset reports say so and never describe themselves as live.
     static func presentation(_ reading: Reading) -> String {
+        let lead = "读取最近一次快照（采集于 \(reading.capturedText)）"
         switch reading.freshness {
         case .current:
-            return reading.line
+            return "\(lead) · \(reading.line)"
         case .olderThanLimit:
-            return "用量报告已超过 6 小时，不作为当前读数。记录：\(reading.line)"
+            return "\(lead) · 已超过 6 小时，不作为当前读数 · 记录：\(reading.line)"
         case .resetElapsed:
-            return "用量报告的重置时间已过，不作为本周读数。数据 \(reading.capturedText)"
+            return "\(lead) · 重置时间已过，不作为本周读数"
         }
     }
 
@@ -225,35 +249,41 @@ enum GrokBotUsageReport {
         return parser.date(from: text)
     }
 
-    /// Top-level `schema` must be the integer token `1`. A fractional token is
-    /// rejected even though JSON numbers collapse `1` and `1.0` after parsing.
-    /// The scan stays outside strings, so a plan name can mention the word.
-    private static func schemaTokenAccepted(_ data: Data) -> Bool {
-        guard let token = topLevelToken(data, key: "schema") else { return false }
-        return token == "1"
-    }
-
-    private static func topLevelToken(_ data: Data, key: String) -> String? {
-        guard let text = String(data: data, encoding: .utf8) else { return nil }
+    /// Top-level tokens, without entering strings. A repeated key is invalid
+    /// even when a JSON parser would keep only one of the values.
+    private static func scanTopLevel(_ data: Data) -> Result<[String: String], Rejection> {
+        guard let text = String(data: data, encoding: .utf8) else { return .failure(.invalid("不是 UTF-8")) }
         let chars = Array(text)
         var index = 0
         var depth = 0
+        var tokens: [String: String] = [:]
         while index < chars.count {
             let character = chars[index]
             if character == "\"" {
                 let literal = readJSONString(chars, from: &index)
-                if depth == 1, literal == key {
+                if depth == 1 {
                     while index < chars.count, chars[index].isWhitespace { index += 1 }
-                    guard index < chars.count, chars[index] == ":" else { return nil }
+                    guard index < chars.count, chars[index] == ":" else { return .failure(.invalid("不是 JSON 对象")) }
                     index += 1
                     while index < chars.count, chars[index].isWhitespace { index += 1 }
+                    guard index < chars.count else { return .failure(.invalid("不是 JSON 对象")) }
                     let start = index
+                    if chars[index] == "\"" || chars[index] == "{" || chars[index] == "[" {
+                        // Leave strings and nested values for the JSON parser.
+                        // The raw token still starts at this character so a
+                        // quoted percent cannot pass the number check.
+                    }
                     while index < chars.count {
                         let next = chars[index]
+                        if next == "\"" && start == index {
+                            _ = readJSONString(chars, from: &index)
+                            break
+                        }
                         if next == "," || next == "}" || next == "]" || next.isWhitespace { break }
                         index += 1
                     }
-                    return String(chars[start..<index])
+                    if tokens[literal] != nil { return .failure(.invalid("字段重复")) }
+                    tokens[literal] = String(chars[start..<index])
                 }
                 continue
             }
@@ -261,7 +291,11 @@ enum GrokBotUsageReport {
             else if character == "}" || character == "]" { depth -= 1 }
             index += 1
         }
-        return nil
+        return .success(tokens)
+    }
+
+    private static func usedTokenIsJSONNumber(_ token: String) -> Bool {
+        token.range(of: #"^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$"#, options: .regularExpression) != nil
     }
 
     private static func readJSONString(_ chars: [Character], from index: inout Int) -> String {
@@ -312,33 +346,131 @@ protocol GrokBotUsageSnapshotProviding {
 /// Reads one JSON file. It does not create directories, write bytes, or watch the path.
 struct GrokBotUsageFileProvider: GrokBotUsageSnapshotProviding {
     var fileURL: URL
+    var rootURL: URL
     var maximumBytes: Int
     var timeZone: TimeZone
-    var read: (URL) throws -> Data
+    /// Called after the file descriptor is open and before its bytes are read.
+    /// Tests use it to rename or rewrite the file mid-read.
+    var afterOpen: (() -> Void)?
+    /// When set, replaces the byte read. Path checks still run first, so a
+    /// symlink that leaves `rootURL` never reaches this closure.
+    var read: ((URL) throws -> Data)?
 
     init(fileURL: URL = GrokBotUsageReport.defaultFileURL(),
+         rootURL: URL? = nil,
          maximumBytes: Int = GrokBotUsageReport.maximumBytes,
          timeZone: TimeZone = .current,
-         read: @escaping (URL) throws -> Data = { try Data(contentsOf: $0) }) {
+         afterOpen: (() -> Void)? = nil,
+         read: ((URL) throws -> Data)? = nil) {
         self.fileURL = fileURL
+        self.rootURL = rootURL ?? fileURL.deletingLastPathComponent()
         self.maximumBytes = maximumBytes
         self.timeZone = timeZone
+        self.afterOpen = afterOpen
         self.read = read
     }
 
     func load(now: Date) -> Result<GrokBotUsageReport.Reading, GrokBotUsageReport.Rejection> {
-        var directory = ObjCBool(false)
-        guard FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &directory) else {
-            return .failure(.missing)
+        let located: String
+        switch GrokBotUsageFileAccess.locate(fileURL, root: rootURL) {
+        case .failure(let rejection): return .failure(rejection)
+        case .success(let value): located = value
         }
-        if directory.boolValue { return .failure(.invalid("路径是目录")) }
-        let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
-        guard let size else { return .failure(.unreadable) }
-        if size > maximumBytes { return .failure(.tooLarge) }
         let data: Data
-        do { data = try read(fileURL) }
-        catch { return .failure(.unreadable) }
+        if let read {
+            do { data = try read(URL(fileURLWithPath: located)) }
+            catch { return .failure(.unreadable) }
+        } else {
+            switch GrokBotUsageFileAccess.readStable(located, maximumBytes: maximumBytes, afterOpen: afterOpen) {
+            case .failure(let rejection): return .failure(rejection)
+            case .success(let value): data = value
+            }
+        }
         if data.count > maximumBytes { return .failure(.tooLarge) }
         return GrokBotUsageReport.ingest(data, now: now, timeZone: timeZone)
+    }
+}
+
+enum GrokBotUsageFileAccess {
+    /// Opens `file` without following a symlink that resolves outside `root`.
+    static func locate(_ file: URL, root: URL) -> Result<String, GrokBotUsageReport.Rejection> {
+        let path = file.path
+        guard let info = posixStat(path, follow: false) else {
+            return errno == ENOENT ? .failure(.missing) : .failure(.unreadable)
+        }
+        let linked = isType(info, S_IFLNK)
+        let candidate: String
+        if linked {
+            guard let resolved = resolve(path) else { return .failure(.unreadable) }
+            guard pathIsInside(resolved, root: root) else { return .failure(.invalid("符号链接指向数据目录之外")) }
+            candidate = resolved
+        } else {
+            guard pathIsInside(path, root: root) else { return .failure(.invalid("符号链接指向数据目录之外")) }
+            candidate = path
+        }
+        guard let final = posixStat(candidate, follow: false) else { return .failure(.unreadable) }
+        if isType(final, S_IFDIR) { return .failure(.invalid("路径是目录")) }
+        guard isType(final, S_IFREG) else { return .failure(.unreadable) }
+        return .success(candidate)
+    }
+
+    /// Reads the inode that was opened. A rename onto the path leaves this
+    /// descriptor on the previous complete file. A size or identity change
+    /// before the read finishes is discarded instead of parsed.
+    static func readStable(_ path: String, maximumBytes: Int, afterOpen: (() -> Void)? = nil) -> Result<Data, GrokBotUsageReport.Rejection> {
+        let fd = open(path, O_RDONLY | O_CLOEXEC)
+        if fd < 0 { return .failure(.unreadable) }
+        defer { close(fd) }
+        var before = stat()
+        if fstat(fd, &before) != 0 { return .failure(.unreadable) }
+        if before.st_size < 0 || before.st_size > off_t(maximumBytes) { return .failure(.tooLarge) }
+        if before.st_size == 0 { return .failure(.invalid("文件为空")) }
+        afterOpen?()
+        let count = Int(before.st_size)
+        var data = Data(count: count)
+        let readCount = data.withUnsafeMutableBytes { buffer -> Int in
+            guard let base = buffer.baseAddress else { return -1 }
+            return posixRead(fd, base, count)
+        }
+        if readCount != count { return .failure(.unreadable) }
+        var after = stat()
+        if fstat(fd, &after) != 0 { return .failure(.unreadable) }
+        if after.st_dev != before.st_dev || after.st_ino != before.st_ino || after.st_size != before.st_size {
+            return .failure(.unreadable)
+        }
+        return .success(data)
+    }
+
+    private static func posixStat(_ path: String, follow: Bool) -> stat? {
+        var info = stat()
+        let result = follow ? stat(path, &info) : lstat(path, &info)
+        return result == 0 ? info : nil
+    }
+
+    private static func isType(_ info: stat, _ kind: mode_t) -> Bool {
+        info.st_mode & S_IFMT == kind
+    }
+
+    private static func resolve(_ path: String) -> String? {
+        guard let pointer = realpath(path, nil) else { return nil }
+        defer { free(pointer) }
+        return String(cString: pointer)
+    }
+
+    private static func pathIsInside(_ path: String, root: URL) -> Bool {
+        let rootPath = resolve(root.path) ?? root.standardizedFileURL.path
+        let filePath = resolve(path) ?? URL(fileURLWithPath: path).standardizedFileURL.path
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        return filePath != rootPath && filePath.hasPrefix(prefix)
+    }
+
+    private static func posixRead(_ fd: Int32, _ base: UnsafeMutableRawPointer, _ count: Int) -> Int {
+        #if canImport(Darwin)
+        return Darwin.read(fd, base, count)
+        #elseif canImport(Glibc)
+        return Glibc.read(fd, base, count)
+        #else
+        return -1
+        #endif
     }
 }

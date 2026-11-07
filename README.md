@@ -60,7 +60,7 @@
 
 ## 未纳入版本号的修订
 
-Grok Bot 的每周已用百分比没有面向第三方应用的官方接口。本应用只读 `~/Library/Application Support/GaoSeries/Token/grokbot-usage.json`（字段约定在 `Sources/GrokBotUsageReport.swift`）。文件缺失、无法读取、不符合约定、采集时间超过 6 小时，或重置时间已过时，只显示状态：不显示 0%，不写成实时读数，也不把 Grok 账号共用额度当作 Bot 用量。应用不创建这份文件，也不为它单独定时。版本仍是 V4.08，构建号仍是 9。
+Grok Bot 的每周已用百分比没有面向第三方应用的官方接口。本应用只在用户点击「读取最近一次快照」时读取 `~/Library/Application Support/GaoSeries/Token/grokbot-usage.json`（字段约定在 `Sources/GrokBotUsageReport.swift`），不在 60 秒账户刷新里打开它。文件由用户另行让 Grok Bot 偶尔写成，经常是旧的。缺失、无法读取、不符合约定、采集时间超过 6 小时，或重置时间已过时，只显示状态：写出真实采集时间，不显示 0%，不写成实时读数，也不把 Grok 账号共用额度当作 Bot 用量。应用不创建这份文件，也不为它单独定时。版本仍是 V4.08，构建号仍是 9。
 
 ## V4.08
 

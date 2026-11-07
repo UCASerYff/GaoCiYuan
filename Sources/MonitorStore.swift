@@ -261,6 +261,12 @@ import UniformTypeIdentifiers
                 // 一律传最新账户（快照已落地），不让告警评估抓到抓取前的旧副本。
                 alerts.observe(account: library.accounts.first(where:{$0.id == id}) ?? a, outcome: outcome)
             case .status(let message):
+                // A background pass may only report whether Grok Bot is running.
+                // It must not replace a snapshot sentence the user already read.
+                if !userInitiated, GrokBotBridge.isUsageRoute(a),
+                   library.accounts.first(where: { $0.id == id })?.statusNote?.contains("读取最近一次快照") == true {
+                    break
+                }
                 updateStatus(message,for:id)
                 // 状态消息（软件运行中/暂未启动/稍后补读）是 neutral：不是故障，也不是可达性证据。
                 alerts.observe(account: library.accounts.first(where:{$0.id == id}) ?? a, outcome: .neutral)
