@@ -58,6 +58,10 @@
 - `Host/`：独立入口、设置、完整备份和联动服务。
 - `Tests/`：回归验证。
 
+## 未纳入版本号的修订
+
+Grok Bot 的每周已用百分比没有面向第三方应用的官方接口。本应用只读 `~/Library/Application Support/GaoSeries/Token/grokbot-usage.json`（字段约定在 `Sources/GrokBotUsageReport.swift`）。文件缺失、无法读取、不符合约定、采集时间超过 6 小时，或重置时间已过时，只显示状态：不显示 0%，不写成实时读数，也不把 Grok 账号共用额度当作 Bot 用量。应用不创建这份文件，也不为它单独定时。版本仍是 V4.08，构建号仍是 9。
+
 ## V4.08
 
 - 悬浮窗 Claude 标记使用本机正式 Claude 的原生透明白花，并增加中性对比底，方便在浅色和深色背景识别。

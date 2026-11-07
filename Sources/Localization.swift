@@ -14,6 +14,16 @@ enum Localization {
         },uniquingKeysWith:{$1})
     }()
     static let fragments: [(String,String)] = [
+        ("用量报告已超过 6 小时，不作为当前读数。记录：","The usage report is older than 6 hours and is not a current reading. Recorded: "),
+        ("用量报告的重置时间已过，不作为本周读数。数据 ","The usage report's reset time has passed, so it is not this week's reading. Captured "),
+        ("用量记录无法读取，未显示百分比。","The usage record could not be read. No percentage is shown."),
+        ("用量记录超出大小限制，未显示百分比。","The usage record exceeds the size limit. No percentage is shown."),
+        ("用量记录不符合 grokbot-usage.json 约定，未显示百分比。","The usage record does not match the grokbot-usage.json contract. No percentage is shown."),
+        ("本周已用 ","Used this week "),
+        ("（与套餐内其他应用共享）"," (shared with other apps on this plan)"),
+        (" · 重置 "," · resets "),
+        (" · 数据 "," · captured "),
+        ("平台未提供重置时间","Reset time not provided"),
         (" 个需处理"," need action"),(" 个暂时无法同步"," paused"),(" 个历史数据"," historical"),
         (" 个账户需要留意 ›"," accounts need attention ›"),
         ("GitHub 设备登录失败","GitHub device sign-in failed"),("GitHub 拒绝了设备登录：","GitHub refused the device sign-in: "),("GitHub 拒绝了设备登录（","GitHub refused the device sign-in ("),("（HTTP "," (HTTP "),("。请重新发起登录。",". Please start the sign-in again."),("接口报剩余已反转为已用；三条车道每月随账号统一重置；允许超额付费的车道剩余为 0 不算耗尽。","The endpoint reports what is left, inverted here to what is used; all three lanes reset together monthly; a lane with paid overage is not exhausted at zero."),

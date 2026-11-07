@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 // Compile with -D TESTING, Models, AgentTables, ProviderIntegrations,
-// NativeMembers and GrokBotBridge. All discovery observations and store writes
+// NativeMembers, GrokBotBridge and GrokBotUsageReport. All discovery observations and store writes
 // are synthetic; no connector, CLI, credential, transcript or real app is used.
 enum TokenBundle {
     static let bundle = Bundle.main
