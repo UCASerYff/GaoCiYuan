@@ -646,7 +646,7 @@ struct PanelDetailCard: View {
                 if let error = account.error { Text(L(error)).font(.system(size: 9)).foregroundStyle(.orange).lineLimit(2) }
                 HStack {
                     Button { Task { await store.refresh(account.id, userInitiated: true) } } label: {
-                        Label(L(store.refreshing.contains(account.id) ? "同步中…" : "立即同步"), systemImage: "arrow.clockwise")
+                        Label(L(syncTitle(account)), systemImage: "arrow.clockwise")
                             .font(.caption.weight(.medium))
                             .padding(.horizontal, 10).padding(.vertical, 3)
                             .foregroundStyle(PanelTheme.iris)
@@ -697,6 +697,14 @@ struct PanelDetailCard: View {
                     .shadow(color: .black.opacity(0.22), radius: 10, y: 4)
             }
         }
+    }
+
+    /// Grok Bot 的按钮只读取本机上一次快照，不向 Grok Bot 要新数值。其他账户仍是「立即同步」。
+    private func syncTitle(_ account: Account) -> String {
+        guard GrokBotBridge.isUsageRoute(account) else {
+            return store.refreshing.contains(account.id) ? "同步中…" : "立即同步"
+        }
+        return GrokBotUsageReport.manualButtonTitle(refreshing: store.refreshing.contains(account.id))
     }
 
     /// 一条额度：标题与大数字同排，渐变胶囊条表达剩余量，9pt 重置倒计时垫底。
