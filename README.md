@@ -1,17 +1,17 @@
-# 搞词元 V4.08
+# 搞词元 V4.09
 
 独立 macOS AI 额度与用量管理应用，包含账户管理、采集分析和悬浮窗。运行不依赖搞七廿三或其他六个应用；联动功能需要同时安装相关应用。
 
 ## 下载与安装
 
-从 [Releases](https://github.com/UCASerYff/GaoCiYuan/releases/latest) 下载 `GaoCiYuan-4.08.zip` 和同名 `.sha256` 文件。仓库保存源码，安装包作为 Release 附件单独发布。
+从 [Releases](https://github.com/UCASerYff/GaoCiYuan/releases/latest) 下载 `GaoCiYuan-4.09.zip` 和同名 `.sha256` 文件。仓库保存源码，安装包作为 Release 附件单独发布。
 
 1. 支持 macOS 14 或更高版本、Apple Silicon；暂未提供 Intel 版本。
 2. 解压 ZIP，将 `搞词元.app` 拖入“应用程序”文件夹。
 3. 如果 macOS 拦截打开，请先确认软件来源，再进入“系统设置 → 隐私与安全性”，允许该应用打开。发行包使用 Apple Development 签名，未做 Apple 公证。
 4. 安装后运行一次，原有账户、用量账本及悬浮窗设置会继续沿用。V4.02 不再提供桌面或通知中心小组件。
 
-下载后可在文件所在目录运行 `shasum -a 256 -c GaoCiYuan-4.08.zip.sha256` 核验安装包。
+下载后可在文件所在目录运行 `shasum -a 256 -c GaoCiYuan-4.09.zip.sha256` 核验安装包。
 
 ## 功能
 
@@ -58,9 +58,11 @@
 - `Host/`：独立入口、设置、完整备份和联动服务。
 - `Tests/`：回归验证。
 
-## 未纳入版本号的修订
+## V4.09
 
-Grok Bot 的每周已用百分比没有面向第三方应用的官方接口。本应用只在用户点击「读取最近一次快照」时读取 `~/Library/Application Support/GaoSeries/Token/grokbot-usage.json`（字段约定在 `Sources/GrokBotUsageReport.swift`），不在 60 秒账户刷新里打开它。文件由用户另行让 Grok Bot 偶尔写成，经常是旧的。缺失、无法读取、不符合约定、采集时间超过 6 小时，或重置时间已过时，只显示状态：写出真实采集时间，不显示 0%，不写成实时读数，也不把 Grok 账号共用额度当作 Bot 用量。应用不创建这份文件，也不为它单独定时。版本仍是 V4.08，构建号仍是 9。
+- Grok Bot 没有面向第三方应用的每周用量接口。点击「读取最近一次快照」才读取 `~/Library/Application Support/GaoSeries/Token/grokbot-usage.json`，不在 60 秒账户刷新里打开它。文件由用户另行让 Grok Bot 偶尔写成。
+- 符合约定时显示本周已用百分比、共享说明、重置时间与采集时间。缺失、无法读取、不符合约定、采集超过 6 小时或重置时间已过时只显示状态：不显示 0%，不写成实时读数，也不借用 Grok 账号共用额度。应用不创建这份文件，也不为它单独定时。
+- 版本升至 V4.09，构建号升至 10，沿用现有资料路径和钥匙串身份。
 
 ## V4.08
 
