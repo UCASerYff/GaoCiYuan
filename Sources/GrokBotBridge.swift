@@ -21,6 +21,17 @@ enum GrokBotBridge {
         guard GrokBotUsageReport.shouldReadOnRefresh(userInitiated: userInitiated) else {
             return .status(status(installed: installed, running: running))
         }
-        return .status(GrokBotUsageReport.connectorStatus(provider.load(now: now), installed: installed, running: running))
+        switch provider.load(now: now) {
+        case .success(let reading):
+            return .grokBotManual(status: GrokBotUsageReport.presentation(reading), reading: GrokBotUsageReport.manualReading(reading))
+        case .failure(let rejection):
+            let text = GrokBotUsageReport.connectorStatus(.failure(rejection), installed: installed, running: running)
+            return .grokBotManual(status: text, reading: nil)
+        }
+    }
+
+    static func visibleStatus(_ account: Account, now: Date = Date()) -> String? {
+        guard isUsageRoute(account), let reading = account.grokBotManualReading else { return account.statusNote }
+        return GrokBotUsageReport.statusLine(reading, now: now, timeZone: .current)
     }
 }

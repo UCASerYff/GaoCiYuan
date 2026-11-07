@@ -588,9 +588,11 @@ struct Account: Codable, Identifiable {
     var showInRail: Bool = true
     /// 3.33：由 agent 自动发现流程创建的账户（账户卡打「自动发现」标签；手动添加的为 false）。
     var autoDiscovered: Bool = false
+    /// Last manual Grok Bot file read. Not a usage snapshot and not history.
+    var grokBotManualReading: GrokBotUsageReport.ManualReading? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, provider, kind, name, plan, connection, filePath, scopeID, region, enabled, budget, currency, snapshot, lastAttempt, error, statusNote, balanceBasis, baselines, history, lastQuotaChangedAt, customConfig, showInRail, autoDiscovered
+        case id, provider, kind, name, plan, connection, filePath, scopeID, region, enabled, budget, currency, snapshot, lastAttempt, error, statusNote, balanceBasis, baselines, history, lastQuotaChangedAt, customConfig, showInRail, autoDiscovered, grokBotManualReading
     }
 
     init(id: UUID = UUID(), provider: Provider, kind: AccountKind, name: String, plan: String = "", connection: Connection, filePath: String = "", scopeID: String? = nil, region: String? = nil, enabled: Bool = true, budget: Double? = nil, currency: String = "USD", snapshot: UsageSnapshot? = nil, lastAttempt: Date? = nil, error: String? = nil, statusNote: String? = nil, history: [UsageSnapshot] = []) {
@@ -638,6 +640,7 @@ struct Account: Codable, Identifiable {
         customConfig = try container.decodeIfPresent(CustomAPIConfig.self, forKey: .customConfig)
         showInRail = try container.decodeIfPresent(Bool.self, forKey: .showInRail) ?? true
         autoDiscovered = try container.decodeIfPresent(Bool.self, forKey: .autoDiscovered) ?? false
+        grokBotManualReading = try container.decodeIfPresent(GrokBotUsageReport.ManualReading.self, forKey: .grokBotManualReading)
     }
 
     var dashboard: String { kind == .agent ? provider.memberURL : provider.apiURL }
@@ -733,6 +736,8 @@ enum MonitorError: LocalizedError {
 enum ConnectorResult {
     case snapshot(UsageSnapshot)
     case status(String)
+    /// Grok Bot manual file read. `reading == nil` clears the ring. Never a `UsageSnapshot`.
+    case grokBotManual(status: String, reading: GrokBotUsageReport.ManualReading?)
 }
 /// 本机 Agent 软件状态（可用性 + 展示文案），不是额度数据。
 struct AgentStatus {
