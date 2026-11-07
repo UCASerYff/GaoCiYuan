@@ -206,6 +206,7 @@ struct AccountEditor: View {
                     switch result {
                     case .snapshot(let s): testResult = s.hasMeasuredValues ? "连接成功 ✓" : "连接成功，暂未读取到额度数据。"
                     case .status(let note): testResult = note
+                    case .grokBotManual(let note, _): testResult = note
                     }
                     testing = false
                 }

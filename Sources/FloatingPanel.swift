@@ -411,8 +411,49 @@ struct PanelRingView: View {
             workbuddyBadge
         } else if account.provider == .custom {
             customBadge
+        } else if GrokBotBridge.isUsageRoute(account) {
+            grokUsedRing
         } else {
             ring
+        }
+    }
+
+    /// Grok Bot only. The arc length is percent used, and the caption says 已用 or 旧.
+    /// It does not read `displayQuotas` or `remaining`.
+    private var grokUsedRing: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let face = GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: true, reading: account.grokBotManualReading, now: context.date, timeZone: .current) ?? GrokBotUsageReport.RingFace(showsDash: true, usedPercent: nil, fill: 0, stale: false, label: "—", help: "")
+            let color: Color = face.stale || face.showsDash ? .secondary : PanelTheme.iris
+            VStack(spacing: RailGeometry.ringToText) {
+                ZStack {
+                    Circle().stroke(Color.primary.opacity(0.10), lineWidth: 4)
+                    if !face.showsDash, face.fill > 0 {
+                        Circle().trim(from: 0, to: face.fill)
+                            .stroke(AngularGradient(colors: [color.opacity(0.55), color], center: .center,
+                                                    startAngle: .degrees(0), endAngle: .degrees(min(359.9, 360 * face.fill))),
+                                    style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                            .shadow(color: color.opacity(0.30), radius: 1.5)
+                    }
+                    PanelProviderMark(provider: account.provider, size: 18)
+                    if working {
+                        Circle().fill(Theme.teal).frame(width: 6, height: 6)
+                            .shadow(color: Theme.teal.opacity(0.7), radius: 2)
+                            .offset(y: -(RailGeometry.ringDiameter / 2))
+                            .phaseAnimator([0.0, 360.0]) { dot, angle in
+                                dot.rotationEffect(.degrees(angle))
+                            } animation: { _ in .linear(duration: 1.2) }
+                    }
+                }
+                .frame(width: RailGeometry.ringDiameter, height: RailGeometry.ringDiameter)
+                .help(L(face.help))
+                Text(face.label)
+                    .font(.system(size: 9, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.5)
+                    .frame(width: RailGeometry.ringDiameter)
+                    .foregroundStyle(color)
+                    .opacity(face.stale ? 0.45 : 1)
+            }
         }
     }
 
@@ -642,7 +683,7 @@ struct PanelDetailCard: View {
                 } else {
                     Text(L("尚未获取用量")).font(.caption).foregroundStyle(.secondary)
                 }
-                if let status = account.statusNote { Text(L(status)).font(.system(size: 9)).foregroundStyle(.secondary) }
+                if let status = GrokBotBridge.visibleStatus(account) { Text(L(status)).font(.system(size: 9)).foregroundStyle(.secondary) }
                 if let error = account.error { Text(L(error)).font(.system(size: 9)).foregroundStyle(.orange).lineLimit(2) }
                 HStack {
                     Button { Task { await store.refresh(account.id, userInitiated: true) } } label: {

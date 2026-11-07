@@ -430,7 +430,7 @@ struct ContentView: View {
                     NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
                 }.buttonStyle(.borderedProminent).controlSize(.small).font(.caption)
             }
-            if let status = a.statusNote { Label(L(status),systemImage:"info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true) }
+            if let status = GrokBotBridge.visibleStatus(a) { Label(L(status),systemImage:"info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true) }
             if let error = a.error { Label(L(error),systemImage:"exclamationmark.circle").font(.caption).foregroundStyle(.orange).fixedSize(horizontal:false,vertical:true) }
             HStack {
                 Button { Task { await store.refresh(a.id, userInitiated: true) } } label: { Label(L(GrokBotBridge.isUsageRoute(a) ? GrokBotUsageReport.manualButtonTitle(refreshing: store.refreshing.contains(a.id)) : (store.refreshing.contains(a.id) ? "同步中…" : "立即同步")),systemImage:"arrow.clockwise") }.disabled(store.refreshing.contains(a.id) || !a.enabled)

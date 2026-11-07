@@ -174,8 +174,55 @@ enum GrokBotUsageReport {
         case .olderThanLimit:
             return "\(lead) · 已超过 6 小时，不作为当前读数 · 记录：\(reading.line)"
         case .resetElapsed:
-            return "\(lead) · 重置时间已过，不作为本周读数"
+            return "\(lead) · 重置时间已过，不作为本周读数 · 记录：\(reading.line)"
         }
+    }
+
+    /// Last successful manual read. This is not a `UsageSnapshot`: it never
+    /// enters history or `displayQuotas`. Staleness is recomputed from the
+    /// stored instants, so a relaunch cannot present it as live.
+    struct ManualReading: Codable, Equatable {
+        var weeklyPercentUsed: Double
+        var capturedAt: Date
+        var resetsAt: Date?
+        var sharedWithOtherApps: Bool
+    }
+
+    struct RingFace: Equatable {
+        var showsDash: Bool
+        var usedPercent: Double?
+        /// 0 when there is no reading. Otherwise the used fraction, never the remainder.
+        var fill: Double
+        var stale: Bool
+        var label: String
+        var help: String
+    }
+
+    static func manualReading(_ reading: Reading) -> ManualReading {
+        ManualReading(weeklyPercentUsed: reading.snapshot.weeklyPercentUsed, capturedAt: reading.snapshot.capturedAt, resetsAt: reading.snapshot.resetsAt, sharedWithOtherApps: reading.snapshot.sharedWithOtherApps)
+    }
+
+    static func statusLine(_ reading: ManualReading, now: Date, timeZone: TimeZone) -> String {
+        presentation(materialize(reading, now: now, timeZone: timeZone))
+    }
+
+    /// Nil means this account is not the Grok Bot route, so the generic ring stays in charge.
+    static func dedicatedRingFace(isGrokBotRoute: Bool, reading: ManualReading?, now: Date, timeZone: TimeZone) -> RingFace? {
+        guard isGrokBotRoute else { return nil }
+        guard let reading else {
+            return RingFace(showsDash: true, usedPercent: nil, fill: 0, stale: false, label: "—", help: "尚未读取 Grok Bot 快照")
+        }
+        let made = materialize(reading, now: now, timeZone: timeZone)
+        let stale = made.freshness != .current
+        let percent = percentText(reading.weeklyPercentUsed)
+        let label = (stale ? "旧" : "已用") + percent + "%"
+        let help = (stale ? "旧快照，" : "") + "已用 \(percent)%，不是剩余。采集于 \(made.capturedText)。不是实时读数。"
+        return RingFace(showsDash: false, usedPercent: reading.weeklyPercentUsed, fill: min(1, max(0, reading.weeklyPercentUsed / 100)), stale: stale, label: label, help: help)
+    }
+
+    private static func materialize(_ reading: ManualReading, now: Date, timeZone: TimeZone) -> Reading {
+        let snapshot = Snapshot(plan: "", weeklyPercentUsed: reading.weeklyPercentUsed, resetsAt: reading.resetsAt, capturedAt: reading.capturedAt, sharedWithOtherApps: reading.sharedWithOtherApps)
+        return Reading(snapshot: snapshot, freshness: freshness(of: snapshot, now: now), line: displayLine(snapshot, timeZone: timeZone), capturedText: formatTimestamp(reading.capturedAt, timeZone: timeZone))
     }
 
     static func discoveryStatus(installed: Bool, running: Bool) -> String {

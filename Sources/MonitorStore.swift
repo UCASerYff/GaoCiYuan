@@ -169,8 +169,8 @@ import UniformTypeIdentifiers
             let current = copy.accounts[i]
             edited.history = current.history
             if Self.sameSource(current, edited) && key.isEmpty {
-                edited.snapshot = current.snapshot; edited.lastAttempt = current.lastAttempt; edited.error = current.error; edited.statusNote = current.statusNote
-            } else { edited.snapshot = nil; edited.lastAttempt = nil; edited.error = nil; edited.statusNote = nil }
+                edited.snapshot = current.snapshot; edited.lastAttempt = current.lastAttempt; edited.error = current.error; edited.statusNote = current.statusNote; edited.grokBotManualReading = current.grokBotManualReading
+            } else { edited.snapshot = nil; edited.lastAttempt = nil; edited.error = nil; edited.statusNote = nil; edited.grokBotManualReading = nil }
             connectionChanged = current.connection != edited.connection
             copy.accounts[i] = edited
         } else { copy.accounts.append(account) }
@@ -264,11 +264,16 @@ import UniformTypeIdentifiers
                 // A background pass may only report whether Grok Bot is running.
                 // It must not replace a snapshot sentence the user already read.
                 if !userInitiated, GrokBotBridge.isUsageRoute(a),
-                   library.accounts.first(where: { $0.id == id })?.statusNote?.contains("读取最近一次快照") == true {
+                   library.accounts.first(where: { $0.id == id })?.grokBotManualReading != nil {
                     break
                 }
                 updateStatus(message,for:id)
-                // 状态消息（软件运行中/暂未启动/稍后补读）是 neutral：不是故障，也不是可达性证据。
+                alerts.observe(account: library.accounts.first(where:{$0.id == id}) ?? a, outcome: .neutral)
+            case .grokBotManual(let message, let reading):
+                if let i = library.accounts.firstIndex(where: { $0.id == id }) {
+                    library.accounts[i].grokBotManualReading = reading
+                }
+                updateStatus(message, for: id)
                 alerts.observe(account: library.accounts.first(where:{$0.id == id}) ?? a, outcome: .neutral)
             }
         } catch {

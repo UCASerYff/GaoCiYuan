@@ -126,15 +126,16 @@ import Glibc
         ]), now: now, timeZone: zone) else { fatalError("reset boundary rejected") }
         require(elapsed.freshness == .resetElapsed, "reset at now has elapsed")
         let elapsedText = GrokBotUsageReport.connectorStatus(.success(elapsed), installed: true, running: true)
-        require(elapsedText == "读取最近一次快照（采集于 \(elapsed.capturedText)） · 重置时间已过，不作为本周读数", elapsedText)
-        require(!elapsedText.contains("%"), "elapsed window still showed a percent")
+        require(elapsedText.contains("重置时间已过，不作为本周读数"), elapsedText)
+        require(elapsedText.contains("采集于 \(elapsed.capturedText)"), elapsedText)
+        require(elapsedText.contains("记录：本周已用 19.3%"), "reset status dropped the recorded percent")
 
         guard case .success(let both) = GrokBotUsageReport.ingest(try payload(set: [
             "capturedAt": parser.string(from: olderInstant),
             "resetsAt": parser.string(from: olderInstant),
         ]), now: now, timeZone: zone) else { fatalError("old elapsed report rejected") }
         require(both.freshness == .resetElapsed, "a passed reset wins over age")
-        require(!GrokBotUsageReport.presentation(both).contains("%"), "old elapsed percent leaked")
+        require(GrokBotUsageReport.presentation(both).contains("不作为本周读数"), "old elapsed reading looked current")
 
         let ahead = now.addingTimeInterval(GrokBotUsageReport.futureSkew)
         guard case .success(let skewed) = GrokBotUsageReport.ingest(try payload(set: ["capturedAt": parser.string(from: ahead), "resetsAt": parser.string(from: now.addingTimeInterval(3600))]), now: now, timeZone: zone) else {
@@ -269,7 +270,39 @@ import Glibc
 
         let fixedHome = GrokBotUsageReport.defaultFileURL(homePath: "/Users/example")
         require(fixedHome.path == "/Users/example/Library/Application Support/GaoSeries/Token/grokbot-usage.json", fixedHome.path)
-        print("{\"passed\":true,\"cases\":\"parse-staleness-validation-file\"}")
+        let liveNow = parser.date(from: "2026-11-07T04:00:00Z")!
+        let live = try payload(set: [
+            "capturedAt": "2026-11-07T03:31:14Z",
+            "resetsAt": "2026-11-13T13:54:00+08:00",
+            "weeklyPercentUsed": 84.8,
+            "plan": "Premium",
+            "sharedWithOtherApps": true,
+        ])
+        guard case .success(let liveReading) = GrokBotUsageReport.ingest(live, now: liveNow, timeZone: zone) else {
+            fatalError("84.8 snapshot rejected")
+        }
+        let stored = GrokBotUsageReport.manualReading(liveReading)
+        let freshFace = GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: true, reading: stored, now: liveNow, timeZone: zone)
+        require(freshFace?.showsDash == false && freshFace?.usedPercent == 84.8 && freshFace?.stale == false, "valid read did not fill used percent")
+        require(freshFace?.label == "已用84.8%", freshFace?.label ?? "")
+        require(abs((freshFace?.fill ?? 0) - 0.848) < 0.000_001, "fill was not the used fraction")
+        require(freshFace?.help.contains("不是剩余") == true && freshFace?.label.contains("剩余") == false, "used ring spoke remaining")
+        let aged = liveNow.addingTimeInterval(GrokBotUsageReport.staleAfter + 1)
+        let staleFace = GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: true, reading: stored, now: aged, timeZone: zone)
+        require(staleFace?.stale == true && staleFace?.label == "旧84.8%" && staleFace?.showsDash == false, staleFace?.label ?? "missing stale face")
+        require((staleFace?.help ?? "").contains("旧快照") && (staleFace?.help ?? "").contains("不是实时读数"), "stale ring looked live")
+        let resetNow = parser.date(from: "2026-11-13T06:00:00Z")!
+        let resetFace = GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: true, reading: stored, now: resetNow, timeZone: zone)
+        require(resetFace?.stale == true && resetFace?.usedPercent == 84.8, "past reset still looked live")
+        let empty = GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: true, reading: nil, now: liveNow, timeZone: zone)
+        require(empty?.showsDash == true && empty?.label == "—" && empty?.fill == 0, "missing read drew a percent")
+        require(GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: false, reading: stored, now: liveNow, timeZone: zone) == nil, "another provider took the Grok Bot ring")
+        let status = GrokBotUsageReport.statusLine(stored, now: liveNow, timeZone: zone)
+        require(status.contains("本周已用 84.8%（与套餐内其他应用共享）"), status)
+        require(status.contains("采集于 周六 11月7日 11:31") && status.contains("重置 周五 11月13日 13:54"), status)
+        let rejectedFace = GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: true, reading: nil, now: liveNow, timeZone: zone)
+        require(rejectedFace?.label == "—" && rejectedFace?.usedPercent == nil, "rejection still drew a used percent")
+        print("{\"passed\":true,\"cases\":\"parse-staleness-validation-file-ring\"}")
     }
 }
 
