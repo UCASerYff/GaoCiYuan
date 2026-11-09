@@ -1124,7 +1124,7 @@ enum AgentBridge {
         case .claude:
             return try await ClaudeBridge.fetch(account, userInitiated: userInitiated)
         case .grok:
-            return GrokBotBridge.fetch(userInitiated: userInitiated)
+            return try await GrokBotBridge.fetch(account, userInitiated: userInitiated)
         case .gemini:
             if account.connection == .geminiApp {
                 return try await GeminiAntigravityBridge.fetch(account, userInitiated: userInitiated)

@@ -205,7 +205,7 @@ enum Provider: String, Codable, CaseIterable, Identifiable {
         case .claude: return "Agent（Claude Code）：优先经官方 OAuth 接口读取本机登录的额度窗（5 小时/每周/按模型），登录过期时可用官方状态栏推送（设置里一键连接）；可选 Claude 桌面会话路（默认关，显式选择，需一次钥匙串授权）；LLM（API）需组织 Admin Key 读取 Messages 用量与成本。"
         case .deepseek: return "DeepSeek 按量 API：使用 API Key 查询账户余额。DeepSeek Harness 请使用独立的 Harness 入口。"
         case .kimi: return "Agent（Kimi Work / Kimi Code）：保存 Kimi Code 专用 Key 后自动读取官方额度，或经辅助功能只读读取本机 Kimi 桌面端订阅页（月度额度池，无需 Key），否则检测本机软件状态；LLM（API）支持 Moonshot Key 查询人民币余额与 Kimi Code 额度。"
-        case .grok: return "Agent（Grok Bot）自动检测本机软件。点击「读取最近一次快照」才读取 grokbot-usage.json，不在后台定时刷新里打开它。符合约定才显示本周已用百分比、共享说明、重置时间与采集时间；缺失、无效、超过 6 小时或已过重置时间只显示状态，不显示 0%，也不声称实时。Grok 账号额度是独立的全产品共用池，不代表 Bot 用量；LLM（API）需 xAI Management Key 查询本月费用与预付余额。"
+        case .grok: return "Agent（Grok Bot）经辅助功能只读读取左下角头像栏目的套餐与已用百分比，悬浮窗按剩余量显示。点击「读取本机额度」立即同步；非前台自动读取并按账户做 5 分钟导航节流，前台使用中不打扰，读完按 Escape 收起栏目。读不到时保留上次数据，不编造重置时间。Grok 账号额度是独立的全产品共用池，不代表 Bot 用量；LLM（API）需 xAI Management Key 查询本月费用与预付余额。"
         case .gemini: return "Agent（Antigravity）：支持读取 Gemini 桌面端内置 Antigravity 或独立版 Antigravity 的 5 小时与每周配额；LLM（API）支持快照文件同步。"
         case .qwen: return "阿里云百炼 / 通义千问按量 API：查询云账户现金余额。Qoder 和 Alibaba Coding Plan 使用各自独立入口。"
         case .doubao: return "Agent（豆包 桌面端）经辅助功能只读读取「订阅与额度管理」页（头像 › 额度状态，后台导航 + 5 分钟节流 + 读完按返回恢复，前台使用中不打扰）：当前时段与近 7 天已用百分比、剩余重置机会、赠送时长截止；免费档无会员池不编造；LLM（API）支持火山引擎云账号余额自动查询。"
@@ -588,7 +588,7 @@ struct Account: Codable, Identifiable {
     var showInRail: Bool = true
     /// 3.33：由 agent 自动发现流程创建的账户（账户卡打「自动发现」标签；手动添加的为 false）。
     var autoDiscovered: Bool = false
-    /// Last manual Grok Bot file read. Not a usage snapshot and not history.
+    /// Last successful Grok Bot avatar read; legacy file archives remain decodable. Not history.
     var grokBotManualReading: GrokBotUsageReport.ManualReading? = nil
 
     enum CodingKeys: String, CodingKey {
@@ -736,7 +736,7 @@ enum MonitorError: LocalizedError {
 enum ConnectorResult {
     case snapshot(UsageSnapshot)
     case status(String)
-    /// Grok Bot manual file read. `reading == nil` clears the ring. Never a `UsageSnapshot`.
+    /// Grok Bot avatar reading; automatic skips preserve it. `nil` is retained for archive compatibility.
     case grokBotManual(status: String, reading: GrokBotUsageReport.ManualReading?)
 }
 /// 本机 Agent 软件状态（可用性 + 展示文案），不是额度数据。
