@@ -62,10 +62,8 @@ import Glibc
         let shown = "读取最近一次快照（采集于 周六 11月7日 09:12） · \(expectedRemainingLine)"
         require(GrokBotUsageReport.presentation(reading) == shown, GrokBotUsageReport.presentation(reading))
         require(shown.contains("采集于 周六 11月7日 09:12"), "capture time missing")
-        require(!GrokBotUsageReport.shouldReadOnRefresh(userInitiated: false), "automatic refresh must not open the snapshot")
-        require(GrokBotUsageReport.shouldReadOnRefresh(userInitiated: true), "manual refresh opens the snapshot")
-        require(GrokBotUsageReport.manualButtonTitle(refreshing: false) == "读取最近一次快照", "button implies a live fetch")
-        require(GrokBotUsageReport.manualButtonTitle(refreshing: true) == "正在读取最近一次快照…", "busy title")
+        require(GrokBotUsageReport.manualButtonTitle(refreshing: false) == "读取本机额度", "button implies an old snapshot")
+        require(GrokBotUsageReport.manualButtonTitle(refreshing: true) == "正在读取本机额度…", "busy title")
         require(GrokBotUsageReport.connectorStatus(.success(reading), installed: false, running: false) == shown, "a valid report does not wait for process detection")
         require(!shown.contains("实时") && shown.contains("剩余") && shown.contains("已用") && !shown.contains("Premium"), "display changed its meaning or added a claim")
         require(!shown.contains("0%"), "fresh 19.3 rendered as zero")

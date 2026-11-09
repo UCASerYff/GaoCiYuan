@@ -6,14 +6,11 @@ import Darwin
 import Glibc
 #endif
 
-/// Read-only ingestion for a future Grok Bot usage report.
+/// Shared remaining-percent presentation and legacy snapshot decoding.
+/// New readings come from GrokBotAX's avatar menu, not this legacy JSON file.
+/// Nothing here reads private stores, calls a usage endpoint, or schedules refresh.
 ///
-/// Grok Bot's own Usage & Billing view is human-readable text. This type does
-/// not scrape that view, does not read Cursor or Grok Bot private stores, and
-/// does not call a usage endpoint. Nothing here writes the file or schedules a
-/// refresh; the account refresh that already exists is what calls `load`.
-///
-/// Contract, under the home directory:
+/// Legacy contract, under the home directory:
 /// `Library/Application Support/GaoSeries/Token/grokbot-usage.json`
 ///
 /// ```
@@ -87,13 +84,8 @@ enum GrokBotUsageReport {
         contractFileURL(home: URL(fileURLWithPath: homePath, isDirectory: true))
     }
 
-    /// Automatic account refresh must not open the file. Only an explicit user
-    /// action reads it. There is no launch read: nothing in the app fetches a
-    /// manual-only provider once at startup.
-    static func shouldReadOnRefresh(userInitiated: Bool) -> Bool { userInitiated }
-
     static func manualButtonTitle(refreshing: Bool) -> String {
-        refreshing ? "正在读取最近一次快照…" : "读取最近一次快照"
+        refreshing ? "正在读取本机额度…" : "读取本机额度"
     }
 
     static func ingest(_ data: Data, now: Date, timeZone: TimeZone) -> Result<Reading, Rejection> {
@@ -193,14 +185,20 @@ enum GrokBotUsageReport {
         }
     }
 
-    /// Last successful manual read. This is not a `UsageSnapshot`: it never
-    /// enters history or `displayQuotas`. Staleness is recomputed from the
-    /// stored instants, so a relaunch cannot present it as live.
+    enum ManualSource: String, Codable {
+        case legacySnapshot
+        case avatarMenu
+    }
+
+    /// Last successful avatar read (or legacy file read). This is not a `UsageSnapshot`:
+    /// it never enters history or `displayQuotas`. New optional fields preserve old archives.
     struct ManualReading: Codable, Equatable {
         var weeklyPercentUsed: Double
         var capturedAt: Date
         var resetsAt: Date?
         var sharedWithOtherApps: Bool
+        var plan: String? = nil
+        var source: ManualSource? = nil
     }
 
     struct RingFace: Equatable {
@@ -214,18 +212,28 @@ enum GrokBotUsageReport {
     }
 
     static func manualReading(_ reading: Reading) -> ManualReading {
-        ManualReading(weeklyPercentUsed: reading.snapshot.weeklyPercentUsed, capturedAt: reading.snapshot.capturedAt, resetsAt: reading.snapshot.resetsAt, sharedWithOtherApps: reading.snapshot.sharedWithOtherApps)
+        ManualReading(weeklyPercentUsed: reading.snapshot.weeklyPercentUsed, capturedAt: reading.snapshot.capturedAt, resetsAt: reading.snapshot.resetsAt, sharedWithOtherApps: reading.snapshot.sharedWithOtherApps, plan: reading.snapshot.plan, source: .legacySnapshot)
+    }
+
+    static func avatarManualReading(plan: String, weeklyPercentUsed: Double, capturedAt: Date) -> ManualReading {
+        ManualReading(weeklyPercentUsed: weeklyPercentUsed, capturedAt: capturedAt, resetsAt: nil, sharedWithOtherApps: false, plan: plan, source: .avatarMenu)
     }
 
     static func statusLine(_ reading: ManualReading, now: Date, timeZone: TimeZone) -> String {
-        presentation(materialize(reading, now: now, timeZone: timeZone))
+        if reading.source == .avatarMenu {
+            let remaining = percentText(remainingPercent(used: reading.weeklyPercentUsed))
+            let used = percentText(reading.weeklyPercentUsed)
+            let captured = formatTimestamp(reading.capturedAt, timeZone: timeZone)
+            return "Grok Bot 头像栏目（采集于 \(captured)） · 额度剩余 \(remaining)%（已用 \(used)%） · 套餐 \(reading.plan ?? "未显示")"
+        }
+        return presentation(materialize(reading, now: now, timeZone: timeZone))
     }
 
     /// Nil means this account is not the Grok Bot route, so the generic ring stays in charge.
     static func dedicatedRingFace(isGrokBotRoute: Bool, reading: ManualReading?, now: Date, timeZone: TimeZone) -> RingFace? {
         guard isGrokBotRoute else { return nil }
         guard let reading else {
-            return RingFace(showsDash: true, remainingPercent: nil, fill: 0, stale: false, label: "—", help: "尚未读取 Grok Bot 快照")
+            return RingFace(showsDash: true, remainingPercent: nil, fill: 0, stale: false, label: "—", help: "尚未读取 Grok Bot 本机额度")
         }
         let made = materialize(reading, now: now, timeZone: timeZone)
         let stale = made.freshness != .current
@@ -233,12 +241,13 @@ enum GrokBotUsageReport {
         let remainingText = percentText(remaining)
         let usedText = percentText(reading.weeklyPercentUsed)
         let label = remainingText + "%"
-        let help = (stale ? "快照已过期，" : "") + "剩余 \(remainingText)%，由已用 \(usedText)% 换算。采集于 \(made.capturedText)。不是实时读数。"
+        let source = reading.source == .avatarMenu ? "本机头像栏目读数" : "快照"
+        let help = (stale ? "\(source)已过期，" : "") + "剩余 \(remainingText)%，由已用 \(usedText)% 换算。采集于 \(made.capturedText)。不是实时读数。"
         return RingFace(showsDash: false, remainingPercent: remaining, fill: min(1, max(0, remaining / 100)), stale: stale, label: label, help: help)
     }
 
     private static func materialize(_ reading: ManualReading, now: Date, timeZone: TimeZone) -> Reading {
-        let snapshot = Snapshot(plan: "", weeklyPercentUsed: reading.weeklyPercentUsed, resetsAt: reading.resetsAt, capturedAt: reading.capturedAt, sharedWithOtherApps: reading.sharedWithOtherApps)
+        let snapshot = Snapshot(plan: reading.plan ?? "", weeklyPercentUsed: reading.weeklyPercentUsed, resetsAt: reading.resetsAt, capturedAt: reading.capturedAt, sharedWithOtherApps: reading.sharedWithOtherApps)
         return Reading(snapshot: snapshot, freshness: freshness(of: snapshot, now: now), line: displayLine(snapshot, timeZone: timeZone), remainingLine: remainingDisplayLine(snapshot, timeZone: timeZone), capturedText: formatTimestamp(reading.capturedAt, timeZone: timeZone))
     }
 

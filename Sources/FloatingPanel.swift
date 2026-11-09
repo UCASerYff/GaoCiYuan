@@ -745,7 +745,7 @@ struct PanelDetailCard: View {
         }
     }
 
-    /// Grok Bot 的按钮只读取本机上一次快照，不向 Grok Bot 要新数值。其他账户仍是「立即同步」。
+    /// Grok Bot 手动读取左下角头像栏目的真实已用量；自动同步在非前台时补读。其他账户仍是「立即同步」。
     private func syncTitle(_ account: Account) -> String {
         guard GrokBotBridge.isUsageRoute(account) else {
             return store.refreshing.contains(account.id) ? "同步中…" : "立即同步"

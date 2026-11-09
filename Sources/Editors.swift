@@ -68,7 +68,7 @@ struct AccountEditor: View {
                     if account.provider == .gemini {
                         Text(L("自动读取独立版 Antigravity（或 Antigravity IDE）本机会话与配额池。软件运行中自动保持同步。")).font(.callout).foregroundStyle(.secondary)
                     } else if account.provider == .grok {
-                        Text(L("自动检测本机 Grok Bot。只有点击「读取最近一次快照」才读取 grokbot-usage.json，不在后台定时刷新里打开它；没有可用记录时不显示百分比，也不读取 Grok 账号额度。")).font(.callout).foregroundStyle(.secondary)
+                        Text(L("只读读取 Grok Bot 左下角头像栏目的套餐和已用百分比，悬浮窗显示剩余量。手动点击立即读取；非前台自动同步并做 5 分钟导航节流，前台使用中不打扰。没有可用读数时不显示百分比，也不读取 Grok 账号额度。")).font(.callout).foregroundStyle(.secondary)
                     } else {
                         Text(L("自动检测本机 \(account.provider.agentSoftware) 软件与 CLI 状态，自动保持同步，无需手动录入。")).font(.callout).foregroundStyle(.secondary)
                     }
