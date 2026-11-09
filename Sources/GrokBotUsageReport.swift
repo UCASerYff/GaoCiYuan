@@ -63,6 +63,7 @@ enum GrokBotUsageReport {
         /// Display line for a current reading. A reset that has already passed
         /// must not be shown with this line: it still says 本周.
         var line: String
+        var remainingLine: String
         var capturedText: String
     }
 
@@ -145,6 +146,7 @@ enum GrokBotUsageReport {
             snapshot: snapshot,
             freshness: freshness(of: snapshot, now: now),
             line: displayLine(snapshot, timeZone: timeZone),
+            remainingLine: remainingDisplayLine(snapshot, timeZone: timeZone),
             capturedText: capturedLabel)
         return .success(reading)
     }
@@ -157,6 +159,10 @@ enum GrokBotUsageReport {
         return .current
     }
 
+    static func remainingPercent(used: Double) -> Double {
+        max(0, min(100, 100 - used))
+    }
+
     static func displayLine(_ snapshot: Snapshot, timeZone: TimeZone) -> String {
         let share = snapshot.sharedWithOtherApps ? "（与套餐内其他应用共享）" : ""
         let reset = snapshot.resetsAt.map { formatTimestamp($0, timeZone: timeZone) } ?? "平台未提供重置时间"
@@ -164,13 +170,22 @@ enum GrokBotUsageReport {
         return "本周已用 \(percentText(snapshot.weeklyPercentUsed))%\(share) · 重置 \(reset) · 数据 \(captured)"
     }
 
-    /// User-facing sentence. Current reports use the display line. Stale and
-    /// reset reports say so and never describe themselves as live.
+    static func remainingDisplayLine(_ snapshot: Snapshot, timeZone: TimeZone) -> String {
+        let remaining = percentText(remainingPercent(used: snapshot.weeklyPercentUsed))
+        let used = percentText(snapshot.weeklyPercentUsed)
+        let share = snapshot.sharedWithOtherApps ? "（与套餐内其他应用共享）" : ""
+        let reset = snapshot.resetsAt.map { formatTimestamp($0, timeZone: timeZone) } ?? "平台未提供重置时间"
+        let captured = formatTimestamp(snapshot.capturedAt, timeZone: timeZone)
+        return "本周剩余 \(remaining)%（已用 \(used)%）\(share) · 重置 \(reset) · 数据 \(captured)"
+    }
+
+    /// Current reports lead with remaining percent and retain the source used
+    /// percent. Stale and reset reports remain historical records, never live.
     static func presentation(_ reading: Reading) -> String {
         let lead = "读取最近一次快照（采集于 \(reading.capturedText)）"
         switch reading.freshness {
         case .current:
-            return "\(lead) · \(reading.line)"
+            return "\(lead) · \(reading.remainingLine)"
         case .olderThanLimit:
             return "\(lead) · 已超过 6 小时，不作为当前读数 · 记录：\(reading.line)"
         case .resetElapsed:
@@ -190,8 +205,8 @@ enum GrokBotUsageReport {
 
     struct RingFace: Equatable {
         var showsDash: Bool
-        var usedPercent: Double?
-        /// 0 when there is no reading. Otherwise the used fraction, never the remainder.
+        var remainingPercent: Double?
+        /// 0 when there is no reading. Otherwise the remaining fraction.
         var fill: Double
         var stale: Bool
         var label: String
@@ -210,19 +225,21 @@ enum GrokBotUsageReport {
     static func dedicatedRingFace(isGrokBotRoute: Bool, reading: ManualReading?, now: Date, timeZone: TimeZone) -> RingFace? {
         guard isGrokBotRoute else { return nil }
         guard let reading else {
-            return RingFace(showsDash: true, usedPercent: nil, fill: 0, stale: false, label: "—", help: "尚未读取 Grok Bot 快照")
+            return RingFace(showsDash: true, remainingPercent: nil, fill: 0, stale: false, label: "—", help: "尚未读取 Grok Bot 快照")
         }
         let made = materialize(reading, now: now, timeZone: timeZone)
         let stale = made.freshness != .current
-        let percent = percentText(reading.weeklyPercentUsed)
-        let label = (stale ? "旧" : "已用") + percent + "%"
-        let help = (stale ? "旧快照，" : "") + "已用 \(percent)%，不是剩余。采集于 \(made.capturedText)。不是实时读数。"
-        return RingFace(showsDash: false, usedPercent: reading.weeklyPercentUsed, fill: min(1, max(0, reading.weeklyPercentUsed / 100)), stale: stale, label: label, help: help)
+        let remaining = remainingPercent(used: reading.weeklyPercentUsed)
+        let remainingText = percentText(remaining)
+        let usedText = percentText(reading.weeklyPercentUsed)
+        let label = remainingText + "%"
+        let help = (stale ? "快照已过期，" : "") + "剩余 \(remainingText)%，由已用 \(usedText)% 换算。采集于 \(made.capturedText)。不是实时读数。"
+        return RingFace(showsDash: false, remainingPercent: remaining, fill: min(1, max(0, remaining / 100)), stale: stale, label: label, help: help)
     }
 
     private static func materialize(_ reading: ManualReading, now: Date, timeZone: TimeZone) -> Reading {
         let snapshot = Snapshot(plan: "", weeklyPercentUsed: reading.weeklyPercentUsed, resetsAt: reading.resetsAt, capturedAt: reading.capturedAt, sharedWithOtherApps: reading.sharedWithOtherApps)
-        return Reading(snapshot: snapshot, freshness: freshness(of: snapshot, now: now), line: displayLine(snapshot, timeZone: timeZone), capturedText: formatTimestamp(reading.capturedAt, timeZone: timeZone))
+        return Reading(snapshot: snapshot, freshness: freshness(of: snapshot, now: now), line: displayLine(snapshot, timeZone: timeZone), remainingLine: remainingDisplayLine(snapshot, timeZone: timeZone), capturedText: formatTimestamp(reading.capturedAt, timeZone: timeZone))
     }
 
     static func discoveryStatus(installed: Bool, running: Bool) -> String {

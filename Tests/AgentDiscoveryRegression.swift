@@ -66,7 +66,7 @@ actor ControlledDiscovery {
     }
     static func observation(running: Bool) -> AgentObservation {
         .init(id: "grok", provider: .grok, softwareName: "Grok Bot", isRunning: running,
-              cliPath: nil, status: running ? "软件运行中" : "未启动", snapshot: nil)
+              cliPath: nil, status: running ? "软件运行中" : "未启动", snapshot: nil, isMacAppInstalled: true)
     }
     @MainActor static func main() async throws {
         let suite = "AgentDiscoveryRegression." + UUID().uuidString
@@ -96,6 +96,23 @@ actor ControlledDiscovery {
         defaults.removeObject(forKey: MemberDiscovery.autoAddFlagKey(.openai))
         MemberDiscovery.rememberRemoval(other, defaults: defaults)
         try check(MemberDiscovery.autoAddDone(.openai, defaults: defaults), "Existing provider removal semantics changed")
+
+        try check(AgentPlatformTable.hasMacApplicationIdentity(.grok), "Grok Bot Mac app identity missing")
+        try check(!AgentPlatformTable.hasMacApplicationIdentity(.qwen), "CLI-only Qwen acquired a Mac app requirement")
+        let appObservation = AgentObservation(id: "grok", provider: .grok, softwareName: "Grok Bot", isRunning: false, cliPath: "/fixture/grok", status: "未启动", snapshot: nil, isMacAppInstalled: false)
+        try check(!MemberDiscovery.railVisibleAccounts([bot], observations: [appObservation], discoveryCompleted: true).contains(where: { $0.id == bot.id }), "CLI kept an uninstalled Mac app on the rail")
+        try check(MemberDiscovery.railVisibleAccounts([bot], observations: [], discoveryCompleted: false).contains(where: { $0.id == bot.id }), "Unknown first scan was treated as uninstall")
+        try check(MemberDiscovery.railVisibleAccounts([pool, api], observations: [], discoveryCompleted: true).count == 2, "Account pool or API was filtered as a Mac app")
+        let qwen = Account(provider: .qwen, kind: .agent, name: "Qwen CLI", connection: .agentLocal)
+        let qwenObservation = AgentObservation(id: "qwen", provider: .qwen, softwareName: "Qwen", isRunning: false, cliPath: "/fixture/qwen", status: "未启动", snapshot: nil, isMacAppInstalled: false)
+        try check(MemberDiscovery.railVisibleAccounts([qwen], observations: [qwenObservation], discoveryCompleted: true).contains(where: { $0.id == qwen.id }), "CLI-only provider requires a Mac app")
+        let installed = AgentObservation(id: "grok", provider: .grok, softwareName: "Grok Bot", isRunning: false, cliPath: nil, status: "未启动", snapshot: nil, isMacAppInstalled: true)
+        let visible = MemberDiscovery.railVisibleAccounts([bot, pool, api], observations: [installed], discoveryCompleted: true)
+        try check(visible.map(\.id) == [bot.id, pool.id, api.id], "Filtered order and click identity changed")
+        var hidden = Account(provider: .grok, kind: .agent, name: "Hidden fixture", connection: .agentLocal)
+        hidden.showInRail = false
+        try check(MemberDiscovery.railVisibleAccounts([hidden], observations: [], discoveryCompleted: false).isEmpty, "showInRail=false was ignored before discovery")
+        try check(MemberDiscovery.railVisibleAccounts([hidden], observations: [installed], discoveryCompleted: true).isEmpty, "showInRail=false was ignored after discovery")
 
         let coldStore = MonitorStore()
         coldStore.library.autoRefresh = false

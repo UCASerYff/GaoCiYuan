@@ -58,7 +58,8 @@ import Glibc
         require(reading.snapshot.capturedAt == captured && reading.snapshot.resetsAt == reset, "instants")
         let expected = "本周已用 19.3%（与套餐内其他应用共享） · 重置 周一 11月9日 09:00 · 数据 周六 11月7日 09:12"
         require(reading.line == expected, reading.line)
-        let shown = "读取最近一次快照（采集于 周六 11月7日 09:12） · \(expected)"
+        let expectedRemainingLine = "本周剩余 80.7%（已用 19.3%）（与套餐内其他应用共享） · 重置 周一 11月9日 09:00 · 数据 周六 11月7日 09:12"
+        let shown = "读取最近一次快照（采集于 周六 11月7日 09:12） · \(expectedRemainingLine)"
         require(GrokBotUsageReport.presentation(reading) == shown, GrokBotUsageReport.presentation(reading))
         require(shown.contains("采集于 周六 11月7日 09:12"), "capture time missing")
         require(!GrokBotUsageReport.shouldReadOnRefresh(userInitiated: false), "automatic refresh must not open the snapshot")
@@ -66,7 +67,7 @@ import Glibc
         require(GrokBotUsageReport.manualButtonTitle(refreshing: false) == "读取最近一次快照", "button implies a live fetch")
         require(GrokBotUsageReport.manualButtonTitle(refreshing: true) == "正在读取最近一次快照…", "busy title")
         require(GrokBotUsageReport.connectorStatus(.success(reading), installed: false, running: false) == shown, "a valid report does not wait for process detection")
-        require(!shown.contains("实时") && !shown.contains("剩余") && !shown.contains("Premium"), "display added a claim")
+        require(!shown.contains("实时") && shown.contains("剩余") && shown.contains("已用") && !shown.contains("Premium"), "display changed its meaning or added a claim")
         require(!shown.contains("0%"), "fresh 19.3 rendered as zero")
 
         let offset = contract.replacingOccurrences(of: "2026-11-07T01:12:00Z", with: "2026-11-07T09:12:00+08:00")
@@ -282,26 +283,39 @@ import Glibc
             fatalError("84.8 snapshot rejected")
         }
         let stored = GrokBotUsageReport.manualReading(liveReading)
+        let expectedRemaining = 100.0 - stored.weeklyPercentUsed
+        require(abs(expectedRemaining - 15.2) < 0.000_001, "remaining conversion")
         let freshFace = GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: true, reading: stored, now: liveNow, timeZone: zone)
-        require(freshFace?.showsDash == false && freshFace?.usedPercent == 84.8 && freshFace?.stale == false, "valid read did not fill used percent")
-        require(freshFace?.label == "已用84.8%", freshFace?.label ?? "")
-        require(abs((freshFace?.fill ?? 0) - 0.848) < 0.000_001, "fill was not the used fraction")
-        require(freshFace?.help.contains("不是剩余") == true && freshFace?.label.contains("剩余") == false, "used ring spoke remaining")
+        require(freshFace?.showsDash == false && freshFace?.remainingPercent == expectedRemaining && freshFace?.stale == false, "valid read did not fill remaining percent")
+        require(freshFace?.label == "15.2%", freshFace?.label ?? "")
+        require(abs((freshFace?.fill ?? 0) - 0.152) < 0.000_001, "fill was not the remaining fraction")
+        require(freshFace?.help.contains("已用 84.8%") == true, "remaining ring hid its source value")
+        let fullFace = GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: true, reading: GrokBotUsageReport.manualReading(full), now: liveNow, timeZone: zone)
+        require(fullFace?.remainingPercent == 0 && fullFace?.fill == 0 && fullFace?.label == "0%", "100% used did not become 0% remaining")
+        let zeroUsedFace = GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: true, reading: GrokBotUsageReport.manualReading(explicitZero), now: liveNow, timeZone: zone)
+        require(zeroUsedFace?.remainingPercent == 100 && zeroUsedFace?.fill == 1 && zeroUsedFace?.label == "100%", "0% used did not become 100% remaining")
         let aged = liveNow.addingTimeInterval(GrokBotUsageReport.staleAfter + 1)
         let staleFace = GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: true, reading: stored, now: aged, timeZone: zone)
-        require(staleFace?.stale == true && staleFace?.label == "旧84.8%" && staleFace?.showsDash == false, staleFace?.label ?? "missing stale face")
-        require((staleFace?.help ?? "").contains("旧快照") && (staleFace?.help ?? "").contains("不是实时读数"), "stale ring looked live")
+        require(staleFace?.stale == true && staleFace?.label == "15.2%" && staleFace?.showsDash == false, staleFace?.label ?? "missing stale face")
+        require(staleFace?.label.contains("旧") == false, "stale caption leaked into the number")
+        require((staleFace?.help ?? "").contains("快照已过期") && (staleFace?.help ?? "").contains("不是实时读数"), "stale ring looked live")
         let resetNow = parser.date(from: "2026-11-13T06:00:00Z")!
         let resetFace = GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: true, reading: stored, now: resetNow, timeZone: zone)
-        require(resetFace?.stale == true && resetFace?.usedPercent == 84.8, "past reset still looked live")
+        require(resetFace?.stale == true && resetFace?.remainingPercent == expectedRemaining, "past reset still looked live")
         let empty = GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: true, reading: nil, now: liveNow, timeZone: zone)
-        require(empty?.showsDash == true && empty?.label == "—" && empty?.fill == 0, "missing read drew a percent")
+        require(empty?.showsDash == true && empty?.label == "—" && empty?.fill == 0 && empty?.remainingPercent == nil, "missing read drew a percent")
         require(GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: false, reading: stored, now: liveNow, timeZone: zone) == nil, "another provider took the Grok Bot ring")
         let status = GrokBotUsageReport.statusLine(stored, now: liveNow, timeZone: zone)
-        require(status.contains("本周已用 84.8%（与套餐内其他应用共享）"), status)
+        require(status.contains("本周剩余 15.2%（已用 84.8%）（与套餐内其他应用共享）"), status)
         require(status.contains("采集于 周六 11月7日 11:31") && status.contains("重置 周五 11月13日 13:54"), status)
+        let otherZone = TimeZone(identifier: "America/Los_Angeles")!
+        guard case .success(let zonedReading) = GrokBotUsageReport.ingest(live, now: liveNow, timeZone: otherZone) else {
+            fatalError("alternate time zone snapshot rejected")
+        }
+        let zonedStatus = GrokBotUsageReport.statusLine(GrokBotUsageReport.manualReading(zonedReading), now: liveNow, timeZone: otherZone)
+        require(zonedStatus.contains("数据 \(zonedReading.capturedText)"), "presentation replaced the injected time zone: \(zonedStatus)")
         let rejectedFace = GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: true, reading: nil, now: liveNow, timeZone: zone)
-        require(rejectedFace?.label == "—" && rejectedFace?.usedPercent == nil, "rejection still drew a used percent")
+        require(rejectedFace?.label == "—" && rejectedFace?.remainingPercent == nil, "rejection still drew a remaining percent")
         print("{\"passed\":true,\"cases\":\"parse-staleness-validation-file-ring\"}")
     }
 }

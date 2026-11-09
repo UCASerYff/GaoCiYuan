@@ -124,6 +124,11 @@ enum AgentPlatformTable {
         return !id.exactBundles.isEmpty || !id.bundleContains.isEmpty || !id.exactNames.isEmpty || !id.appNames.isEmpty || !id.cli.isEmpty
     }
 
+    static func hasMacApplicationIdentity(_ provider: Provider) -> Bool {
+        let id = identity(provider)
+        return !id.exactBundles.isEmpty || !id.appNames.isEmpty
+    }
+
     /// 进程运行匹配（入参已小写；调用方负责过滤系统进程）。
     static func matchesRunning(_ p: Provider, bundle: String, name: String) -> Bool {
         let id = identity(p)

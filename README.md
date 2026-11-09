@@ -1,17 +1,17 @@
-# 搞词元 V4.10
+# 搞词元 V4.11
 
 独立 macOS AI 额度与用量管理应用，包含账户管理、采集分析和悬浮窗。运行不依赖搞七廿三或其他六个应用；联动功能需要同时安装相关应用。
 
 ## 下载与安装
 
-从 [Releases](https://github.com/UCASerYff/GaoCiYuan/releases/latest) 下载 `GaoCiYuan-4.10.zip` 和同名 `.sha256` 文件。仓库保存源码，安装包作为 Release 附件单独发布。
+从 [Releases](https://github.com/UCASerYff/GaoCiYuan/releases/latest) 下载 `GaoCiYuan-4.11.zip` 和同名 `.sha256` 文件。仓库保存源码，安装包作为 Release 附件单独发布。
 
 1. 支持 macOS 14 或更高版本、Apple Silicon；暂未提供 Intel 版本。
 2. 解压 ZIP，将 `搞词元.app` 拖入“应用程序”文件夹。
 3. 如果 macOS 拦截打开，请先确认软件来源，再进入“系统设置 → 隐私与安全性”，允许该应用打开。发行包使用 Apple Development 签名，未做 Apple 公证。
 4. 安装后运行一次，原有账户、用量账本及悬浮窗设置会继续沿用。V4.02 不再提供桌面或通知中心小组件。
 
-下载后可在文件所在目录运行 `shasum -a 256 -c GaoCiYuan-4.10.zip.sha256` 核验安装包。
+下载后可在文件所在目录运行 `shasum -a 256 -c GaoCiYuan-4.11.zip.sha256` 核验安装包。
 
 ## 功能
 
@@ -57,6 +57,13 @@
 - `Resources/`：黑底白字图标、平台图标、翻译与 Tokscale 扫描引擎。
 - `Host/`：独立入口、设置、完整备份和联动服务。
 - `Tests/`：回归验证。
+
+## V4.11
+
+- Grok Bot 圆环按本周剩余百分比显示，由快照已用百分比换算；环下数字不再拼接“旧”，过期快照仍以灰色和非实时说明区分。
+- 点击 Grok Bot 圆环或详情按钮才读取最近一次本地快照，自动刷新不读取额度文件。
+- 已卸载 Mac 应用对应的本地 Agent 只从悬浮窗隐藏，即使 CLI 仍在也隐藏；账户、历史、设置和凭据保留，重新安装后恢复显示。纯 CLI 与 API 账户不受影响。
+- 版本升至 V4.11，构建号升至 12，沿用现有资料路径和钥匙串身份。
 
 ## V4.10
 
