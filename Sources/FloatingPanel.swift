@@ -412,17 +412,17 @@ struct PanelRingView: View {
         } else if account.provider == .custom {
             customBadge
         } else if GrokBotBridge.isUsageRoute(account) {
-            grokUsedRing
+            grokRemainingRing
         } else {
             ring
         }
     }
 
-    /// Grok Bot only. The arc length is percent used, and the caption says 已用 or 旧.
-    /// It does not read `displayQuotas` or `remaining`.
-    private var grokUsedRing: some View {
+    /// Grok Bot only. The arc length and caption are the remaining percentage;
+    /// staleness is conveyed by secondary color, opacity, and help text.
+    private var grokRemainingRing: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
-            let face = GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: true, reading: account.grokBotManualReading, now: context.date, timeZone: .current) ?? GrokBotUsageReport.RingFace(showsDash: true, usedPercent: nil, fill: 0, stale: false, label: "—", help: "")
+            let face = GrokBotUsageReport.dedicatedRingFace(isGrokBotRoute: true, reading: account.grokBotManualReading, now: context.date, timeZone: .current) ?? GrokBotUsageReport.RingFace(showsDash: true, remainingPercent: nil, fill: 0, stale: false, label: "—", help: "")
             let color: Color = face.stale || face.showsDash ? .secondary : PanelTheme.iris
             VStack(spacing: RailGeometry.ringToText) {
                 ZStack {
