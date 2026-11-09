@@ -6,14 +6,11 @@ import Darwin
 import Glibc
 #endif
 
-/// Read-only ingestion for a future Grok Bot usage report.
+/// Shared remaining-percent presentation and legacy snapshot decoding.
+/// New readings come from GrokBotAX's avatar menu, not this legacy JSON file.
+/// Nothing here reads private stores, calls a usage endpoint, or schedules refresh.
 ///
-/// Grok Bot's own Usage & Billing view is human-readable text. This type does
-/// not scrape that view, does not read Cursor or Grok Bot private stores, and
-/// does not call a usage endpoint. Nothing here writes the file or schedules a
-/// refresh; the account refresh that already exists is what calls `load`.
-///
-/// Contract, under the home directory:
+/// Legacy contract, under the home directory:
 /// `Library/Application Support/GaoSeries/Token/grokbot-usage.json`
 ///
 /// ```
