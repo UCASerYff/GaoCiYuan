@@ -10,6 +10,7 @@ struct AgentObservation: Identifiable {
     var cliPath: String?
     var status: String
     var snapshot: UsageSnapshot?
+    var isMacAppInstalled: Bool = false
 }
 
 private final class DoubaoHelperCancellation: @unchecked Sendable {
@@ -144,6 +145,7 @@ enum DoubaoBridge {
     static let shared = MemberDiscovery()
     @Published var observations: [AgentObservation] = []
     @Published var scanning = false
+    @Published private(set) var discoveryCompleted = false
     private weak var store: MonitorStore?
 
     private var rescanTimer: Timer?
@@ -171,6 +173,7 @@ enum DoubaoBridge {
         guard self.store !== store || rescanTimer == nil else { return }
         generation += 1
         self.store = store
+        discoveryCompleted = false
         scanRequest?.cancel()
         scanWork?.cancel()
         requestScan()
@@ -220,6 +223,36 @@ enum DoubaoBridge {
             self.scanRequest = nil
             if self.rescanPending, self.store != nil { self.requestScan() }
         }
+    }
+
+    nonisolated static func railVisibleAccounts(_ accounts: [Account], observations: [AgentObservation], discoveryCompleted: Bool) -> [Account] {
+        let local: Set<Connection> = [.agentLocal, .codex, .claudeDesktop, .cursor, .devinApp, .dshHarness, .workbuddyLocal, .geminiApp, .kimiDesktop]
+        return accounts.filter { account in
+            guard account.showInRail else { return false }
+            guard discoveryCompleted, account.kind == .agent, local.contains(account.connection), AgentPlatformTable.hasSoftwareIdentity(account.provider) else { return true }
+            guard let observation = observations.first(where: { $0.provider == account.provider }) else { return false }
+            return !AgentPlatformTable.hasMacApplicationIdentity(account.provider) || observation.isMacAppInstalled
+        }
+    }
+
+    func railVisibleAccounts(_ accounts: [Account]) -> [Account] {
+        Self.railVisibleAccounts(accounts, observations: observations, discoveryCompleted: discoveryCompleted)
+    }
+
+    nonisolated static func isMacApplicationInstalled(_ p: Provider, in runningApps: [NSRunningApplication]) -> Bool {
+        guard AgentPlatformTable.hasMacApplicationIdentity(p) else { return false }
+        let fm = FileManager.default
+        for app in runningApps where AgentPlatformTable.matchesRunning(p, bundle: (app.bundleIdentifier ?? "").lowercased(), name: (app.localizedName ?? "").lowercased()) {
+            if let url = app.bundleURL, url.pathExtension == "app", fm.fileExists(atPath: url.path) { return true }
+        }
+        for bid in AgentPlatformTable.identity(p).exactBundles {
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid), fm.fileExists(atPath: url.path) { return true }
+        }
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
+        for dir in ["/Applications", "\(home)/Applications"] {
+            for name in AgentPlatformTable.identity(p).appNames where fm.fileExists(atPath: "\(dir)/\(name)") { return true }
+        }
+        return false
     }
 
     nonisolated static func isAgentRunning(_ p: Provider, in runningApps: [NSRunningApplication]) -> Bool {
@@ -280,7 +313,8 @@ enum DoubaoBridge {
             let cli = candidates.first { !$0.isEmpty && FileManager.default.isExecutableFile(atPath: $0) }
             result.append(AgentObservation(id: p.rawValue, provider: p, softwareName: p.agentSoftware,
                                            isRunning: isRunning, cliPath: cli,
-                                           status: isRunning ? "软件运行中" : "未启动", snapshot: nil))
+                                           status: isRunning ? "软件运行中" : "未启动", snapshot: nil,
+                                           isMacAppInstalled: Self.isMacApplicationInstalled(p, in: runningApps)))
         }
         return result
     }
@@ -302,6 +336,7 @@ enum DoubaoBridge {
             guard !Task.isCancelled else { return }
             if !worker.isCancelled, version == generation {
                 observations = list
+                discoveryCompleted = true
                 autoAddAccountsIfNeeded()
             }
         } while rescanPending && store != nil
