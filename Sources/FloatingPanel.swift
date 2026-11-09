@@ -163,6 +163,7 @@ extension PanelEdge {
 struct PanelRootView: View {
     @EnvironmentObject var store: MonitorStore
     @EnvironmentObject var activity: AgentActivityMonitor
+    @ObservedObject private var discovery = MemberDiscovery.shared
     let placement: PanelPlacement
     @State private var pointer: CGPoint? = nil
     @State private var hoverIndex: Int? = nil
@@ -172,7 +173,7 @@ struct PanelRootView: View {
 
     /// rail 满员（12+ 账户）时末位让给「+N」溢出徽标：超容量的账户不再静默消失，点击徽标开主窗口。
     /// 3.3：账户级「悬浮条显示」开关（showInRail）在此统一过滤，几何/命中/点击共用同一份清单。
-    private var railVisible: [Account] { store.active.filter(\.showInRail) }
+    private var railVisible: [Account] { discovery.railVisibleAccounts(store.active) }
     private var overflowCount: Int { max(0, railVisible.count - RailGeometry.capacity) }
     /// 3.2：按最近一次额度/余额/积分变化倒序（刚消耗的排最前）；与 onClick 命中解析共用同一排序。
     private var accounts: [Account] {
@@ -228,7 +229,11 @@ struct PanelRootView: View {
         // 3.40：initial: true 很关键——启动即收起（无指针）时 expanded 没有「变化」，
         // 不带 initial 的 onChange 不发火，isRailExpanded 停在初始 true，收缩永不启动。
         .onChange(of: expanded, initial: true) { _, v in placement.isRailExpanded = v }
+        .onChange(of: expanded) { _, isExpanded in
+            if isExpanded { discovery.requestScan() }
+        }
         .onChange(of: accounts.count) { _, _ in placement.railLengthChanged() }
+        .onAppear { discovery.configure(store) }
     }
 
     private func shrunkPointerChanged(_ point: CGPoint?) {
@@ -1016,7 +1021,7 @@ final class FloatingPanelController {
         panel.onBeforeInteraction = { [weak self] in self?.restoreFullFrame() }
         panel.onClick = { [store, placement] point in
             guard placement.isRailExpanded else { return }
-            let visible = store.active.filter(\.showInRail)
+            let visible = MemberDiscovery.shared.railVisibleAccounts(store.active)
             let overflow = visible.count > RailGeometry.capacity
             let accounts = Array(MonitorStore.recentChangeOrder(visible).prefix(overflow ? RailGeometry.capacity - 1 : RailGeometry.capacity))
             let slots = accounts.count + (overflow ? 1 : 0)
@@ -1081,7 +1086,7 @@ final class FloatingPanelController {
     }
 
     private static func shownCount(_ store: MonitorStore) -> Int {
-        min(store.active.filter(\.showInRail).count, RailGeometry.capacity)
+        min(MemberDiscovery.shared.railVisibleAccounts(store.active).count, RailGeometry.capacity)
     }
 
     func show() {
