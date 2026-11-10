@@ -40,14 +40,6 @@ final class AlertCenter {
     func observe(account: Account, outcome: AlertOutcome) {}
     func forget(account: UUID) {}
 }
-extension UTType { static let gaoBackup = UTType.json }
-struct Preferences { static func read() -> Self { .init() }; func apply() {} }
-struct PreparedTransfer { var library = Library(); var fileCount = 0; var preferences: Preferences? }
-enum DataTransfer {
-    static func export(to: URL, root: URL, library: Library, preferences: Preferences) throws { fatalError("Unexpected export") }
-    static func prepare(_ url: URL) throws -> PreparedTransfer { fatalError("Unexpected restore") }
-    static func restore(_ incoming: PreparedTransfer, to: URL) throws -> Library { fatalError("Unexpected restore") }
-}
 struct UsageEngineConfiguration: Codable, Equatable { var fixture = 0 }
 struct UsageEngineScan { var capturedAt = Date(); var warnings: [String] = []; var value = 1 }
 enum UsageEngine {
@@ -112,28 +104,32 @@ actor UsageLedger {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("RefreshSchedulingRegression-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let agentID = UUID(), llmID = UUID()
+        let agentID = UUID(), llmID = UUID(), customAPIID = UUID()
         var legacy = Library()
         legacy.accounts = [
             Account(id: agentID, provider: .openai, kind: .agent, name: "Codex", connection: .codex),
-            Account(id: llmID, provider: .openai, kind: .llm, name: "Legacy API", connection: .file)
+            Account(id: llmID, provider: .openai, kind: .llm, name: "Legacy API", connection: .file),
+            Account(id: customAPIID, provider: .custom, kind: .agent, name: "Legacy custom API", connection: .customAPI)
         ]
         let legacyDirectory = root.appendingPathComponent("legacy")
         try FileManager.default.createDirectory(at: legacyDirectory, withIntermediateDirectories: true)
         try JSONCoding.encoder.encode(legacy).write(to: legacyDirectory.appendingPathComponent("library.json"))
         let migrated = MonitorStore(directory: legacyDirectory, fetch: { _, _ in throw MonitorError.message("Unexpected fetch") })
-        try check(migrated.library.accounts.map(\.id) == [agentID], "Legacy LLM account was not removed")
-        try check(KeyVault.deleted == [llmID], "Legacy LLM credential was not deleted exactly once")
-        try check(migrated.active.allSatisfy { $0.kind == .agent }, "Non-agent account entered active set")
-        var rejected = false
-        do {
-            try migrated.upsert(Account(provider: .custom, kind: .llm, name: "Rejected", connection: .file))
-        } catch { rejected = true }
-        try check(rejected, "LLM upsert unexpectedly succeeded")
+        try check(migrated.library.accounts.map(\.id) == [agentID], "Legacy API account was not removed")
+        try check(KeyVault.deleted == [llmID, customAPIID], "Legacy API credentials were not deleted exactly once")
+        try check(migrated.active.allSatisfy { $0.kind == .agent && $0.provider != .custom }, "Non-agent account entered active set")
+        for invalid in [
+            Account(provider: .custom, kind: .llm, name: "Rejected LLM", connection: .file),
+            Account(provider: .custom, kind: .agent, name: "Rejected custom API", connection: .customAPI)
+        ] {
+            var rejected = false
+            do { try migrated.upsert(invalid) } catch { rejected = true }
+            try check(rejected, "API upsert unexpectedly succeeded")
+        }
 
         let io = Controlled<ConnectorResult>()
         let store = MonitorStore(directory: root.appendingPathComponent("quota"), fetch: { _, _ in try await io.run() })
-        var account = Account(provider: .custom, kind: .agent, name: "Fixture", connection: .file)
+        var account = Account(provider: .openai, kind: .agent, name: "Fixture", connection: .file)
         try store.upsert(account)
         store.library.autoRefresh = false
         await store.refreshAll(); await store.refreshDue(); await store.refresh(account.id)

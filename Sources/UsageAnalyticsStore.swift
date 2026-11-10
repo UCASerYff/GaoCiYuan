@@ -88,7 +88,7 @@ struct UsageAnalyticsPreferences: Codable {
             preferences = UsageAnalyticsPreferences(); settingsFailed = false; return
         }
         do { preferences = try JSONDecoder().decode(UsageAnalyticsPreferences.self, from: Data(contentsOf: settingsURL)); settingsFailed = false }
-        catch { settingsFailed = true; errorMessage = "用量采集设置读取失败，原文件已保留。请检查完整备份。" }
+        catch { settingsFailed = true; errorMessage = "用量采集设置读取失败，原文件已保留。请检查原文件后再试。" }
     }
     func start() {
         guard !started, ProcessInfo.processInfo.environment["GAOQINIANSAN_INTEGRATION_TEST"] != "1" else { return }

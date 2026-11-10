@@ -39,7 +39,6 @@ enum Localization {
 func L(_ text: String) -> String {
     guard Localization.english else { return text }
     if let translated = Localization.table[text] { return translated }
-    if text.hasPrefix("将导入 ") { return "Import these accounts and documents? A complete backup of current data will be retained. Automatic sync will pause. API credentials do not transfer with this file." }
     var result = text
     for (from,to) in Localization.fragments { result = result.replacingOccurrences(of:from,with:to) }
     // Composite labels include official source names and quota windows.

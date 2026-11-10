@@ -68,10 +68,15 @@ func L(_ value: String) -> String { value }
         try check(metadataCalls == (1, 0), "checking a new release downloaded its package or bypassed metadata cache")
         try check(items.count == 1 && items[0].expectedLength == 2048, "appcast length/version parse failed")
         let item = items[0]
+        let cache = root.appendingPathComponent("good")
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        let oldPackages = ["a", "b", "c"].map { cache.appendingPathComponent(String(repeating: $0, count: 64) + ".zip") }
+        for url in oldPackages { try Data("old package".utf8).write(to: url) }
         async let first = service.downloadExplicitly(item, publicKey: publicKey)
         async let second = service.downloadExplicitly(item, publicKey: publicKey)
         let (firstURL, secondURL) = try await (first, second)
         try check(firstURL == secondURL, "same version download was not shared")
+        try check(oldPackages.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) }, "old update packages were retained as backups")
         let afterFlight = await mock.calls()
         try check(afterFlight == (1, 1), "concurrent explicit downloads duplicated network traffic")
         let restarted = UpdateService(cacheDirectory: root.appendingPathComponent("good"), fetcher: { try await mock.fetch($0, $1, $2, $3, $4) })

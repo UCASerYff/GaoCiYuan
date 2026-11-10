@@ -203,13 +203,13 @@ actor UsageLedger {
         let encoder=JSONEncoder(); encoder.dateEncodingStrategy = .iso8601; encoder.outputFormatting = [.sortedKeys]
         var count=0, records=0
         func write(_ data:Data) throws {
-            guard count <= 64 * 1_024 * 1_024 - data.count else { throw UsageLedgerError.invalid("用量 JSON 超过 64 MB，请用完整应用备份迁移全部历史。") }
+            guard count <= 64 * 1_024 * 1_024 - data.count else { throw UsageLedgerError.invalid("用量 JSON 超过 64 MB，请缩小用量 JSON 的时间或记录范围后重试。") }
             try handle.write(contentsOf:data); count += data.count
         }
         func literal(_ value:String) throws { try write(Data(value.utf8)) }
         func record<T:Encodable>(_ value:T) throws {
             records += 1
-            guard records <= 200_000 else {throw UsageLedgerError.invalid("用量 JSON 超过 20 万条，请用完整应用备份迁移全部历史。")}
+            guard records <= 200_000 else {throw UsageLedgerError.invalid("用量 JSON 超过 20 万条，请缩小用量 JSON 的时间或记录范围后重试。")}
             try write(encoder.encode(value))
         }
         // Older readers ignore the provenance field. A new envelope version
@@ -219,7 +219,7 @@ actor UsageLedger {
         try literal(",\"devices\":[")
         try withDB { db in
             let devices=try Self.devices(db)
-            guard devices.count <= 64 else {throw UsageLedgerError.invalid("设备数量超出单个用量包上限，请使用完整应用备份。")}
+            guard devices.count <= 64 else {throw UsageLedgerError.invalid("设备数量超出单个用量包上限，请分批导出。")}
             for (index,device) in devices.enumerated() {
                 if index > 0 {try literal(",")}
                 try literal("{\"id\":"); try write(encoder.encode(device.id)); try literal(",\"name\":"); try write(encoder.encode(device.name)); try literal(",\"days\":[")
@@ -240,7 +240,7 @@ actor UsageLedger {
                 try literal("]")
                 if let local = try Self.readLocalUsage(db, deviceID:device.id) {
                     records += local.events.count + local.coverageDays.count + local.coverageSessions.count + (local.baselineDays?.count ?? 0) + (local.baselineSessions?.count ?? 0) + (local.retainedUnknownEventIDs?.count ?? 0)
-                    guard records <= 200_000 else {throw UsageLedgerError.invalid("用量 JSON 超过 20 万条，请使用完整应用备份。")}
+                    guard records <= 200_000 else {throw UsageLedgerError.invalid("用量 JSON 超过 20 万条，请缩小用量 JSON 的时间或记录范围后重试。")}
                     try literal(",\"localUsage\":"); try write(encoder.encode(local))
                 }
                 try literal("}")
@@ -691,23 +691,4 @@ actor UsageLedger {
         }
     }
 
-    /// A consistent standalone copy, including committed WAL rows. Used by Token backup.
-    nonisolated static func snapshotDatabase(from source: URL, to destination: URL) throws {
-        try withExclusiveAccess {
-            var handle: OpaquePointer?
-            guard sqlite3_open_v2(source.path, &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK, let db=handle else { if let handle { sqlite3_close(handle) }; throw UsageLedgerError.invalid("无法读取用量数据库备份。") }
-            defer { sqlite3_close(db) }; sqlite3_busy_timeout(db,5000)
-            guard !FileManager.default.fileExists(atPath:destination.path) else { throw UsageLedgerError.invalid("数据库备份目标已存在。") }
-            try query(db,"VACUUM INTO ?",[.text(destination.path)])
-            try verifyDatabase(destination)
-            try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:destination.path)
-        }
-    }
-    nonisolated static func verifyDatabase(_ url: URL) throws {
-        var handle: OpaquePointer?
-        guard sqlite3_open_v2(url.path,&handle,SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX,nil) == SQLITE_OK, let db=handle else { if let handle {sqlite3_close(handle)};throw UsageLedgerError.invalid("数据库备份无法打开。") }
-        defer { sqlite3_close(db) }
-        var result:[String]=[]; try query(db,"PRAGMA quick_check") {result.append(string($0,0))}
-        guard result == ["ok"] else {throw UsageLedgerError.invalid("数据库完整性检查失败，原资料已保留。")}
-    }
 }

@@ -357,7 +357,7 @@ struct SettingsPanel: View {
             }.frame(maxWidth:.infinity,alignment:.leading).panel()
             VStack(alignment:.leading,spacing:18) {
                 Label(L("Claude Code 状态栏推送"),systemImage:"antenna.radiowaves.left.and.right").font(.headline)
-                Text(L("把搞词元注册为 Claude Code 的官方状态栏命令后，即使本机登录过期，额度也会在每次会话响应后自动推送。修改前会备份 ~/.claude/settings.json（settings.json.gaociyuan-backup），已有状态栏命令会链式保留，断开后自动恢复。")).font(.callout).foregroundStyle(.secondary)
+                Text(L("把搞词元注册为 Claude Code 的官方状态栏命令后，即使本机登录过期，额度也会在每次会话响应后自动推送。已有状态栏命令会链式保留，断开时恢复该命令；设置文件采用原子写入，不创建备份副本。")).font(.callout).foregroundStyle(.secondary)
                 HStack {
                     Circle().fill(ClaudeStatusLine.isInstalled ? Theme.teal : Color.secondary).frame(width:8,height:8)
                     Text(L(ClaudeStatusLine.isInstalled ? "已连接状态栏推送" : "未连接状态栏推送")).font(.caption).foregroundStyle(.secondary)
@@ -412,13 +412,13 @@ struct SettingsPanel: View {
                 }
                 if let networkExportStatus { Text(networkExportStatus).font(.caption).foregroundStyle(.secondary) }
             }.frame(maxWidth:.infinity,alignment:.leading).panel()
-            VStack(alignment:.leading,spacing:18) {
-                Label(L("数据与备份"),systemImage:"externaldrive").font(.headline)
-                Text(L("完整数据包含账户、历史、外观与语言设置，以及数据目录中的全部 PDF 和其他文档。API 密钥保留在钥匙串，不随备份导出。")).font(.callout).foregroundStyle(.secondary)
-                HStack { Button(L("导出完整数据…")) { store.exportBackup() }; Button(L("导入数据…")) { store.restoreBackup() }; Button(L("导出账户快照 CSV")) { store.exportCSV() }; Button(L("打开数据目录")) { NSWorkspace.shared.open(store.dataURL.deletingLastPathComponent()) } }
+            VStack(alignment:.leading,spacing:14) {
+                Label(L("数据"),systemImage:"externaldrive").font(.headline)
+                Text(L("账户与用量记录保存在原数据目录；搞词元不再创建完整资料备份或恢复副本。")).font(.callout).foregroundStyle(.secondary)
+                HStack { Button(L("导出账户快照 CSV")) { store.exportCSV() }; Button(L("打开数据目录")) { NSWorkspace.shared.open(store.dataURL.deletingLastPathComponent()) } }
                 Divider()
-                Text(L("通用快照文件")).font(.headline)
-                Text(L("所有平台均可连接标准 JSON 快照。外部脚本更新文件后，应用会定时读取；observedAt 表示实际观测时间，不能用刷新时间冒充。")).font(.callout).foregroundStyle(.secondary)
+                Text(L("通用 Agent 快照文件")).font(.headline)
+                Text(L("Agent 软件可连接标准 JSON 快照。外部脚本更新文件后，应用会定时读取；observedAt 表示实际观测时间，不能用刷新时间冒充。")).font(.callout).foregroundStyle(.secondary)
                 Button(L("导出快照格式示例…")) { exportExample() }
             }.frame(maxWidth:.infinity,alignment:.leading).panel()
             VStack(alignment:.leading,spacing:10) { Text(L("搞词元 V\(Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "")")).font(.headline); Text(L("macOS 原生应用")).foregroundStyle(.secondary); Text(L("会员限额并非固定 Token 数；官方账单可能延迟。通用快照不代表所有平台已实现自动登录。自动接口均只读取，不调用模型、不充值、不修改订阅。")).font(.caption).foregroundStyle(.secondary) }.frame(maxWidth:.infinity,alignment:.leading).panel()

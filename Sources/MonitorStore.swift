@@ -169,7 +169,7 @@ import UniformTypeIdentifiers
     }
     func upsert(_ account: Account, key: String = "") throws {
         guard !loadFailed else { throw MonitorError.message("数据文件不可写，请检查原文件后再试。") }
-        guard account.kind == .agent else { throw MonitorError.message("搞词元仅记录 Agent 软件。") }
+        guard account.kind == .agent, account.provider != .custom else { throw MonitorError.message("搞词元仅记录 Agent 软件，不支持 API 账户。") }
         var copy = library
         var connectionChanged = false
         if let i = copy.accounts.firstIndex(where:{$0.id == account.id}) {
@@ -226,7 +226,7 @@ import UniformTypeIdentifiers
     }
     func refresh(_ id: UUID, userInitiated: Bool = false) async {
         guard !Task.isCancelled, !loadFailed, !suspended, userInitiated || library.autoRefresh,
-              !refreshing.contains(id), let a = library.accounts.first(where: { $0.id == id }), a.kind == .agent, a.enabled else { return }
+              !refreshing.contains(id), let a = library.accounts.first(where: { $0.id == id }), a.kind == .agent, a.provider != .custom, a.enabled else { return }
         if userInitiated { lastUserActions[id] = Date() }
         let revision = revisions[id, default: 0], token = UUID()
         refreshing.insert(id)
@@ -322,7 +322,7 @@ import UniformTypeIdentifiers
     }
     func refreshAll(userInitiated: Bool = false) async {
         guard !suspended, userInitiated || library.autoRefresh else { return }
-        await refreshGroup(library.accounts.filter { $0.enabled && $0.kind == .agent }.map(\.id), userInitiated: userInitiated)
+        await refreshGroup(library.accounts.filter { $0.enabled && $0.kind == .agent && $0.provider != .custom }.map(\.id), userInitiated: userInitiated)
     }
     func refreshDue() async {
         guard !suspended, library.autoRefresh else { return }
@@ -331,7 +331,7 @@ import UniformTypeIdentifiers
         let ids = Self.dueIDs(accounts: active, fixed: fixed, refreshMinutes: library.refreshMinutes, changes: lastChanges, actions: lastUserActions)
         await refreshGroup(ids, userInitiated: false)
     }
-    var active: [Account] { library.accounts.filter { $0.enabled && $0.kind == .agent } }
+    var active: [Account] { library.accounts.filter { $0.enabled && $0.kind == .agent && $0.provider != .custom } }
     /// 3.2：按「最近一次额度/余额/积分变化时间」倒序（刚消耗的排最上）。
     /// 从未变化的账户用首次观测时间兜底；键相同保持库序（enumerated 显式决胜，不依赖 sorted 稳定性）。
     nonisolated static func recentChangeOrder(_ accounts: [Account]) -> [Account] {
@@ -372,40 +372,6 @@ import UniformTypeIdentifiers
     var alertAccounts: [Account] {
         active.filter { health(of: $0) == .needsAction }
     }
-    func exportBackup() {
-        let panel = NSSavePanel(); panel.nameFieldStringValue = "搞词元-完整数据.gaociyuan"; panel.allowedContentTypes = [.gaoBackup]
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        // IO（逐文件 SHA-256 + 复制）卸载后台，面板在主线程，结果回到主线程提示。
-        let snapshotLibrary = library, root = dataURL.deletingLastPathComponent(), preferences = Preferences.read()
-        Task {
-            do {
-                try await Task.detached(priority: .userInitiated) { try DataTransfer.export(to:url,root:root,library:snapshotLibrary,preferences:preferences) }.value
-                notice = "导出成功：账户、历史、设置和数据目录内的全部文档已打包。密钥仍保留在钥匙串。"
-            } catch { notice = "导出失败：\(error.localizedDescription)" }
-        }
-    }
-    func restoreBackup(from selectedURL: URL? = nil) {
-        guard refreshing.isEmpty else { notice = "请等待当前同步完成后再导入。"; return }
-        let url: URL
-        if let selectedURL { url = selectedURL } else {
-            let panel = NSOpenPanel(); panel.allowedContentTypes = [.gaoBackup,.json]; panel.allowsMultipleSelection = false; panel.treatsFilePackagesAsDirectories = false
-            guard panel.runModal() == .OK, let picked = panel.url else { return }; url = picked
-        }
-        let root = dataURL.deletingLastPathComponent()
-        Task {
-            do {
-                // 校验备份包（SHA-256 全量核验）在后台执行，确认对话框与存档切换回到主线程。
-                let incoming = try await Task.detached(priority: .userInitiated) { try DataTransfer.prepare(url) }.value
-                let alert = NSAlert(); alert.messageText = L("导入这份数据？"); alert.informativeText = L("将导入 \(incoming.library.accounts.count) 个账户及 \(incoming.fileCount) 个文档文件。当前数据会完整保留为用户备份，导入后暂停自动同步。API 密钥不随文件转移。"); alert.addButton(withTitle:L("导入")); alert.addButton(withTitle:L("取消"))
-                guard alert.runModal() == .alertFirstButtonReturn else { return }
-                let restored = try await Task.detached(priority: .userInitiated) { try DataTransfer.restore(incoming,to:root) }.value
-                for id in Set(library.accounts.map(\.id) + restored.accounts.map(\.id)) { revisions[id,default:0] += 1 }
-                library = restored; loadFailed = false; incoming.preferences?.apply()
-                let unknownConnections = Connection.takeUnknownFallbacks()
-                notice = "导入完成，原数据及所有文档均已保留。请检查账户连接后再开启自动同步。" + (unknownConnections.isEmpty ? "" : " 有 \(unknownConnections.count) 处连接方式无法识别，已回退为「本机软件自动读取」。")
-            } catch { notice = "导入失败：\(error.localizedDescription)" }
-        }
-    }
     func exportCSV() {
         let panel = NSSavePanel(); panel.nameFieldStringValue = "搞词元-用量快照.csv"; panel.allowedContentTypes = [.commaSeparatedText]
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -415,7 +381,7 @@ import UniformTypeIdentifiers
         }
         let f = ISO8601DateFormatter()
         var rows = [["账户","平台","类型","更新时间","统计开始","统计结束","来源","输入Token","输出Token","费用","余额","积分余额"]]
-        for a in library.accounts {
+        for a in library.accounts where a.kind == .agent && a.provider != .custom {
             guard let s = a.snapshot else { continue }
             rows.append([a.name,a.provider.name,a.kind.rawValue,f.string(from:s.observedAt),s.periodStart.map(f.string) ?? "",s.periodEnd.map(f.string) ?? "",s.source,s.inputTokens.map(String.init) ?? "",s.outputTokens.map(String.init) ?? "",s.costs.map(\.text).joined(separator:"; "),s.balances.map(\.text).joined(separator:"; "),(s.creditBalances ?? []).map { $0.title + " " + $0.text }.joined(separator:"; ")])
         }

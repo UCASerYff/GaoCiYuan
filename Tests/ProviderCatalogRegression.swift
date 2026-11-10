@@ -28,8 +28,13 @@ enum AlertRules { static func attention(_ account: Account, threshold: Double, a
             let decoded = try decoder.decode(Account.self, from: encoder.encode(old))
             try check(Connection.available(decoded.provider, decoded.kind).contains(decoded.connection), "existing account route invalidated")
         }
+        for provider in [Provider.qwen, .hy, .deepseek, .custom, .openrouter, .newapi, .sub2api] {
+            try check(provider.creationKinds.isEmpty, "API-only creation entry remains for \(provider)")
+        }
+        for provider in [Provider.openai, .claude, .grok, .cursor, .copilot, .opencode, .qoder] {
+            try check(provider.creationKinds == [.agent], "Agent creation entry missing for \(provider)")
+        }
         for provider in [Provider.qwen, .hy, .deepseek] {
-            try check(provider.creationKinds == [.llm], "duplicate Agent creation entry remains")
             let old = Account(provider: provider, kind: .agent, name: "Legacy", connection: .agentLocal)
             let decoded = try decoder.decode(Account.self, from: encoder.encode(old))
             try check(decoded.id == old.id && Connection.available(provider, .agent).contains(decoded.connection), "legacy account invalidated")

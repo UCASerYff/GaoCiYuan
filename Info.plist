@@ -6,21 +6,6 @@
 	<string>zh_CN</string>
 	<key>CFBundleDisplayName</key>
 	<string>搞词元</string>
-	<key>CFBundleDocumentTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleTypeName</key>
-			<string>GaoCiYuan Backup</string>
-			<key>CFBundleTypeRole</key>
-			<string>Viewer</string>
-			<key>LSItemContentTypes</key>
-			<array>
-				<string>com.gaoseries.gaociyuan.backup</string>
-			</array>
-			<key>LSTypeIsPackage</key>
-			<true/>
-		</dict>
-	</array>
 	<key>CFBundleExecutable</key>
 	<string>GaoCiYuan</string>
 	<key>CFBundleIconFile</key>
@@ -68,25 +53,5 @@
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
-	<key>UTExportedTypeDeclarations</key>
-	<array>
-		<dict>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>com.apple.package</string>
-			</array>
-			<key>UTTypeDescription</key>
-			<string>GaoCiYuan Backup</string>
-			<key>UTTypeIdentifier</key>
-			<string>com.gaoseries.gaociyuan.backup</string>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>gaociyuan</string>
-				</array>
-			</dict>
-		</dict>
-	</array>
 </dict>
 </plist>

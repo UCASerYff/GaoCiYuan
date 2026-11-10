@@ -276,11 +276,11 @@ actor UpdateService {
         try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try data.write(to: destination, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
-        // Keep only a few verified, regenerable packages; user data/backups live elsewhere.
-        if let files = try? FileManager.default.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [.contentModificationDateKey]) {
-            let owned = files.filter { $0.pathExtension == "zip" && $0.deletingPathExtension().lastPathComponent.count == 64 && $0 != destination }
-                .sorted { ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) > ((try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) }
-            for old in owned.dropFirst(2) { try? FileManager.default.removeItem(at: old) }
+        // 只保留本次验证通过的更新包；旧 ZIP 不作为备份保留。
+        if let files = try? FileManager.default.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: nil) {
+            // 目录枚举可能把 /var 规范化为 /private/var，必须按文件名排除当前包。
+            let owned = files.filter { $0.pathExtension == "zip" && $0.deletingPathExtension().lastPathComponent.count == 64 && $0.lastPathComponent != destination.lastPathComponent }
+            for old in owned { try? FileManager.default.removeItem(at: old) }
         }
         return destination
     }

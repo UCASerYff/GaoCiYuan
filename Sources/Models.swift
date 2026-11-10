@@ -108,10 +108,10 @@ enum Provider: String, Codable, CaseIterable, Identifiable {
     // New-account capabilities are separate from Connection.available so saved
     // legacy routes keep decoding and validating without manufacturing duplicates.
     var creationKinds: [AccountKind] {
-        if let integration { return [integration.kind] }
+        if let integration { return integration.kind == .agent ? [.agent] : [] }
         switch self {
-        case .qwen, .hy, .deepseek: return [.llm]
-        default: return [.agent, .llm]
+        case .qwen, .hy, .deepseek, .custom: return []
+        default: return [.agent]
         }
     }
     var defaultAgentName: String {
@@ -201,26 +201,26 @@ enum Provider: String, Codable, CaseIterable, Identifiable {
     }
     var note: String {
         switch self {
-        case .openai: return "Agent（Codex）自动读取本机官方服务；LLM（API）需组织 Admin Key 查询 completions 用量与成本。"
-        case .claude: return "Agent（Claude Code）：优先经官方 OAuth 接口读取本机登录的额度窗（5 小时/每周/按模型），登录过期时可用官方状态栏推送（设置里一键连接）；可选 Claude 桌面会话路（默认关，显式选择，需一次钥匙串授权）；LLM（API）需组织 Admin Key 读取 Messages 用量与成本。"
-        case .deepseek: return "DeepSeek 按量 API：使用 API Key 查询账户余额。DeepSeek Harness 请使用独立的 Harness 入口。"
-        case .kimi: return "Agent（Kimi Work / Kimi Code）：保存 Kimi Code 专用 Key 后自动读取官方额度，或经辅助功能只读读取本机 Kimi 桌面端订阅页（月度额度池，无需 Key），否则检测本机软件状态；LLM（API）支持 Moonshot Key 查询人民币余额与 Kimi Code 额度。"
-        case .grok: return "Agent（Grok Bot）经辅助功能只读读取左下角头像栏目的套餐与已用百分比，悬浮窗按剩余量显示。点击「读取本机额度」立即同步；非前台自动读取并按账户做 5 分钟导航节流，前台使用中不打扰，读完按 Escape 收起栏目。读不到时保留上次数据，不编造重置时间。Grok 账号额度是独立的全产品共用池，不代表 Bot 用量；LLM（API）需 xAI Management Key 查询本月费用与预付余额。"
-        case .gemini: return "Agent（Antigravity）：支持读取 Gemini 桌面端内置 Antigravity 或独立版 Antigravity 的 5 小时与每周配额；LLM（API）支持快照文件同步。"
-        case .qwen: return "阿里云百炼 / 通义千问按量 API：查询云账户现金余额。Qoder 和 Alibaba Coding Plan 使用各自独立入口。"
-        case .doubao: return "Agent（豆包 桌面端）经辅助功能只读读取「订阅与额度管理」页（头像 › 额度状态，后台导航 + 5 分钟节流 + 读完按返回恢复，前台使用中不打扰）：当前时段与近 7 天已用百分比、剩余重置机会、赠送时长截止；免费档无会员池不编造；LLM（API）支持火山引擎云账号余额自动查询。"
-        case .glm: return "Agent（Zcode）自动读取 Coding Plan 额度；LLM（API）支持智谱开放平台 API。"
-        case .minimax: return "Agent（MiniMax Code）自动查询 Token Plan 额度；LLM（API）支持按量 API。"
-        case .hy: return "混元开放平台 API：支持标准快照文件同步。WorkBuddy 积分余额使用独立的 WorkBuddy 入口。"
-        case .mimo: return "Agent（MiMo Agent）自动检测本机软件；LLM（API）支持快照文件同步。"
-        case .copilot: return "Agent（GitHub 设备流登录）一键授权 GitHub（仅 read:user 权限，绝不索取 repo 等代码权限），经 Copilot 插件官方内部接口读取 Premium / Chat / Completions 三条月度额度；令牌只存本机钥匙串，不读取 gh CLI 的凭证。"
-        case .cursor: return "Agent（Cursor 编辑器登录态）复用本机 Cursor 编辑器已登录的账号，经官方账号接口读取双额度池（Cursor Models / Other Models）与套餐余额；令牌只用于拼一次请求头，不落盘、不读取浏览器 Cookie、不发起模型调用。"
-        case .devin: return "Agent（Devin）：本机保存 plan 路只读读取 Devin 应用（前身为 Windsurf）启动时缓存的每日/每周额度与超额余额，无需凭证，观测时间为最近一次启动；账单 API 路粘贴「token 组织」凭证读取实时已用百分比，两路独立互不回退。"
-        case .ollama: return "Agent（Ollama）：粘贴浏览器 Cookie 读取 ollama.com 设置页的 Session（5 小时）与 Weekly（每周）用量；按公开实现对接，未对真实账号验证。LLM（API）支持快照文件同步。"
-        case .commandcode: return "Agent（Command Code）：粘贴 API Key 或复用本机 command-code CLI 登录，读取美元计价的滚动窗、组织支出上限、套餐月度额度（授权额为公开价目表，估算口径）与余额；按公开实现对接，未对真实账号验证。LLM（API）支持快照文件同步。"
-        case .dsh: return "Agent（DeepSeek Harness · dsh）自动检测本机软件与登录凭证，经平台官方接口按量查询钱包余额、赠金与累计消费；凭证只用于拼一次请求头，不落盘、不写日志。LLM（API）支持快照文件同步。"
-        case .workbuddy: return "Agent（WorkBuddy）经辅助功能只读读取本机 WorkBuddy 桌面端账户弹层的积分余额：积分制，1000 积分满环、低于按比例；后台读取 + 5 分钟节流，前台使用中不打扰，读完按 Escape 关闭弹层；积分值不写日志。LLM（API）支持快照文件同步。"
-        case .custom: return "自定义 API 计费账户：GET 你给的余额查询地址，按点分 JSON 路径取余额；支持 Bearer Token 或自定义请求头鉴权，凭证只存本机钥匙串、不写日志；满环基准值自定，悬浮条圆环按比例填充。"
+        case .openai: return "Codex 复用本机官方登录服务读取真实额度窗，不读取聊天，也不发起模型调用。"
+        case .claude: return "Claude Code 支持官方 OAuth、状态栏推送和显式选择的桌面会话路，读取 5 小时、每周及按模型额度窗。"
+        case .deepseek: return "DeepSeek Harness 是独立 Agent 入口；此处不再提供大模型 API 账户。"
+        case .kimi: return "Kimi Work / Kimi Code 支持专用额度 Key 或本机桌面订阅页只读采集，未运行时保留上次真实状态。"
+        case .grok: return "Grok Bot 只读读取头像栏目的套餐与已用百分比；支持手动立即读取、非前台自动同步和 5 分钟导航节流。"
+        case .gemini: return "Antigravity 支持 Gemini 桌面端内置服务或独立版应用，读取 5 小时与每周真实配额。"
+        case .qwen: return "Qoder 和 Alibaba Coding Plan 使用各自独立 Agent 入口；此处不再提供大模型 API 账户。"
+        case .doubao: return "豆包桌面端经辅助功能只读采集当前时段、近 7 天额度和重置信息，前台使用中不打扰。"
+        case .glm: return "Zcode 自动读取 Coding Plan 的真实额度窗口。"
+        case .minimax: return "MiniMax Code 自动查询 Token Plan 的真实额度窗口。"
+        case .hy: return "WorkBuddy 使用独立 Agent 入口；此处不再提供大模型 API 账户。"
+        case .mimo: return "MiMo Agent 自动检测本机软件，并按所选连接方式读取真实额度。"
+        case .copilot: return "GitHub 设备流仅申请 read:user 权限，经 Copilot 插件接口读取 Premium、Chat 与 Completions 月度额度。"
+        case .cursor: return "Cursor 复用编辑器登录态读取双额度池与套餐余额，不读取浏览器 Cookie，不发起模型调用。"
+        case .devin: return "Devin 支持本机保存 plan 或账单连接，两路独立展示，互不回退、不混用口径。"
+        case .ollama: return "Ollama 按显式提供的账号会话读取 Session 与 Weekly 用量；公开实现尚未对真实账号验证。"
+        case .commandcode: return "Command Code 读取滚动窗、组织上限、套餐额度与余额；公开实现尚未对真实账号验证。"
+        case .dsh: return "DeepSeek Harness 自动检测本机软件与登录凭证，读取钱包余额、赠金与累计消费。"
+        case .workbuddy: return "WorkBuddy 只读读取桌面端积分余额，后台采集并做 5 分钟节流，积分值不写日志。"
+        case .custom: return "自定义 API 账户已于 V4.13 移除。"
         default: return integration?.help ?? ""
         }
     }

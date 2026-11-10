@@ -259,11 +259,10 @@ enum ClaudeOAuth {
 // MARK: - 状态栏推送钩子（官方文档化 push 通道）
 enum ClaudeStatusLine {
     static let modeArgument = "--statusline"
-    // 推送读数落在自己的数据目录（不写用户数据目录之外；settings.json 备份是文档明示的唯一例外）。
+    // 推送读数落在自己的数据目录；设置文件只原子写入，不创建备份副本。
     static var cacheFile: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("GaoSeries/Token/claude-statusline.json")
     static var settingsFile: URL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude/settings.json")
-    static var backupFile: URL { settingsFile.deletingLastPathComponent().appendingPathComponent("settings.json.gaociyuan-backup") }
     // 超过 10 分钟没有新推送即按历史数据展示：会话每次响应都会推，沉默意味着会话停了。
     static let freshFor: TimeInterval = 10 * 60
 
@@ -343,7 +342,7 @@ enum ClaudeStatusLine {
         return ([model] + parts).compactMap { $0 }.joined(separator: "  ·  ")
     }
 
-    // MARK: 安装 / 恢复 / 自修复（改 settings.json 前备份；已有命令链式保留、可恢复）
+    // MARK: 安装 / 恢复 / 自修复（原子写入；已有命令链式保留）
     static var isInstalled: Bool {
         guard let settings = readSettings(), let line = settings["statusLine"] as? [String: Any],
               let command = line["command"] as? String else { return false }
@@ -392,21 +391,7 @@ enum ClaudeStatusLine {
     }
     private static func writeSettings(_ settings: [String: Any]) -> Bool {
         guard let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else { return false }
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: backupFile.path), let original = try? Data(contentsOf: settingsFile) {
-            try? original.write(to: backupFile)
-        }
-        // 每次写入前滚动备份最近 3 份（settings.json.bak.1 最新），写坏可手动回滚。
-        if fm.fileExists(atPath: settingsFile.path) {
-            let backup3 = settingsFile.appendingPathExtension("bak.3")
-            let backup2 = settingsFile.appendingPathExtension("bak.2")
-            let backup1 = settingsFile.appendingPathExtension("bak.1")
-            try? fm.removeItem(at: backup3)
-            if fm.fileExists(atPath: backup2.path) { try? fm.moveItem(at: backup2, to: backup3) }
-            if fm.fileExists(atPath: backup1.path) { try? fm.moveItem(at: backup1, to: backup2) }
-            try? fm.copyItem(at: settingsFile, to: backup1)
-        }
-        // 原子写：先写临时文件再替换，避免中途断电/崩溃留下半截 JSON。
+        // 原子写：先写临时文件再替换，避免中途断电/崩溃留下半截 JSON；不创建备份。
         return (try? data.write(to: settingsFile, options: .atomic)) != nil
     }
     private enum DefaultsKey {

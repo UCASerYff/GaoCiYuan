@@ -82,8 +82,6 @@ public struct TokenModuleView: View {
             .onAppear(perform: handleRoute)
             .onChange(of: routeRevision) { _, _ in handleRoute() }
             .onAppear { TokenRuntime.start() }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.token.import"))) { _ in store.restoreBackup() }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.token.export"))) { _ in store.exportBackup() }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.token.csv"))) { _ in store.exportCSV() }
     }
     private func handleRoute() {
@@ -91,8 +89,6 @@ public struct TokenModuleView: View {
         handledRevision = routeRevision
         if route.scheme == "gaociyuan", route.host == "analytics" {
             NotificationCenter.default.post(name: Notification.Name("gaociyuan.presentRequested"), object: nil, userInfo: ["page": Page.analytics.rawValue])
-        } else if route.isFileURL && route.pathExtension.lowercased() == "gaociyuan" {
-            store.restoreBackup(from: route)
         }
     }
 }

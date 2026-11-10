@@ -79,19 +79,9 @@ import SQLite3
         let csv=root.appendingPathComponent("rows.csv"); try await first.exportCSV(to:csv)
         let csvText=try String(contentsOf:csv,encoding:.utf8)
         try check(csvText.contains("model'A") && csvText.contains("First Mac"),"CSV not written")
-        let db=await first.databaseURL, snap=root.appendingPathComponent("snapshot.sqlite")
-        try UsageLedger.snapshotDatabase(from:db,to:snap); try UsageLedger.verifyDatabase(snap)
+        let db=await first.databaseURL
         let perms=try FileManager.default.attributesOfItem(atPath:db.path)[.posixPermissions] as? NSNumber
         try check(perms?.intValue==0o600,"database permissions not private")
-        // Standalone snapshot must contain an open database's committed WAL rows.
-        let wal=root.appendingPathComponent("wal.sqlite"), walCopy=root.appendingPathComponent("wal-copy.sqlite")
-        var handle:OpaquePointer?; try check(sqlite3_open(wal.path,&handle)==SQLITE_OK,"fixture open failed")
-        defer { sqlite3_close(handle) }
-        try check(sqlite3_exec(handle,"PRAGMA journal_mode=WAL; CREATE TABLE t(x); INSERT INTO t VALUES(42)",nil,nil,nil)==SQLITE_OK,"fixture write failed")
-        try UsageLedger.snapshotDatabase(from:wal,to:walCopy)
-        var read:OpaquePointer?; sqlite3_open_v2(walCopy.path,&read,SQLITE_OPEN_READONLY,nil); defer {sqlite3_close(read)}
-        var statement:OpaquePointer?; sqlite3_prepare_v2(read,"SELECT x FROM t",-1,&statement,nil); defer {sqlite3_finalize(statement)}
-        try check(sqlite3_step(statement)==SQLITE_ROW && sqlite3_column_int64(statement,0)==42,"snapshot lost committed WAL data")
-        print("Usage ledger regression passed: idempotence, source deletion, monotonic merge, device import, validation rollback, pricing, CSV, private file mode, WAL snapshot.")
+        print("Usage ledger regression passed: idempotence, source deletion, monotonic merge, device import, validation rollback, pricing, CSV and private file mode.")
     }
 }

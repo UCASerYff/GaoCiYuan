@@ -12,9 +12,6 @@ import Token
     @Environment(\.openSettings) private var openSettings
     init() {
         if TokenStatusLineBridge.runIfRequested() {exit(0)}
-        do { try AppBackupRestore.applyPending() } catch {
-            let alert=NSAlert();alert.messageText="数据恢复未完成";alert.informativeText=error.localizedDescription+"\n当前数据和恢复前副本已保留。";alert.runModal();exit(1)
-        }
         AppAppearance.current.apply()
         TokenStatusLineBridge.repairPathIfNeeded()
     }
@@ -45,12 +42,6 @@ import Token
         .handlesExternalEvents(matching:["*"])
         .commands {
             CommandGroup(after:.newItem) {  }
-            CommandMenu("数据") {
-                Button("导出模块备份…") { post("GaoSeries.token.export") }
-                Button("恢复模块备份…") { post("GaoSeries.token.import") }
-                Divider()
-                Button("完整资料备份与恢复…") { openSettings() }
-            }
         }
         Settings {
             TabView {
