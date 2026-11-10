@@ -15,9 +15,14 @@ enum HTTPPolicyContext {
 }
 enum Log { struct Sink { func error(_ text: String) {} }; static let store = Sink() }
 func L(_ text: String) -> String { text }
-enum KeyVault { static func save(_ value: String, id: UUID) throws {}; static func delete(_ id: UUID) {} }
+enum KeyVault {
+    static var deleted: [UUID] = []
+    static func save(_ value: String, id: UUID) throws {}
+    static func delete(_ id: UUID) { deleted.append(id) }
+}
 enum MemberDiscovery { static func rememberRemoval(_ account: Account) {} }
 enum Connectors { static func fetch(_ account: Account, userInitiated: Bool) async throws -> ConnectorResult { fatalError("Unexpected real fetch") } }
+enum GrokBotBridge { static func isUsageRoute(_ account: Account) -> Bool { false } }
 enum DeepSeekBasis { static func apply(account: inout Account, snapshot: inout UsageSnapshot) {} }
 enum AlertOutcome { case reading(UsageSnapshot), neutral }
 enum AlertRules {
@@ -107,9 +112,28 @@ actor UsageLedger {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("RefreshSchedulingRegression-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        let agentID = UUID(), llmID = UUID()
+        var legacy = Library()
+        legacy.accounts = [
+            Account(id: agentID, provider: .openai, kind: .agent, name: "Codex", connection: .codex),
+            Account(id: llmID, provider: .openai, kind: .llm, name: "Legacy API", connection: .file)
+        ]
+        let legacyDirectory = root.appendingPathComponent("legacy")
+        try FileManager.default.createDirectory(at: legacyDirectory, withIntermediateDirectories: true)
+        try JSONCoding.encoder.encode(legacy).write(to: legacyDirectory.appendingPathComponent("library.json"))
+        let migrated = MonitorStore(directory: legacyDirectory, fetch: { _, _ in throw MonitorError.message("Unexpected fetch") })
+        try check(migrated.library.accounts.map(\.id) == [agentID], "Legacy LLM account was not removed")
+        try check(KeyVault.deleted == [llmID], "Legacy LLM credential was not deleted exactly once")
+        try check(migrated.active.allSatisfy { $0.kind == .agent }, "Non-agent account entered active set")
+        var rejected = false
+        do {
+            try migrated.upsert(Account(provider: .custom, kind: .llm, name: "Rejected", connection: .file))
+        } catch { rejected = true }
+        try check(rejected, "LLM upsert unexpectedly succeeded")
+
         let io = Controlled<ConnectorResult>()
         let store = MonitorStore(directory: root.appendingPathComponent("quota"), fetch: { _, _ in try await io.run() })
-        var account = Account(provider: .custom, kind: .llm, name: "Fixture", connection: .file)
+        var account = Account(provider: .custom, kind: .agent, name: "Fixture", connection: .file)
         try store.upsert(account)
         store.library.autoRefresh = false
         await store.refreshAll(); await store.refreshDue(); await store.refresh(account.id)

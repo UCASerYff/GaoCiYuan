@@ -44,10 +44,17 @@ import UniformTypeIdentifiers
             do {
                 let savedData = try Data(contentsOf: dataURL)
                 var loaded = try JSONCoding.decoder.decode(Library.self, from: savedData)
+                // V4.13：永久删除旧 LLM API 账户及专属凭据，不创建迁移备份。
+                let migration = LegacyAccountMigration.removingLLMAccounts(from: loaded)
+                loaded = migration.library
+                for id in migration.removedIDs {
+                    KeyVault.delete(id)
+                    alerts.forget(account: id)
+                }
                 // Rewrite a valid legacy library once even when refresh is disabled.
                 // Business validation below must succeed before anything is saved.
                 let savedFields = try JSONSerialization.jsonObject(with: savedData) as? [String: Any]
-                var changed = savedFields?.keys.contains("station") == true
+                var changed = savedFields?.keys.contains("station") == true || !migration.removedIDs.isEmpty
                 for i in 0..<loaded.accounts.count {
                     let a = loaded.accounts[i]
                     if a.kind == .agent {
@@ -94,7 +101,7 @@ import UniformTypeIdentifiers
                     Log.store.error("unknown connection values fell back to agentLocal")
                 }
                 if changed { save() }
-            } catch { library = Library(); loadFailed = true; notice = "数据文件读取失败，原文件已保留，暂时禁止写入。请从备份恢复。\n\(error.localizedDescription)" }
+            } catch { library = Library(); loadFailed = true; notice = "数据文件读取失败，原文件已保留，暂时禁止写入。请检查原文件后再试。\n\(error.localizedDescription)" }
         } else { library = Library() }
     }
     func start() {
@@ -161,7 +168,8 @@ import UniformTypeIdentifiers
         } catch { notice = "保存失败：\(error.localizedDescription)" }
     }
     func upsert(_ account: Account, key: String = "") throws {
-        guard !loadFailed else { throw MonitorError.message("请先恢复可用的数据备份。") }
+        guard !loadFailed else { throw MonitorError.message("数据文件不可写，请检查原文件后再试。") }
+        guard account.kind == .agent else { throw MonitorError.message("搞词元仅记录 Agent 软件。") }
         var copy = library
         var connectionChanged = false
         if let i = copy.accounts.firstIndex(where:{$0.id == account.id}) {
@@ -218,7 +226,7 @@ import UniformTypeIdentifiers
     }
     func refresh(_ id: UUID, userInitiated: Bool = false) async {
         guard !Task.isCancelled, !loadFailed, !suspended, userInitiated || library.autoRefresh,
-              !refreshing.contains(id), let a = library.accounts.first(where: { $0.id == id }), a.enabled else { return }
+              !refreshing.contains(id), let a = library.accounts.first(where: { $0.id == id }), a.kind == .agent, a.enabled else { return }
         if userInitiated { lastUserActions[id] = Date() }
         let revision = revisions[id, default: 0], token = UUID()
         refreshing.insert(id)
@@ -314,7 +322,7 @@ import UniformTypeIdentifiers
     }
     func refreshAll(userInitiated: Bool = false) async {
         guard !suspended, userInitiated || library.autoRefresh else { return }
-        await refreshGroup(library.accounts.filter { $0.enabled }.map(\.id), userInitiated: userInitiated)
+        await refreshGroup(library.accounts.filter { $0.enabled && $0.kind == .agent }.map(\.id), userInitiated: userInitiated)
     }
     func refreshDue() async {
         guard !suspended, library.autoRefresh else { return }
@@ -323,7 +331,7 @@ import UniformTypeIdentifiers
         let ids = Self.dueIDs(accounts: active, fixed: fixed, refreshMinutes: library.refreshMinutes, changes: lastChanges, actions: lastUserActions)
         await refreshGroup(ids, userInitiated: false)
     }
-    var active: [Account] { library.accounts.filter(\.enabled) }
+    var active: [Account] { library.accounts.filter { $0.enabled && $0.kind == .agent } }
     /// 3.2：按「最近一次额度/余额/积分变化时间」倒序（刚消耗的排最上）。
     /// 从未变化的账户用首次观测时间兜底；键相同保持库序（enumerated 显式决胜，不依赖 sorted 稳定性）。
     nonisolated static func recentChangeOrder(_ accounts: [Account]) -> [Account] {
