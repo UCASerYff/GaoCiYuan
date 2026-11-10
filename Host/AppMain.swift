@@ -27,7 +27,7 @@ import Token
     var body: some Scene {
         Window("搞词元 V\(Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "?")",id:"main") {
             TokenModuleView(route:route,routeRevision:revision)
-                .frame(minWidth:1040,minHeight:720)
+                .frame(minWidth:880,minHeight:560)
                 .modifier(WindowToolbarOpaqueBackground())
                 .task { TokenModuleRuntime.start() }
                 .onReceive(NotificationCenter.default.publisher(for:Notification.Name("GaoSeries.dataError"))) { dataError=$0.userInfo?["message"] as? String }
@@ -41,7 +41,7 @@ import Token
                     
                 }
         }
-        .defaultSize(width:1380,height:860)
+        .defaultSize(width:1120,height:720)
         .handlesExternalEvents(matching:["*"])
         .commands {
             CommandGroup(after:.newItem) {  }

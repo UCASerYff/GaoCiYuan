@@ -2,10 +2,26 @@ import SwiftUI
 import AppKit
 
 enum Theme {
-    static let accent = Color(red:0.20,green:0.46,blue:0.73)
-    static let teal = Color(red:0.13,green:0.57,blue:0.47)
-    static let canvas = Color(nsColor:.windowBackgroundColor)
-    static let panel = Color(nsColor:.controlBackgroundColor)
+    static func dynamic(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        }))
+    }
+    static let accent = dynamic(
+        light: NSColor(srgbRed: 0.05, green: 0.43, blue: 0.38, alpha: 1),
+        dark: NSColor(srgbRed: 0.30, green: 0.82, blue: 0.69, alpha: 1))
+    static let teal = dynamic(
+        light: NSColor(srgbRed: 0.08, green: 0.52, blue: 0.43, alpha: 1),
+        dark: NSColor(srgbRed: 0.38, green: 0.86, blue: 0.70, alpha: 1))
+    static let ink = dynamic(
+        light: NSColor(srgbRed: 0.08, green: 0.16, blue: 0.17, alpha: 1),
+        dark: NSColor(srgbRed: 0.88, green: 0.94, blue: 0.92, alpha: 1))
+    static let canvas = dynamic(
+        light: NSColor(srgbRed: 0.955, green: 0.951, blue: 0.925, alpha: 1),
+        dark: NSColor(srgbRed: 0.075, green: 0.105, blue: 0.105, alpha: 1))
+    static let panel = dynamic(
+        light: NSColor(srgbRed: 0.990, green: 0.988, blue: 0.970, alpha: 1),
+        dark: NSColor(srgbRed: 0.105, green: 0.145, blue: 0.140, alpha: 1))
 }
 extension Provider {
     var color: Color {
@@ -57,12 +73,16 @@ struct ProviderMark: View {
     }
 }
 extension View {
-    func panel() -> some View { self.padding(20).background(Theme.panel,in:RoundedRectangle(cornerRadius:14)).overlay(RoundedRectangle(cornerRadius:14).stroke(Color.primary.opacity(0.07))) }
+    func panel() -> some View {
+        self.padding(14)
+            .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.ink.opacity(0.08), lineWidth: 0.7))
+    }
 }
 struct Tag: View {
     var text: String
     var color: Color = .secondary
-    var body: some View { Text(L(text)).font(.system(size:10,weight:.medium)).padding(.horizontal,8).padding(.vertical,4).foregroundStyle(color).background(color.opacity(0.08),in:Capsule()) }
+    var body: some View { Text(L(text)).font(.system(size:10,weight:.medium)).padding(.horizontal,7).padding(.vertical,3).foregroundStyle(color).background(color.opacity(0.09),in:Capsule()) }
 }
 struct StatCard: View {
     let title: String
@@ -71,10 +91,10 @@ struct StatCard: View {
     let symbol: String
     var color: Color = Theme.accent
     var body: some View {
-        VStack(alignment:.leading,spacing:12) {
-            HStack { Text(L(title)).font(.callout).foregroundStyle(.secondary); Spacer(); Image(systemName:symbol).foregroundStyle(color) }
-            Text(L(value)).font(.system(size:28,weight:.semibold,design:.rounded)).monospacedDigit()
-            Text(L(subtitle)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        VStack(alignment:.leading,spacing:8) {
+            HStack { Text(L(title)).font(.caption).foregroundStyle(.secondary); Spacer(); Image(systemName:symbol).foregroundStyle(color) }
+            Text(L(value)).font(.system(size:24,weight:.semibold,design:.rounded)).monospacedDigit().foregroundStyle(Theme.ink)
+            Text(L(subtitle)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
         }.frame(maxWidth:.infinity,alignment:.leading).panel()
     }
 }
