@@ -11,6 +11,8 @@ VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/C
 [[ "$VERSION" == "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT/Info.plist")" ]] || { echo '构建版本与源码版本不一致';exit 1;}
 rm -rf "$STAGE"
 mkdir -p "$STAGE" "$ROOT/dist"
+# 发行目录只保留本次最新 ZIP 与摘要，不保留旧版安装包或备份。
+rm -f "$ROOT/dist"/GaoCiYuan-*.zip(N) "$ROOT/dist"/GaoCiYuan-*.zip.sha256(N)
 trap 'rm -rf "$STAGE"' EXIT
 ditto "$APP" "$RELEASE_APP"
 python3 "$ROOT/scripts/sanitize_bundle.py" "$RELEASE_APP"

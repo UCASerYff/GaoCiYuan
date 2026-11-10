@@ -114,7 +114,7 @@ actor UsageLedger {
         try Self.validateCursorEvents(scan.cursorEvents ?? [])
         if let batch = scan.localUsage {try Self.validateLocalUsage(batch)}
         try withDB { db in
-            guard expectedGeneration.map({$0 == Self.restoreEpoch}) ?? true else {throw UsageLedgerError.invalid("数据已从备份恢复，请重新扫描本机用量。")}
+            guard expectedGeneration.map({$0 == Self.restoreEpoch}) ?? true else {throw UsageLedgerError.invalid("数据目录已变化，请重新扫描本机用量。")}
             try Self.transaction(db) {
                 try Self.writeDevice(db, id: deviceID, name: deviceName, at: scan.capturedAt)
                 let eventClients = Set(scan.localUsage?.clients ?? [])
