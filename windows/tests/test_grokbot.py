@@ -250,25 +250,41 @@ def test_stable_read_discards_torn_file(tmp_path: Path):
     folder.mkdir()
     url = folder / FILE_NAME
     url.write_bytes(CONTRACT.encode())
+    replaced = {"ok": False}
 
     def swap():
         incoming = folder / "incoming.json"
         incoming.write_text(CONTRACT.replace("19.3", "50"), encoding="utf-8")
-        url.unlink()
-        incoming.rename(url)
+        try:
+            os.replace(incoming, url)
+            replaced["ok"] = True
+        except OSError:
+            # Windows 不允许替换仍被打开的文件。原描述符继续读原来的完整内容。
+            incoming.unlink(missing_ok=True)
 
     renamed = FileProvider(url, root=folder, zone=ZONE, after_open=swap)
     stable, rejection, _ = renamed.load(NOW)
-    assert rejection is None and stable.snapshot.weekly_percent_used == 19.3
+    if stable is not None:
+        assert stable.snapshot.weekly_percent_used == 19.3
+    else:
+        assert replaced["ok"] and rejection is Rejection.UNREADABLE
     url.write_bytes(CONTRACT.encode())
+    truncated = {"ok": False}
 
     def truncate():
-        with url.open("r+b") as handle:
-            handle.truncate(0)
+        try:
+            with url.open("r+b") as handle:
+                handle.truncate(0)
+            truncated["ok"] = True
+        except OSError:
+            return
 
     torn = FileProvider(url, root=folder, zone=ZONE, after_open=truncate)
-    _, rejection, _ = torn.load(NOW)
-    assert rejection is Rejection.UNREADABLE
+    torn_reading, rejection, _ = torn.load(NOW)
+    if truncated["ok"]:
+        assert rejection is Rejection.UNREADABLE
+    else:
+        assert torn_reading is not None and torn_reading.snapshot.weekly_percent_used == 19.3
     url.write_bytes(b"")
     _, rejection, detail = FileProvider(url, root=folder, zone=ZONE).load(NOW)
     assert rejection is Rejection.INVALID and detail == "文件为空"
@@ -282,7 +298,7 @@ def test_stable_read_discards_torn_file(tmp_path: Path):
 
 
 def test_permission_denied(tmp_path: Path):
-    if os.geteuid() == 0 or os.name == "nt":
+    if os.name == "nt" or not hasattr(os, "geteuid") or os.geteuid() == 0:
         pytest.skip("permission bits do not block the current user")
     url = tmp_path / FILE_NAME
     url.write_bytes(CONTRACT.encode())
