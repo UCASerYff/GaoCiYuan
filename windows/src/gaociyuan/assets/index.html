@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="gao-token" content="{{TOKEN}}">
+  <title>搞词元</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <span class="seal">词</span>
+        <div>
+          <strong>搞词元</strong>
+          <small id="version">{{VERSION}}</small>
+        </div>
+      </div>
+      <nav>
+        <button data-page="overview" class="active">总览</button>
+        <button data-page="agents">Agent 软件</button>
+        <button data-page="usage">用量分析</button>
+        <button data-page="catalog">平台接入</button>
+        <button data-page="settings">设置</button>
+      </nav>
+    </header>
+    <div id="notice" class="notice hidden"></div>
+    <main id="main"></main>
+  </div>
+  <aside id="rail" class="rail"></aside>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,91 @@
+name: Windows
+
+on:
+  push:
+    paths:
+      - "windows/**"
+      - ".github/workflows/windows.yml"
+  pull_request:
+    paths:
+      - "windows/**"
+      - ".github/workflows/windows.yml"
+
+jobs:
+  package:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test and build executables
+        run: powershell -ExecutionPolicy Bypass -File .\build.ps1
+      - name: Smoke-test the packaged exe
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dest = Join-Path $env:TEMP ("gaociyuan-smoke-" + [guid]::NewGuid().ToString("n"))
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          $port = 18771
+          $exe = Join-Path (Get-Location) "dist\GaoCiYuan.exe"
+          $proc = Start-Process -FilePath $exe -ArgumentList @(
+            "--data-dir", $dest, "--serve", "--no-browser", "--port", "$port"
+          ) -PassThru -WindowStyle Hidden
+          try {
+            $page = $null
+            $deadline = (Get-Date).AddSeconds(90)
+            do {
+              if ($proc.HasExited) { throw "GaoCiYuan.exe exited early with code $($proc.ExitCode)" }
+              try {
+                $response = Invoke-WebRequest -Uri "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 3 -NoProxy
+                if ($response.StatusCode -eq 200) { $page = $response; break }
+              } catch {}
+              Start-Sleep -Seconds 1
+            } while ((Get-Date) -lt $deadline)
+            if (-not $page) { throw "packaged exe did not return HTTP 200" }
+            Start-Sleep -Seconds 3
+            if ($proc.HasExited) { throw "GaoCiYuan.exe did not stay alive" }
+            $token = [regex]::Match($page.Content, 'name="gao-token" content="([^"]+)"').Groups[1].Value
+            if (-not $token) { throw "HTTP 200 page did not include a session token" }
+            $headers = @{ "X-Gao-Token" = $token }
+            Invoke-RestMethod -Method POST -Uri "http://127.0.0.1:$port/api/library/create" -Headers $headers -ContentType "application/json" -Body "{}" -NoProxy | Out-Null
+            $accountBody = '{"provider":"grok","connection":"本机软件自动读取","name":"Grok Bot","secret":"smoke-secret"}'
+            $accountBytes = [System.Text.Encoding]::UTF8.GetBytes($accountBody)
+            $saved = Invoke-RestMethod -Method POST -Uri "http://127.0.0.1:$port/api/accounts/save" -Headers $headers -ContentType "application/json" -Body $accountBytes -NoProxy
+            if (($saved | ConvertTo-Json -Depth 8 -Compress) -match "smoke-secret") {
+              throw "state included the credential"
+            }
+            $id = $saved.result.id
+            $captured = (Get-Date).ToUniversalTime().AddMinutes(-30).ToString("yyyy-MM-ddTHH:mm:ss") + "Z"
+            $reset = (Get-Date).ToUniversalTime().AddDays(2).ToString("yyyy-MM-ddTHH:mm:ss") + "Z"
+            $contract = '{"schema":1,"source":"grok-bot-usage-report","capturedAt":"' + $captured + '","plan":"Premium","weeklyPercentUsed":20,"resetsAt":"' + $reset + '","sharedWithOtherApps":false}'
+            $utf8 = New-Object System.Text.UTF8Encoding $false
+            [System.IO.File]::WriteAllText((Join-Path $dest "grokbot-usage.json"), $contract, $utf8)
+            $read = Invoke-RestMethod -Method POST -Uri "http://127.0.0.1:$port/api/grokbot/read" -Headers $headers -ContentType "application/json" -Body (@{ id = $id } | ConvertTo-Json) -NoProxy
+            $match = $read.state.accounts | Where-Object { $_.id -eq $id }
+            if ($match.ring.label -ne "80%") { throw "grok ring label was $($match.ring.label)" }
+            if ($match.history.Count -ne 0) { throw "grok reading was written into history" }
+            try {
+              Invoke-RestMethod -Method POST -Uri "http://127.0.0.1:$port/api/credentials/delete" -Headers $headers -ContentType "application/json" -Body (@{ id = $id } | ConvertTo-Json) -NoProxy | Out-Null
+            } catch {}
+            Write-Output "smoke ok: exe stayed up, HTTP 200, manual grok snapshot"
+            try {
+              Invoke-RestMethod -Method POST -Uri "http://127.0.0.1:$port/api/shutdown" -Headers $headers -ContentType "application/json" -Body "{}" -NoProxy | Out-Null
+            } catch {}
+            $exitDeadline = (Get-Date).AddSeconds(20)
+            while (-not $proc.HasExited -and (Get-Date) -lt $exitDeadline) { Start-Sleep -Milliseconds 500 }
+            if (-not $proc.HasExited) { throw "GaoCiYuan.exe did not exit after shutdown" }
+          } finally {
+            if (-not $proc.HasExited) { & taskkill.exe /PID $proc.Id /T /F | Out-Null }
+            if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GaoCiYuan-Windows-4.13
+          if-no-files-found: error
+          path: |
+            windows/dist/GaoCiYuan.exe
+            windows/dist/GaoCiYuan-cli.exe
+            windows/dist/GaoCiYuan-Windows-4.13.zip

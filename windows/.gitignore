@@ -1,0 +1,6 @@
+dist/
+build/
+__pycache__/
+.pytest_cache/
+*.spec
+.mypy_cache/
