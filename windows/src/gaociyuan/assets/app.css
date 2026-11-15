@@ -1,0 +1,94 @@
+:root {
+  color-scheme: light;
+  --bg: #f3efe8;
+  --ink: #1d2a2e;
+  --muted: #667277;
+  --card: #fffdf9;
+  --line: #e4ddd2;
+  --teal: #1f8a70;
+  --teal-soft: #e5f4ef;
+  --orange: #d9782d;
+  --iris: #5b57c9;
+  --secondary: #8b8680;
+  --coral: #c4534a;
+  --amber: #d9922b;
+  --deepseek: #2f6fed;
+  --workbuddy: #1f8a70;
+  --shadow: 0 10px 30px rgba(40, 32, 22, 0.08);
+}
+body[data-appearance="dark"] {
+  color-scheme: dark;
+  --bg: #171614;
+  --ink: #f3efe8;
+  --muted: #b4aaa0;
+  --card: #221f1c;
+  --line: #3a342e;
+  --teal: #3dbe9a;
+  --teal-soft: #1c3330;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+}
+button, input, select { font: inherit; color: inherit; }
+.hidden { display: none !important; }
+.app { max-width: 1080px; margin: 0 auto; padding: 18px 22px 40px; }
+.top { display: flex; justify-content: space-between; gap: 16px; align-items: center; min-height: 48px; }
+.brand { display: flex; gap: 10px; align-items: center; }
+.seal {
+  width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center;
+  background: #111; color: #fff; font-weight: 700;
+}
+.brand small { display: block; color: var(--muted); }
+nav { display: flex; gap: 6px; flex-wrap: wrap; }
+nav button, .ghost, .primary {
+  border: 1px solid transparent; background: transparent; border-radius: 999px; padding: 6px 12px; cursor: pointer;
+}
+nav button.active { background: var(--card); border-color: var(--line); }
+.primary { background: var(--teal); color: white; border-color: var(--teal); }
+.ghost { border-color: var(--line); background: var(--card); }
+.notice { margin: 12px 0; padding: 10px 12px; border-radius: 12px; background: #fff4e8; color: #7a4b12; white-space: pre-wrap; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin-top: 14px; }
+.card, .panel { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px; box-shadow: var(--shadow); }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.stat strong { display: block; font-size: 22px; }
+.stat span, .muted { color: var(--muted); font-size: 13px; }
+.toolbar { display: flex; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
+input, select { border: 1px solid var(--line); background: var(--card); border-radius: 10px; padding: 8px 10px; }
+.account-head { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.mark { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--teal-soft); color: var(--teal); font-size: 12px; }
+.ring-wrap { width: 36px; height: 52px; display: flex; flex-direction: column; align-items: center; }
+.ring {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: conic-gradient(var(--arc, var(--teal)) calc(var(--fill) * 1turn), rgba(127,127,127,.18) 0);
+  display: grid; place-items: center;
+}
+.ring span { width: 24px; height: 24px; border-radius: 50%; background: var(--card); display: grid; place-items: center; font-size: 11px; }
+.ring-label { font-size: 10px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.ring.secondary { --arc: var(--secondary); color: var(--secondary); }
+.ring.orange { --arc: var(--orange); }
+.ring.iris { --arc: var(--iris); }
+.ring.coral { --arc: var(--coral); }
+.ring.amber { --arc: var(--amber); }
+.ring.deepseek { --arc: var(--deepseek); }
+.ring.workbuddy { --arc: var(--workbuddy); }
+.ring.teal { --arc: var(--teal); }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.rail {
+  position: fixed; top: 80px; right: 12px; width: 64px; display: flex; flex-direction: column; gap: 8px;
+  background: color-mix(in srgb, var(--card) 92%, transparent); border: 1px solid var(--line);
+  border-radius: 18px; padding: 8px; box-shadow: var(--shadow);
+}
+.rail button { border: 0; background: transparent; padding: 0; cursor: pointer; }
+.page-title { margin: 8px 0 0; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+.form { display: grid; gap: 8px; }
+@media (max-width: 800px) {
+  .stats { grid-template-columns: 1fr 1fr; }
+  .rail { position: static; width: auto; flex-direction: row; margin: 12px 22px; }
+}
