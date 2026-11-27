@@ -50,7 +50,7 @@ jobs:
       - name: Test and build the x64 installer
         run: ./build.ps1 -Iscc $env:GAOCIYUAN_ISCC
       - name: Smoke-test installation and legacy data migration
-        run: ./smoke-installed.ps1 -HeadlessServerOnly
+        run: ./smoke-installed.ps1 -HeadlessServerOnly -Verbose
       - uses: actions/upload-artifact@v4
         with:
           name: GaoCiYuan-Windows-4.13-x64

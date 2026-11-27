@@ -65,55 +65,36 @@ function Read-Json([string]$Path) {
     Get-Content -LiteralPath $Path -Encoding UTF8 -Raw | ConvertFrom-Json
 }
 
-function Get-InstalledFilePath([string]$Path) {
-    if (-not ('GaoCiYuan.Smoke.FilePath' -as [type])) {
-        Add-Type -TypeDefinition @'
-using System.ComponentModel;
-using System.IO;
-using System.Runtime.InteropServices;
-using System.Text;
-using Microsoft.Win32.SafeHandles;
-
-namespace GaoCiYuan.Smoke {
-    public static class FilePath {
-        private const uint VolumeNameNt = 2;
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
-        private static extern uint GetFinalPathNameByHandleW(SafeFileHandle file, StringBuilder path, uint size, uint flags);
-
-        public static string Resolve(string path) {
-            using (var file = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) {
-                var resolved = new StringBuilder(32768);
-                uint length = GetFinalPathNameByHandleW(file, resolved, (uint)resolved.Capacity, VolumeNameNt);
-                if (length == 0) throw new Win32Exception(Marshal.GetLastWin32Error());
-                if (length >= resolved.Capacity) throw new PathTooLongException(path);
-                return resolved.ToString();
-            }
-        }
+function Assert-InstalledShortcut([string]$ShortcutFile, [string]$ExpectedTarget) {
+    Assert-Test (Test-Path -LiteralPath $ShortcutFile -PathType Leaf) "The Start menu shortcut is missing at '$ShortcutFile'."
+    $item = Get-Item -LiteralPath $ShortcutFile
+    Write-Verbose "Start menu shortcut '$($item.FullName)' has $($item.Length) bytes."
+    if (-not ('GaoCiYuan.Smoke.InstalledShellLink' -as [type])) {
+        Add-Type -LiteralPath (Join-Path $PSScriptRoot 'tests\InstalledShellLink.cs')
     }
-}
-'@
-    }
-    return [GaoCiYuan.Smoke.FilePath]::Resolve($Path)
-}
+    Write-Verbose "Windows ANSI code page is $([GaoCiYuan.Smoke.InstalledShellLink]::GetACP())."
 
-function Assert-ShortcutCommand([string]$Target, [string]$Arguments, [string]$ExpectedTarget) {
+    # The Unicode persistence API reads the existing file directly, including its Chinese filename.
+    $link = [GaoCiYuan.Smoke.InstalledShellLink]::Read($item.FullName)
+    $properties = ConvertTo-Json -InputObject $link -Compress
+    Write-Verbose "Read persisted shortcut properties $properties"
     # Only spaces and tabs separate arguments. An explicit empty argument ("") still counts.
-    if ($Arguments -cnotmatch '\A[ \t]*\z') {
-        throw "The Start menu shortcut has unexpected launch arguments $(ConvertTo-Json -InputObject $Arguments -Compress)."
+    if ($link.Arguments -cnotmatch '\A[ \t]*\z') {
+        throw "The Start menu shortcut has unexpected launch arguments. $properties"
     }
-    $diagnostic = "Expected '$ExpectedTarget'. Windows reported '$Target'."
-    Assert-Test ([IO.Path]::IsPathFullyQualified($Target)) "The Start menu shortcut has no absolute target. $diagnostic"
-    try {
-        $actualPath = Get-InstalledFilePath $Target
-        $expectedPath = Get-InstalledFilePath $ExpectedTarget
-    } catch {
-        throw "Could not resolve the Start menu shortcut target. $diagnostic $($_.Exception.Message)"
+    # Every available target representation must resolve to the installed file.
+    $targets = @($link.TargetPath, $link.RawTargetPath, $link.ItemTargetPath | Where-Object { $_ })
+    $diagnostic = "Expected '$ExpectedTarget'. Persisted properties $properties"
+    Assert-Test ($targets.Count -gt 0) "The Start menu shortcut has no file target. $diagnostic"
+    $expectedPath = [GaoCiYuan.Smoke.InstalledShellLink]::ResolveFile($ExpectedTarget)
+    foreach ($target in $targets) {
+        Assert-Test ([IO.Path]::IsPathFullyQualified($target)) "The Start menu shortcut has a non-absolute target. $diagnostic"
+        try { $actualPath = [GaoCiYuan.Smoke.InstalledShellLink]::ResolveFile($target) }
+        catch { throw "Could not resolve the Start menu shortcut target. $diagnostic $($_.Exception.Message)" }
+        Assert-Test ([string]::Equals($actualPath, $expectedPath, [StringComparison]::Ordinal)) (
+            "The Start menu shortcut targets a different file. $diagnostic Resolved to '$actualPath' and '$expectedPath'."
+        )
     }
-    # Normalize drive aliases and 8.3 names. Copies in separate locations retain distinct paths.
-    Assert-Test ([string]::Equals($actualPath, $expectedPath, [StringComparison]::Ordinal)) (
-        "The Start menu shortcut targets a different file. $diagnostic Resolved to '$actualPath' and '$expectedPath'."
-    )
 }
 
 function Assert-X64Pe([string]$Path) {
@@ -302,18 +283,10 @@ try {
     Assert-Test ((Get-RegistryValue $currentUser $view $protocolKey 'URL Protocol') -ceq '') 'The protocol marker is missing.'
     $command = Get-RegistryValue $currentUser $view "$protocolKey\shell\open\command" ''
     Assert-Test ($command -ceq ('"{0}" "%1"' -f $appExe)) 'The deep-link executable and argument must both be quoted.'
-    Assert-Test (Test-Path -LiteralPath $shortcutPaths[0] -PathType Leaf) 'The Start menu shortcut is missing.'
-    $shell = New-Object -ComObject WScript.Shell
-    $link = $null
-    try {
-        $link = $shell.CreateShortcut($shortcutPaths[0])
-        Assert-ShortcutCommand -Target $link.TargetPath -Arguments $link.Arguments -ExpectedTarget $appExe
-    } finally {
-        if ($link) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($link) }
-        [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
-    }
     Assert-X64Pe $appExe
     Assert-X64Pe $cliExe
+    Write-Verbose "Installed AMD64 executable at '$appExe'."
+    Assert-InstalledShortcut -ShortcutFile $shortcutPaths[0] -ExpectedTarget $appExe
     foreach ($path in @($appExe, $cliExe)) {
         Assert-Test ((Get-Item -LiteralPath $path).VersionInfo.FileVersion -eq '4.13.2.0') "Wrong file version for $path."
     }
