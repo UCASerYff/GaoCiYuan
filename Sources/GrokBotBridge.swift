@@ -7,7 +7,7 @@ enum GrokBotBridge {
     }
 
     static func isUsageRoute(_ account: Account) -> Bool {
-        account.provider == .grok && account.kind == .agent && account.connection == .agentLocal
+        account.usesGrokBotQuota
     }
 
     static func fetch(_ account: Account, now: Date = Date(), userInitiated: Bool = false) async throws -> ConnectorResult {

@@ -26,7 +26,6 @@ struct ContentView: View {
     @EnvironmentObject var store: MonitorStore
     @EnvironmentObject var activity: AgentActivityMonitor
     @EnvironmentObject var analytics: UsageAnalyticsStore
-    @Environment(\.openWindow) private var openWindow
     @SceneStorage("selectedPage") private var selectedPage = Page.overview.rawValue
     private var page: Page {
         get { Page(rawValue: selectedPage) ?? .overview }
@@ -37,6 +36,7 @@ struct ContentView: View {
     @State private var delete: Account?
     @State private var expandedNotes = Set<UUID>()
     @State private var scrollTarget: UUID?
+    @State private var forecastSelection: QuotaForecastSelection?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -74,16 +74,10 @@ struct ContentView: View {
                 selectedPage = Page.overview.rawValue
                 scrollTarget = uuid
             }
-            NSApp.activate(ignoringOtherApps: true)
-            if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) ?? NSApp.windows.first(where: { $0.styleMask.contains(.titled) && !($0 is NSPanel) }) {
-                if window.isMiniaturized { window.deminiaturize(nil) }
-                window.makeKeyAndOrderFront(nil)
-            } else {
-                openWindow(id: "main")
-            }
         }
         .sheet(isPresented: $analytics.showSourceSettings) { UsageSourceSettingsView().environmentObject(analytics) }
         .sheet(item: $edit) { AccountEditor(account: $0).environmentObject(store) }
+        .sheet(item: $forecastSelection) { QuotaForecastDetail(selection: $0).environmentObject(store) }
         .alert(L("提示"), isPresented: Binding(get: { store.notice != nil }, set: { if !$0 { store.notice = nil } })) {
             Button(L("知道了")) { store.notice = nil }
         } message: { Text(L(store.notice ?? "")) }
@@ -164,6 +158,11 @@ struct ContentView: View {
                 StatCard(title: "已启用 Agent", value: "\(store.active.count)", subtitle: "\(Set(store.active.map(\.provider)).count) 个软件平台", symbol: "desktopcomputer")
                 StatCard(title: "已接入平台", value: "\(Set(store.library.accounts.map(\.provider)).count)", subtitle: "账户与自动发现合并统计", symbol: "square.stack.3d.up", color: Theme.teal)
                 StatCard(title: "需处理", value: "\(health.needsAction)", subtitle: health.needsAction == 0 ? "当前没有必须处理项" : "低额度、凭据或连续失败", symbol: "exclamationmark.circle", color: health.needsAction > 0 ? .red : Theme.teal)
+            }
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                QuotaForecastOverview(accounts: store.active, hasAccounts: !store.library.accounts.isEmpty, now: context.date) {
+                    forecastSelection = $0
+                }
             }
             if store.library.accounts.isEmpty { onboarding }
             else {
@@ -270,7 +269,7 @@ struct ContentView: View {
             if let s = a.snapshot, !a.errorIsCredential {
                 let rows = a.displayQuotas
                 if !rows.isEmpty {
-                    ForEach(rows) { QuotaRow(quota: $0, stale: a.stale(), threshold: store.library.warningThreshold, burnEstimateText: a.burnEstimate(quotaID: $0.id), showExpiredValue: a.keepsSnapshotOnError) }
+                    ForEach(rows) { QuotaRow(quota: $0, stale: a.stale(), threshold: store.library.warningThreshold, showExpiredValue: a.keepsSnapshotOnError) }
                 } else if !s.quotas.isEmpty {
                     Text(L("上一计费周期已结束，等待平台新读数。")).font(.caption).foregroundStyle(.secondary)
                 } else if s.balances.isEmpty && s.costs.isEmpty && (s.creditBalances ?? []).isEmpty && a.provider != .dsh && a.provider != .workbuddy {
@@ -330,6 +329,11 @@ struct ContentView: View {
             }
             if let status = GrokBotBridge.visibleStatus(a) { Label(L(status), systemImage: "info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
             if let error = a.error { Label(L(error), systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                QuotaForecastAccountEntry(forecast: QuotaForecast.evaluate(account: a, now: context.date)) {
+                    forecastSelection = QuotaForecastSelection(accountID: a.id)
+                }
+            }
             HStack {
                 Button { Task { await store.refresh(a.id, userInitiated: true) } } label: {
                     Label(L(GrokBotBridge.isUsageRoute(a) ? GrokBotUsageReport.manualButtonTitle(refreshing: store.refreshing.contains(a.id)) : (store.refreshing.contains(a.id) ? "同步中…" : "立即同步")), systemImage: "arrow.clockwise")

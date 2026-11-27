@@ -14,6 +14,7 @@ struct AccountEditor: View {
     @State private var copilotBusy = false
     @State private var copilotCode: String?
     @State private var copilotTask: Task<Void, Never>?
+    @State private var draftID = UUID()
     private var isExisting: Bool { store.library.accounts.contains { $0.id == account.id } }
     private var selectableProviders: [Provider] {
         Provider.allCases.filter { isExisting || $0.creationKinds.contains(account.kind) }
@@ -142,7 +143,8 @@ struct AccountEditor: View {
             Text(L(account.provider.note)).font(.caption).foregroundStyle(.secondary)
             if let error { Text(L(error)).font(.callout).foregroundStyle(.red) }
             HStack { Button(L("取消")) { dismiss() }.keyboardShortcut(.cancelAction); Spacer(); Button(L("保存账户")) { save() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }
-        }.padding(26).frame(width:600).onAppear { budget = account.budget.map { String($0) } ?? "" }
+        }.padding(26).frame(width:600).onAppear(perform: trackDraft)
+            .onDisappear { TokenLifecycleWork.shared.forgetDraft(draftID) }
             .onChange(of:account.provider) { _, p in
                 key = ""; testResult = nil; account.scopeID = nil; account.region = nil; account.filePath = ""
                 account.name = account.kind == .agent ? p.defaultAgentName : p.defaultLLMName
@@ -153,6 +155,19 @@ struct AccountEditor: View {
                 account.connection = Connection.available(account.provider,k)[0]
             }
     }
+
+    private func trackDraft() {
+        budget = account.budget.map { String($0) } ?? ""
+        let original = AccountEditorFields(account, budget: budget)
+        let liveAccount = $account
+        let liveBudget = $budget
+        let liveKey = $key
+        TokenLifecycleWork.shared.observeDraft(draftID) {
+            AccountEditorFields(liveAccount.wrappedValue, budget: liveBudget.wrappedValue) != original
+                || !liveKey.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
     @ViewBuilder private var integrationSettings: some View {
         if let integration = account.connection.integration {
             if account.connection == .openCodeQuota {
@@ -183,6 +198,7 @@ struct AccountEditor: View {
     private var scopeBinding: Binding<String> { Binding(get: { account.scopeID ?? "" }, set: { account.scopeID = $0 }) }
     private func regionBinding(_ fallback: String) -> Binding<String> { Binding(get: { account.region ?? fallback }, set: { account.region = $0 }) }
     private func validateDestinationChange() throws {
+        try store.validateCredentialRetry(for: account, key: key)
         guard key.isEmpty, let old = store.library.accounts.first(where: { $0.id == account.id }) else { return }
         if account.connection.needsKey && old.connection != account.connection {
             throw MonitorError.message("切换连接方式后，请填写该连接的凭据。")
@@ -217,6 +233,7 @@ struct AccountEditor: View {
     }
     func copilotLogin() {
         copilotBusy = true; testResult = nil; error = nil
+        let accountID = account.id
         copilotTask = Task {
             do {
                 let prompt = try await GitHubDeviceLogin.start()
@@ -228,8 +245,12 @@ struct AccountEditor: View {
                 }
                 let token = try await GitHubDeviceLogin.awaitToken(prompt)
                 try Task.checkCancellation()
-                try KeyVault.save(token, id: account.id)
-                await MainActor.run { copilotBusy = false; copilotCode = nil; testResult = "GitHub 已登录 ✓ 保存账户后生效。" }
+                await MainActor.run {
+                    copilotBusy = false; copilotCode = nil
+                    guard account.id == accountID, account.connection == .copilot else { return }
+                    key = token
+                    testResult = "GitHub 已登录 ✓ 保存账户后生效。"
+                }
             } catch {
                 await MainActor.run {
                     copilotBusy = false; copilotCode = nil
@@ -269,6 +290,40 @@ struct AccountEditor: View {
             try store.upsert(account,key:key); dismiss()
             if account.enabled { let id = account.id; Task { await store.refresh(id, userInitiated: true) } }
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+private struct AccountEditorFields: Equatable {
+    let provider: Provider
+    let kind: AccountKind
+    let name: String
+    let plan: String
+    let connection: Connection
+    let filePath: String
+    let scopeID: String
+    let region: String?
+    let enabled: Bool
+    let budget: String
+    let currency: String
+    let balanceBasis: String
+    let customConfig: CustomAPIConfig?
+    let showInRail: Bool
+
+    init(_ account: Account, budget: String) {
+        provider = account.provider
+        kind = account.kind
+        name = account.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        plan = account.plan
+        connection = account.connection
+        filePath = account.filePath
+        scopeID = account.scopeID ?? ""
+        region = account.region
+        enabled = account.enabled
+        self.budget = budget
+        currency = account.currency
+        balanceBasis = account.balanceBasis ?? "sinceTopUp"
+        customConfig = account.customConfig
+        showInRail = account.showInRail
     }
 }
 struct SettingsPanel: View {
@@ -401,7 +456,10 @@ struct SettingsPanel: View {
                 Button("导出脱敏网络计量…") {
                     let panel = NSSavePanel(); panel.nameFieldStringValue = "搞词元-网络计量.json"
                     guard panel.runModal() == .OK, let destination = panel.url else { return }
+                    let lifecycle = TokenLifecycleWork.shared
+                    guard let write = lifecycle.beginWrite() else { return }
                     Task {
+                        defer { lifecycle.endWrite(write) }
                         do {
                             let data = try await HTTPDiagnostics.shared.exportedData()
                             try data.write(to:destination,options:.atomic)

@@ -13,6 +13,7 @@ struct UsageSourceSettingsView: View {
     @State private var priceTask: Task<Void, Never>?
     @State private var updatingPrices = false
     @State private var pricingStatus: String?
+    @State private var draftID = UUID()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,14 +44,33 @@ struct UsageSourceSettingsView: View {
             draft = store.preferences
             priceDrafts = draft.engine.modelPrices.map(UsagePriceDraft.init)
             refreshDetectedPaths()
+            trackDraft()
         }
-        .onDisappear { priceTask?.cancel() }
+        .onDisappear {
+            TokenLifecycleWork.shared.forgetDraft(draftID)
+            priceTask?.cancel()
+        }
         .onChange(of: store.errorMessage) { _, value in
             if let value { validationError = value }
         }
         .alert("设置未保存", isPresented: Binding(get: { validationError != nil }, set: { if !$0 { validationError = nil } })) {
             Button("知道了") { validationError = nil }
         } message: { Text(validationError ?? "") }
+    }
+
+    private func trackDraft() {
+        let original = draft
+        let originalPrices = priceDrafts.map(\.editableFields)
+        let liveDraft = $draft
+        let livePrices = $priceDrafts
+        TokenLifecycleWork.shared.observeDraft(draftID) {
+            let current = liveDraft.wrappedValue
+            return current.automaticallyScan != original.automaticallyScan
+                || current.refreshMinutes != original.refreshMinutes
+                || Set(current.engine.enabledClientIDs) != Set(original.engine.enabledClientIDs)
+                || current.engine.customPaths != original.engine.customPaths
+                || livePrices.wrappedValue.map(\.editableFields) != originalPrices
+        }
     }
 
     private var cadenceSection: some View {
@@ -302,6 +322,9 @@ private struct UsagePriceDraft: Identifiable {
     var cacheRead: String
     var cacheWrite: String
     var cacheWrite1h: String
+    var editableFields: [String] {
+        [model, input, output, cacheRead, cacheWrite, cacheWrite1h].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
     static var empty: Self { .init(model: "", input: "", output: "", cacheRead: "", cacheWrite: "", cacheWrite1h: "") }
     init(model: String, input: String, output: String, cacheRead: String, cacheWrite: String, cacheWrite1h: String) {
         self.model = model; self.input = input; self.output = output

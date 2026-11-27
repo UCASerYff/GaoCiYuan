@@ -1,4 +1,6 @@
 import AppKit
+import CryptoKit
+import Darwin
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -16,6 +18,7 @@ import UniformTypeIdentifiers
     let alerts: AlertCenter
     private var timer: Timer?
     private var revisions: [UUID:Int] = [:]
+    private var incompleteCredentialSaves = Set<UUID>()
     private struct RefreshFlight {
         let token: UUID
         let account: Account
@@ -91,6 +94,10 @@ import UniformTypeIdentifiers
                     if loaded.accounts[i].history.count != prevHistoryCount {
                         changed = true
                     }
+                    if let forecast = loaded.accounts[i].quotaForecastHistory,
+                       !forecast.sourceKey.hasPrefix(Self.quotaSourceIdentity(loaded.accounts[i]) + ":") {
+                        loaded.accounts[i].quotaForecastHistory = nil
+                    }
                 }
                 // 旧存档可能带有滑杆范围外的阈值：钳制回 5...50 而不是锁死存档。
                 if !(5...50).contains(loaded.warningThreshold) { loaded.warningThreshold = min(50, max(5, loaded.warningThreshold)); changed = true }
@@ -132,6 +139,17 @@ import UniformTypeIdentifiers
         lhs.provider == rhs.provider && lhs.kind == rhs.kind && lhs.connection == rhs.connection &&
         lhs.filePath == rhs.filePath && lhs.scopeID == rhs.scopeID && lhs.region == rhs.region && lhs.customConfig == rhs.customConfig
     }
+    nonisolated private static func quotaSourceIdentity(_ account: Account) -> String {
+        let customConfig = account.customConfig.map { String(reflecting: $0) }
+        let fields: [String?] = [account.id.uuidString, account.provider.rawValue, account.kind.rawValue,
+                                 account.connection.rawValue, account.filePath, account.scopeID,
+                                 account.region, account.plan, account.currency, customConfig]
+        let key = fields.map { $0.map { "\($0.utf8.count):\($0)" } ?? "-" }.joined(separator: ";")
+        return quotaSourceDigest(key)
+    }
+    nonisolated private static func quotaSourceDigest(_ value: String) -> String {
+        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
     nonisolated private static func requestKey(_ account: Account) -> String {
         // These routes read the single logged-in account on this Mac and accept no
         // per-account credential/scope. Other routes must never share credentials.
@@ -167,57 +185,122 @@ import UniformTypeIdentifiers
             try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:dataURL.path)
         } catch { notice = "保存失败：\(error.localizedDescription)" }
     }
+    private static func fileError(at url: URL) -> NSError {
+        let code = Int(errno)
+        return NSError(domain: NSPOSIXErrorDomain, code: code, userInfo: [NSFilePathErrorKey: url.path])
+    }
+    private func stageAccountSave(_ candidate: Library) throws -> URL {
+        let data = try JSONCoding.encoder.encode(candidate)
+        let directory = dataURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let staged = directory.appendingPathComponent(".library-\(UUID().uuidString).tmp")
+        let fd = staged.path.withCString { Darwin.open($0, O_WRONLY | O_CREAT | O_EXCL, mode_t(0o600)) }
+        guard fd >= 0 else { throw Self.fileError(at: staged) }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        do {
+            try handle.write(contentsOf: data)
+            try handle.close()
+            return staged
+        } catch {
+            try? handle.close()
+            try? FileManager.default.removeItem(at: staged)
+            throw error
+        }
+    }
+    private func invalidateRefresh(for id: UUID) {
+        revisions[id, default: 0] += 1
+        refreshTasks[id]?.task.cancel()
+    }
+    func validateCredentialRetry(for account: Account, key: String) throws {
+        if incompleteCredentialSaves.contains(account.id), account.connection.needsKey,
+           key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw MonitorError.message("上次保存未完成，请重新填写该连接的凭据后保存。")
+        }
+    }
     func upsert(_ account: Account, key: String = "") throws {
         guard !loadFailed else { throw MonitorError.message("数据文件不可写，请检查原文件后再试。") }
         guard account.kind == .agent, account.provider != .custom else { throw MonitorError.message("搞词元仅记录 Agent 软件，不支持 API 账户。") }
+        try validateCredentialRetry(for: account, key: key)
+        let enteredKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
         var copy = library
         var connectionChanged = false
         if let i = copy.accounts.firstIndex(where:{$0.id == account.id}) {
             var edited = account
             let current = copy.accounts[i]
             edited.history = current.history
-            if Self.sameSource(current, edited) && key.isEmpty {
+            let sameSource = Self.sameSource(current, edited)
+            if sameSource && enteredKey.isEmpty {
                 edited.snapshot = current.snapshot; edited.lastAttempt = current.lastAttempt; edited.error = current.error; edited.statusNote = current.statusNote; edited.grokBotManualReading = current.grokBotManualReading
             } else { edited.snapshot = nil; edited.lastAttempt = nil; edited.error = nil; edited.statusNote = nil; edited.grokBotManualReading = nil }
+            edited.quotaForecastHistory = sameSource && current.plan == edited.plan && current.currency == edited.currency && enteredKey.isEmpty
+                ? current.quotaForecastHistory : nil
             connectionChanged = current.connection != edited.connection
             copy.accounts[i] = edited
-        } else { copy.accounts.append(account) }
+        } else {
+            var created = account
+            created.quotaForecastHistory = nil
+            copy.accounts.append(created)
+        }
         try Self.validate(copy)
-        if !key.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty { try KeyVault.save(key.trimmingCharacters(in:.whitespacesAndNewlines),id:account.id) }
+        for i in copy.accounts.indices { copy.accounts[i].history = Array(copy.accounts[i].history.suffix(300)) }
+        let staged = try stageAccountSave(copy)
+        defer { try? FileManager.default.removeItem(at: staged) }
+
+        if !enteredKey.isEmpty { try KeyVault.save(enteredKey,id:account.id) }
         // 切换连接方式且未提供新密钥时，清理旧连接残留的钥匙串条目。
         else if connectionChanged { KeyVault.delete(account.id) }
-        if let current = library.accounts.first(where: { $0.id == account.id }),
-           !Self.sameSource(current, account) || current.enabled != account.enabled || !key.isEmpty {
-            revisions[account.id, default: 0] += 1
-            refreshTasks[account.id]?.task.cancel()
+        let replaced = staged.path.withCString { from in
+            dataURL.path.withCString { to in Darwin.rename(from, to) }
         }
-        library = copy; save()
+        guard replaced == 0 else {
+            let error = Self.fileError(at: dataURL)
+            if !enteredKey.isEmpty || connectionChanged {
+                incompleteCredentialSaves.insert(account.id)
+                invalidateRefresh(for: account.id)
+                if let i = library.accounts.firstIndex(where: { $0.id == account.id }) {
+                    library.accounts[i].quotaForecastHistory = nil
+                }
+                throw MonitorError.message("账户未能保存，凭据可能已更新。请在退出应用前重试保存。\n\(error.localizedDescription)")
+            }
+            throw error
+        }
+        if let current = library.accounts.first(where: { $0.id == account.id }),
+           !Self.sameSource(current, account) || current.enabled != account.enabled || current.plan != account.plan ||
+           current.currency != account.currency || !enteredKey.isEmpty {
+            invalidateRefresh(for: account.id)
+        }
+        incompleteCredentialSaves.remove(account.id)
+        library = copy
     }
     func remove(_ id: UUID) {
         guard !loadFailed else { return }
         // 3.33：移除可自动发现的 agent 账户时记住选择，下次扫描不再自动加回。
         if let account = library.accounts.first(where: { $0.id == id }) { MemberDiscovery.rememberRemoval(account) }
+        incompleteCredentialSaves.remove(id)
         revisions[id,default:0] += 1; library.accounts.removeAll { $0.id == id }; save(); KeyVault.delete(id); alerts.forget(account: id)
     }
-    func updateSnapshot(_ s: UsageSnapshot, for id: UUID) throws {
+    func updateSnapshot(_ s: UsageSnapshot, for id: UUID, forecastOrigin: String? = nil) throws {
         guard !loadFailed else { throw MonitorError.message("存档不可写。") }
         try s.validate()
         guard let i = library.accounts.firstIndex(where:{$0.id == id}) else { return }
-        // 历史幂等：快照值（额度、Token、费用、余额、来源、口径）不变时复用上一条 observedAt，
-        // 不追加历史——比较时排除时间戳。重复读取同一文件/同一页面不产生新观测。
-        if let current = library.accounts[i].snapshot {
-            if current.sameObservation(as: s) {
-                library.accounts[i].error = nil; library.accounts[i].statusNote = nil; library.accounts[i].lastAttempt = Date(); save()
-                return
+        let now = Date()
+        let key = Self.quotaSourceIdentity(library.accounts[i]) + ":" + Self.quotaSourceDigest(forecastOrigin ?? s.source)
+        QuotaForecast.record(account: &library.accounts[i], snapshot: s, sourceKey: key, now: now)
+        // Unchanged measurements keep the existing history and pacing. A newer actual read still refreshes the current timestamp.
+        if let current = library.accounts[i].snapshot, current.sameObservation(as: s) {
+            if s.observedAt > current.observedAt && s.observedAt <= now {
+                library.accounts[i].snapshot?.observedAt = s.observedAt
             }
+            library.accounts[i].error = nil; library.accounts[i].statusNote = nil; library.accounts[i].lastAttempt = now; save()
+            return
         }
         library.accounts[i].history.append(s)
         if library.accounts[i].history.count > 300 { library.accounts[i].history.removeFirst(library.accounts[i].history.count - 300) }
-        lastChanges[id] = Date()
+        lastChanges[id] = now
         // 3.2 排序键：观测值（额度/余额/积分）真变了才更新，持久化随存档走。
-        library.accounts[i].lastQuotaChangedAt = Date()
+        library.accounts[i].lastQuotaChangedAt = now
         library.accounts[i].snapshot = s
-        library.accounts[i].error = nil; library.accounts[i].statusNote = nil; library.accounts[i].lastAttempt = Date(); save()
+        library.accounts[i].error = nil; library.accounts[i].statusNote = nil; library.accounts[i].lastAttempt = now; save()
     }
     // 状态消息（软件运行中/暂未启动/使用中稍后补读等）：只更新状态展示，绝不写入快照与历史。
     func updateStatus(_ message: String, for id: UUID) {
@@ -226,7 +309,8 @@ import UniformTypeIdentifiers
     }
     func refresh(_ id: UUID, userInitiated: Bool = false) async {
         guard !Task.isCancelled, !loadFailed, !suspended, userInitiated || library.autoRefresh,
-              !refreshing.contains(id), let a = library.accounts.first(where: { $0.id == id }), a.kind == .agent, a.provider != .custom, a.enabled else { return }
+              !incompleteCredentialSaves.contains(id), !refreshing.contains(id),
+              let a = library.accounts.first(where: { $0.id == id }), a.kind == .agent, a.provider != .custom, a.enabled else { return }
         if userInitiated { lastUserActions[id] = Date() }
         let revision = revisions[id, default: 0], token = UUID()
         refreshing.insert(id)
@@ -254,16 +338,18 @@ import UniformTypeIdentifiers
                   let current = library.accounts.first(where: { $0.id == id }), current.enabled,
                   Self.sameSource(current, a), userInitiated || library.autoRefresh, !suspended else { return }
             switch result {
-            case .snapshot(let s):
+            case .snapshot(var s):
+                let forecastOrigin = s.source
+                if a.connection == .file { s.source = "快照文件" }
                 let outcome: AlertOutcome
                 // DeepSeek 分母模式：余额接口无百分比，按账户配置注入余额环（基线标记随账户持久化）。
                 if a.connection == .deepseek, let i = library.accounts.firstIndex(where:{$0.id == id}) {
                     var snap = s
                     DeepSeekBasis.apply(account:&library.accounts[i], snapshot:&snap)
-                    try updateSnapshot(snap,for:id)
+                    try updateSnapshot(snap,for:id,forecastOrigin:forecastOrigin)
                     outcome = .reading(snap)
                 } else {
-                    try updateSnapshot(s,for:id)
+                    try updateSnapshot(s,for:id,forecastOrigin:forecastOrigin)
                     outcome = .reading(s)
                 }
                 // 一律传最新账户（快照已落地），不让告警评估抓到抓取前的旧副本。

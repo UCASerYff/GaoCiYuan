@@ -55,6 +55,13 @@ public enum TokenStatusLineBridge {
 
 public enum TokenModuleRuntime {
     @MainActor public static func start() { TokenRuntime.start() }
+
+    public static func page(for url: URL) -> String? {
+        guard url.scheme == "gaociyuan", url.host == "analytics" else { return nil }
+        return Page.analytics.rawValue
+    }
+
+    public static var usesEnglish: Bool { GQNSLanguage.isEnglish }
 }
 
 public struct TokenModuleView: View {
@@ -87,8 +94,8 @@ public struct TokenModuleView: View {
     private func handleRoute() {
         guard routeRevision > handledRevision, let route else { return }
         handledRevision = routeRevision
-        if route.scheme == "gaociyuan", route.host == "analytics" {
-            NotificationCenter.default.post(name: Notification.Name("gaociyuan.presentRequested"), object: nil, userInfo: ["page": Page.analytics.rawValue])
+        if let page = TokenModuleRuntime.page(for: route) {
+            NotificationCenter.default.post(name: Notification.Name("gaociyuan.presentRequested"), object: nil, userInfo: ["page": page])
         }
     }
 }

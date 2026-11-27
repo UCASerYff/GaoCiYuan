@@ -106,7 +106,9 @@ enum Connectors {
             guard !account.filePath.isEmpty else { throw MonitorError.message("请选择快照 JSON 文件。") }
             let url = URL(fileURLWithPath:account.filePath)
             guard let size = try url.resourceValues(forKeys:[.fileSizeKey]).fileSize, size <= 2_000_000 else { throw MonitorError.message("快照文件不能超过 2 MB。") }
-            var s = try JSONCoding.decoder.decode(UsageSnapshot.self, from:Data(contentsOf:url)); try s.validate(); s.source = "快照文件"; return .snapshot(s)
+            let snapshot = try JSONCoding.decoder.decode(UsageSnapshot.self, from:Data(contentsOf:url))
+            try snapshot.validate()
+            return .snapshot(snapshot)
         default:
             // Command Code：粘贴 key 优先，钥匙串无存时回落本机 CLI 保存的登录（不读环境变量）。
             if account.connection == .commandCode {

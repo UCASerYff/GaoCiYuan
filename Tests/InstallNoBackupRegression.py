@@ -55,7 +55,7 @@ elif name=='pluginkit':
             'LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister',
             f'LSREGISTER="{stub / "lsregister"}"'))
         (project / 'scripts/install.sh').chmod(0o700)
-        info = {'CFBundleIdentifier': 'com.gaoseries.GaoCiYuan', 'CFBundleShortVersionString': '4.13', 'CFBundleVersion': '14'}
+        info = {'CFBundleIdentifier': 'com.gaoseries.GaoCiYuan', 'CFBundleShortVersionString': '4.13', 'CFBundleVersion': '15'}
         (project / 'Info.plist').write_bytes(plistlib.dumps(info))
 
         def bundle(path, version, build):
@@ -65,10 +65,10 @@ elif name=='pluginkit':
             (path / 'Contents/MacOS/GaoCiYuan').write_text('Fixture text only; never executable.\n' + version)
             (path / 'Contents/alias').symlink_to('MacOS/GaoCiYuan')
 
-        bundle(target, '4.12', '13')
+        bundle(target, '4.13', '14')
         source = project / 'build.noindex/搞词元.app'
         source.parent.mkdir()
-        bundle(source, '4.13', '14')
+        bundle(source, '4.13', '15')
         env = dict(os.environ, PATH=str(stub) + os.pathsep + os.environ['PATH'], FIXTURE_TARGET=str(target))
 
         def run(arguments=(), **extra):
@@ -76,23 +76,24 @@ elif name=='pluginkit':
                                   env=dict(env, **extra), text=True, capture_output=True)
 
         def version():
-            return plistlib.loads((target / 'Contents/Info.plist').read_bytes())['CFBundleShortVersionString']
+            installed = plistlib.loads((target / 'Contents/Info.plist').read_bytes())
+            return installed['CFBundleShortVersionString'], installed['CFBundleVersion']
 
         return project, target, source, run, version
 
     project, target, source, run, version = case('success')
     result = run()
     check(result.returncode == 0, result.stderr + result.stdout)
-    check(version() == '4.13' and not source.exists(), 'install failed or left expanded build app')
+    check(version() == ('4.13', '15') and not source.exists(), 'same-version upgrade failed or left expanded build app')
     check(not (project / 'rollback.noindex').exists(), 'installer created a rollback backup')
     check(list(project.rglob('*.zip')) == [], 'installer created an application backup ZIP')
     check(list((project / '.install.noindex').iterdir()) == [], 'expanded staging app remained')
     result = run(('--rollback',))
-    check(result.returncode != 0 and version() == '4.13', 'removed rollback route still works')
+    check(result.returncode != 0 and version() == ('4.13', '15'), 'removed rollback route still works')
 
     project, target, source, run, version = case('registration-failure')
     result = run(FIXTURE_REGISTER_FAIL='1')
-    check(result.returncode != 0 and version() == '4.13', 'failure unexpectedly restored or removed the new app')
+    check(result.returncode != 0 and version() == ('4.13', '15'), 'failure unexpectedly restored or removed the new app')
     check(source.exists(), 'failure removed the pending build')
     check(not (project / 'rollback.noindex').exists(), 'failure created a backup')
     check(list((project / '.install.noindex').iterdir()) == [], 'failure leaked staging')
@@ -102,25 +103,25 @@ elif name=='pluginkit':
     extension.mkdir(parents=True)
     (extension / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.gaoseries.GaoCiYuan.widgets'}))
     result = run(FIXTURE_PLUGIN_FAIL='1')
-    check(result.returncode != 0 and version() == '4.12', 'widget failure did not stop before replacement')
+    check(result.returncode != 0 and version() == ('4.13', '14'), 'widget failure did not stop before replacement')
     check(not (project / 'rollback.noindex').exists(), 'widget failure created a backup')
 
     for name, option in [('main-running', 'FIXTURE_RUNNING'), ('process-query-failure', 'FIXTURE_PS_FAIL')]:
         project, target, source, run, version = case(name)
         result = run(**{option: '1'})
-        check(result.returncode != 0 and version() == '4.12', name + ' incorrectly permitted replacement')
+        check(result.returncode != 0 and version() == ('4.13', '14'), name + ' incorrectly permitted replacement')
         check(not (project / 'rollback.noindex').exists(), name + ' mutated backups before preflight')
 
     for name, marker in [('wrong-team', 'bad-team'), ('changed-dr', 'bad-dr')]:
         project, target, source, run, version = case(name)
         (source / marker).write_text('fixture')
         result = run()
-        check(result.returncode != 0 and version() == '4.12', name + ' incorrectly permitted replacement')
+        check(result.returncode != 0 and version() == ('4.13', '14'), name + ' incorrectly permitted replacement')
         check(not (project / 'rollback.noindex').exists(), name + ' created a backup')
 
 with (project_root / 'Info.plist').open('rb') as handle:
     release = plistlib.load(handle)
-check((release['CFBundleShortVersionString'], release['CFBundleVersion']) == ('4.13', '14'), 'release version is not 4.13 / 14')
+check((release['CFBundleShortVersionString'], release['CFBundleVersion']) == ('4.13', '15'), 'release version is not 4.13 / 15')
 for forbidden in ['--rollback', 'rollback.noindex', 'application.zip', 'receipt.json']:
     check(forbidden not in original, 'obsolete installer surface remains: ' + forbidden)
 print('No-backup installer regression passed: isolated install, no rollback/archive/receipt, failure stops without restoration, exact preflight and owned staging cleanup. No real app or user data touched.')

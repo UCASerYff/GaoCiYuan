@@ -13,7 +13,10 @@ enum HTTPPolicyContext {
     @TaskLocal static var userInitiated = false
     @TaskLocal static var trigger = "test"
 }
-enum Log { struct Sink { func error(_ text: String) {} }; static let store = Sink() }
+enum Log {
+    struct Sink { func error(_ text: String) {} }
+    static let store = Sink()
+}
 func L(_ text: String) -> String { text }
 enum KeyVault {
     static var deleted: [UUID] = []
@@ -100,10 +103,101 @@ actor UsageLedger {
         snapshot.periodEnd = Date(); snapshot.periodStart = Date().addingTimeInterval(-60)
         return .snapshot(snapshot)
     }
+    @MainActor static func checkQuotaForecast(in directory: URL) async throws {
+        let io = Controlled<ConnectorResult>()
+        let store = MonitorStore(directory: directory, fetch: { _, _ in try await io.run() })
+        var account = Account(provider: .openai, kind: .agent, name: "Forecast fixture", connection: .file)
+        try store.upsert(account)
+        let now = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+        let reset = now.addingTimeInterval(3_600)
+        func quotaReading(_ age: TimeInterval, _ used: Double, source: String = "private exporter fixture") -> ConnectorResult {
+            var snapshot = UsageSnapshot.empty(source: source)
+            snapshot.observedAt = now.addingTimeInterval(-age)
+            snapshot.quotas = [.init(id: "5h", title: "5 小时", usedPercent: used, resetsAt: reset, windowSeconds: 18_000)]
+            return .snapshot(snapshot)
+        }
+        @MainActor func deliver(_ result: ConnectorResult) async throws {
+            let ticket = io.calls + 1
+            let id = account.id
+            let refresh = Task { await store.refresh(id, userInitiated: true) }
+            try await until { io.calls == ticket }
+            io.finish(result, ticket: ticket)
+            await refresh.value
+        }
+
+        try await deliver(quotaReading(2_700, 15))
+        try await deliver(quotaReading(1_500, 35))
+        let lastChanged = store.library.accounts[0].lastQuotaChangedAt
+        try await deliver(quotaReading(300, 35))
+        account = store.library.accounts[0]
+        try check(account.history.count == 2 && account.lastQuotaChangedAt == lastChanged,
+                  "Flat quota read changed regular change history or pacing")
+        try check(account.snapshot?.observedAt == now.addingTimeInterval(-300) && account.quotaForecastHistory?.observations.count == 3,
+                  "Flat quota read did not supply a newer forecast anchor")
+        try check(account.snapshot?.source == "快照文件", "Private exporter source escaped into display")
+        let originalKey = account.quotaForecastHistory?.sourceKey
+        account.name = "Renamed forecast fixture"
+        try store.upsert(account)
+        let savedJSON = try String(contentsOf: store.dataURL, encoding: .utf8)
+        try check(!savedJSON.contains("private exporter fixture"), "Private exporter source persisted as plaintext")
+        let reloaded = MonitorStore(directory: directory, fetch: { _, _ in throw MonitorError.message("Unexpected fetch") })
+        try check(reloaded.library.accounts.first?.quotaForecastHistory == account.quotaForecastHistory,
+                  "Forecast evidence failed to survive rename and reload")
+
+        try await deliver(quotaReading(240, 35, source: "second exporter fixture"))
+        account = store.library.accounts[0]
+        try check(account.quotaForecastHistory?.observations.count == 1 && account.quotaForecastHistory?.sourceKey != originalKey,
+                  "Changing exporter origin mixed quota readings")
+        let id = account.id
+        let changed = Task { await store.refresh(id, userInitiated: true) }
+        try await until { io.calls == 5 }
+        account.plan = "Changed plan"
+        try store.upsert(account)
+        await changed.value
+        io.finish(quotaReading(180, 50, source: "second exporter fixture"))
+        try await until { io.active == 0 }
+        try check(store.library.accounts[0].quotaForecastHistory == nil && store.library.accounts[0].history.count == 2,
+                  "Prior configuration delivered evidence after the account edit")
+        store.stop()
+    }
+
+    @MainActor static func checkFailedAccountSave(in directory: URL) async throws {
+        var fetchCalls = 0
+        let store = MonitorStore(directory: directory, fetch: { _, _ in
+            fetchCalls += 1
+            return reading(10)
+        })
+        var account = Account(provider: .copilot, kind: .agent, name: "Saved fixture", connection: .copilot)
+        try store.upsert(account)
+        try FileManager.default.removeItem(at: store.dataURL)
+        try FileManager.default.createDirectory(at: store.dataURL, withIntermediateDirectories: false)
+        account.name = "Uncommitted fixture draft"
+        var failed = false
+        do { try store.upsert(account) } catch { failed = true }
+        try check(failed && store.library.accounts[0].name == "Saved fixture", "Failed disk replacement published or reported a successful account save")
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        try check(!files.contains(where: { $0.hasPrefix(".library-") }), "Failed disk replacement left its stage behind")
+
+        failed = false
+        do { try store.upsert(account, key: "fixture input") } catch { failed = true }
+        try check(failed, "Fixture expected failed disk replacement after credential mutation")
+        await store.refresh(account.id, userInitiated: true)
+        try check(fetchCalls == 0, "Refresh reused the previous config after a partial credential save")
+        failed = false
+        do { try store.validateCredentialRetry(for: account, key: "") } catch { failed = true }
+        try check(failed, "Editor could test a partial credential save without explicit credentials")
+        try FileManager.default.removeItem(at: store.dataURL)
+        try store.upsert(account, key: "fixture input")
+        await store.refresh(account.id, userInitiated: true)
+        try check(fetchCalls == 1, "Successful credential retry did not restore refresh")
+    }
+
     @MainActor static func main() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("RefreshSchedulingRegression-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        try await checkQuotaForecast(in: root.appendingPathComponent("forecast"))
+        try await checkFailedAccountSave(in: root.appendingPathComponent("failed-save"))
         let agentID = UUID(), llmID = UUID(), customAPIID = UUID()
         var legacy = Library()
         legacy.accounts = [
@@ -258,6 +352,6 @@ actor UsageLedger {
         for _ in 0..<30 { await Task.yield() }
         try check(historyIO.calls == 3, "History settings queued an unauthorized reindex")
         history.stop(); store.stop()
-        print("Refresh scheduling regression passed: disabled startup/due gates, manual override, single-flight, source/disable/delete cancellation, stale-result rejection, shared waiters, service/global concurrency, non-cooperative cancellation slot retention, automatic history cancellation and no hidden settings reindex. No HTTP, credentials, app launch or smoke test.")
+        print("Refresh scheduling regression passed: quota evidence provenance and persistence, failed account save, disabled startup/due gates, manual override, single-flight, source/disable/delete cancellation, stale-result rejection, shared waiters, service/global concurrency, non-cooperative cancellation slot retention, automatic history cancellation and no hidden settings reindex. No HTTP, credentials, app launch or smoke test.")
     }
 }

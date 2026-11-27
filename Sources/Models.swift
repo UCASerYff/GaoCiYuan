@@ -431,7 +431,7 @@ struct Quota: Codable, Identifiable, Equatable {
     /// 余额类窗口的分母是本机观测或自填数字，永远不许标它。旧快照无此键，解码默认 false。
     var exhausted: Bool = false
     /// 窗口长度（秒）：连接器确知才填（官方常量或响应时间戳量出），不知道就是 nil。
-    /// 没有它的窗不做 burn-rate 估算——猜出来的窗长比没有估算更误导。旧快照无此键，解码为 nil。
+    /// 明确的重置时间可区分观测周期，窗长已知时还会校验读数是否属于这一周期。
     var windowSeconds: Double? = nil
     var remaining: Double { max(0, min(100, 100 - usedPercent)) }
     func expired(at now: Date = Date()) -> Bool { resetsAt.map { $0 <= now } ?? false }
@@ -496,7 +496,7 @@ struct UsageSnapshot: Codable, Equatable {
     }
     static func empty(source: String = "自动同步") -> UsageSnapshot { .init(observedAt: Date(), source: source, quotas: [], costs: [], balances: []) }
     /// 观测值相等比较：排除 observedAt 与统计期时间戳（periodEnd 随刷新时间滚动），用于历史幂等
-    /// （额度/Token/费用/余额/来源/口径不变时不追加历史、不刷新观测时间）。
+    /// 额度、用量和来源不变时不追加变更历史，确有新读数时可推进当前观测时间。
     func sameObservation(as other: UsageSnapshot) -> Bool {
         source == other.source && quotas == other.quotas && inputTokens == other.inputTokens && outputTokens == other.outputTokens
             && costs == other.costs && balances == other.balances && creditBalances == other.creditBalances && note == other.note
@@ -590,9 +590,11 @@ struct Account: Codable, Identifiable {
     var autoDiscovered: Bool = false
     /// Last successful Grok Bot avatar read; legacy file archives remain decodable. Not history.
     var grokBotManualReading: GrokBotUsageReport.ManualReading? = nil
+    /// Source-verified percentage observations, separate from the quota change history.
+    var quotaForecastHistory: QuotaForecastHistory? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, provider, kind, name, plan, connection, filePath, scopeID, region, enabled, budget, currency, snapshot, lastAttempt, error, statusNote, balanceBasis, baselines, history, lastQuotaChangedAt, customConfig, showInRail, autoDiscovered, grokBotManualReading
+        case id, provider, kind, name, plan, connection, filePath, scopeID, region, enabled, budget, currency, snapshot, lastAttempt, error, statusNote, balanceBasis, baselines, history, lastQuotaChangedAt, customConfig, showInRail, autoDiscovered, grokBotManualReading, quotaForecastHistory
     }
 
     init(id: UUID = UUID(), provider: Provider, kind: AccountKind, name: String, plan: String = "", connection: Connection, filePath: String = "", scopeID: String? = nil, region: String? = nil, enabled: Bool = true, budget: Double? = nil, currency: String = "USD", snapshot: UsageSnapshot? = nil, lastAttempt: Date? = nil, error: String? = nil, statusNote: String? = nil, history: [UsageSnapshot] = []) {
@@ -641,9 +643,14 @@ struct Account: Codable, Identifiable {
         showInRail = try container.decodeIfPresent(Bool.self, forKey: .showInRail) ?? true
         autoDiscovered = try container.decodeIfPresent(Bool.self, forKey: .autoDiscovered) ?? false
         grokBotManualReading = try container.decodeIfPresent(GrokBotUsageReport.ManualReading.self, forKey: .grokBotManualReading)
+        if var evidence = try? container.decode(QuotaForecastHistory.self, forKey: .quotaForecastHistory) {
+            evidence.observations = Array(evidence.observations.suffix(QuotaForecast.maxObservations))
+            quotaForecastHistory = evidence
+        }
     }
 
     var dashboard: String { kind == .agent ? provider.memberURL : provider.apiURL }
+    var usesGrokBotQuota: Bool { provider == .grok && kind == .agent && connection == .agentLocal }
     func stale(at date: Date = Date()) -> Bool { snapshot.map { date.timeIntervalSince($0.observedAt) > 900 } ?? true }
     /// 3.31/3.32 失败兜底（Antigravity、Codex）：读取报错（服务未启动/网络失败/端口未响应）时
     /// 保留最后一次成功快照的额度窗，已过期窗口也照常展示——陈旧由 stale() 的灰环/灰字/「历史数据」标签表达，
@@ -665,34 +672,6 @@ struct Account: Codable, Identifiable {
     var errorIsCredential: Bool {
         guard let error else { return false }
         return ["密钥无效", "登录已过期", "登录态已过期", "凭证已被拒绝", "凭据失效", "会话已过期", "缺少会话项"].contains { error.contains($0) }
-    }
-    /// 3D 文案粗取整：分钟 5 粒度、小时 0.5 粒度、天整天。只有结论时长，没有速率数字。
-    static func burnDurationText(_ seconds: TimeInterval) -> String {
-        if seconds < 3600 { return "\(max(5, Int((seconds / 300).rounded()) * 5)) 分钟后" }
-        if seconds < 86400 {
-            let hours = (seconds / 1800).rounded() / 2
-            return "\(hours == hours.rounded(.down) ? String(Int(hours)) : String(hours)) 小时后"
-        }
-        return "\(max(1, Int((seconds / 86400).rounded()))) 天后"
-    }
-    /// 3D burn-rate（改 V1.8 E1 的滑动窗口最小二乘，参考 pulse-分析报告第 7 节）。
-    /// 窗口期累计速率 = 已用份额 ÷ 已逝份额：已逝 <3% 不显示（开局噪声），撑得到重置不显示，
-    /// ETA 超 2 小时不显示。余额类窗口（无重置时间）不受 2 小时限制：用观测跨度的端点累计速率
-    /// （首点为基线零点），超 730 天不显示。不知道窗长的窗不估算。结果永远标注（估算）。
-    func burnEstimate(quotaID: String, now: Date = Date()) -> String? {
-        guard !stale(at: now) else { return nil }
-        guard let q = snapshot?.quotas.first(where: { $0.id == quotaID }) else { return nil }
-        if let reset = q.resetsAt, let ws = q.windowSeconds, ws > 0 {
-            let elapsed = now.timeIntervalSince(reset.addingTimeInterval(-ws)) / ws
-            guard (0.03...1).contains(elapsed) else { return nil }
-            let used = q.usedPercent / 100
-            guard used > 0 else { return nil }
-            let remaining = (1 - used) / (used / elapsed) * ws
-            guard remaining > 0, now.addingTimeInterval(remaining) < reset, remaining <= 7200 else { return nil }
-            return "按当前速率约 \(Self.burnDurationText(remaining))耗尽（估算）"
-        }
-        // Unknown reset semantics cannot support a defensible depletion forecast.
-        return nil
     }
     // 语义迁入 AlertRules.attention（阶段 3A）：横幅与系统通知共用同一评估入口，此处仅为兼容转发。
     func warnings(threshold: Double, at date: Date = Date()) -> [String] {
@@ -771,6 +750,7 @@ enum AppInfo {
         return "0.0.0"
     }
     static var build: String {
+        if let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String, !b.isEmpty { return b }
         if let b = TokenBundle.bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String { return b }
         let parts = version.split(separator: ".").compactMap { Int($0) }
         return parts.count >= 2 ? "\(parts[0] * 10 + parts[1])" : ""

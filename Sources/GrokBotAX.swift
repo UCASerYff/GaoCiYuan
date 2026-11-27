@@ -125,7 +125,7 @@ enum GrokBotAX {
               let reference, CFGetTypeID(reference) == AXValueGetTypeID() else { return nil }
         var point = CGPoint.zero
         guard AXValueGetValue(reference as! AXValue, .cgPoint, &point) else { return nil }
-        return (point.x, point.y)
+        return (x: Double(point.x), y: Double(point.y))
     }
 
     private static func height(_ element: AXUIElement) -> Double {
@@ -134,7 +134,7 @@ enum GrokBotAX {
               let reference, CFGetTypeID(reference) == AXValueGetTypeID() else { return 0 }
         var size = CGSize.zero
         guard AXValueGetValue(reference as! AXValue, .cgSize, &size) else { return 0 }
-        return size.height
+        return Double(size.height)
     }
 
     private static func accountButton(_ axApp: AXUIElement) -> AXUIElement? {

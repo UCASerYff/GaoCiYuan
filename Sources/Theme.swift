@@ -170,7 +170,6 @@ struct QuotaRow: View {
     let quota: Quota
     var stale = false
     var threshold: Double = 20
-    var burnEstimateText: String? = nil
     /// 3.31：Antigravity 失败兜底模式——窗口已过期也显示最后一次成功读数的百分比，
     /// 不再换成「待刷新」；陈旧观感仍由 stale 灰与「历史数据」标签表达。
     var showExpiredValue = false
@@ -190,9 +189,6 @@ struct QuotaRow: View {
                 Spacer()
                 if stale { Text(L("历史数据")).foregroundStyle(.orange) }
             }.font(.system(size:10)).foregroundStyle(.tertiary)
-            if let estimate = burnEstimateText {
-                Text(L(estimate)).font(.system(size:10)).foregroundStyle(.secondary)
-            }
         }
         // 陈旧快照视觉降级：整行降饱和，与实时数据拉开视觉权重
         .saturation(stale ? 0.4 : 1)

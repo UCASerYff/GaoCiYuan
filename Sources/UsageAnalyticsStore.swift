@@ -156,6 +156,9 @@ struct UsageAnalyticsPreferences: Codable {
                 }
                 try Task.checkCancellation()
                 guard version == revision else { return }
+                let lifecycle = TokenLifecycleWork.shared
+                guard let write = lifecycle.beginWrite() else { return }
+                defer { lifecycle.endWrite(write) }
                 try await ledger.ingest(scan, expectedGeneration: generation)
                 try Task.checkCancellation()
                 guard version == revision else { return }
@@ -236,7 +239,10 @@ struct UsageAnalyticsPreferences: Codable {
         panel.nameFieldStringValue = "搞词元-用量-\(UsageRange.day(.now)).\(format == .json ? "json" : "csv")"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let from = selectedRange.fromDay
+        let lifecycle = TokenLifecycleWork.shared
+        guard let write = lifecycle.beginWrite() else { return }
         Task {
+            defer { lifecycle.endWrite(write) }
             do {
                 if format == .json { try await ledger.export(to: url) }
                 else { try await ledger.exportCSV(to: url, fromDay: from, throughDay: UsageRange.day(.now)) }
@@ -247,7 +253,10 @@ struct UsageAnalyticsPreferences: Codable {
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.json]
         panel.message = "选择另一台设备导出的搞词元用量 JSON；相同设备与会话重复导入不会重复累计。"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        let lifecycle = TokenLifecycleWork.shared
+        guard let write = lifecycle.beginWrite() else { return }
         Task {
+            defer { lifecycle.endWrite(write) }
             do { try await ledger.importFile(url); reload() }
             catch { errorMessage = "合并失败，现有记录保持不变：" + error.localizedDescription }
         }
