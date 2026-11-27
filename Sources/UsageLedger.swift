@@ -217,7 +217,7 @@ actor UsageLedger {
         try literal("{\"format\":4,\"exportedAt\":")
         try write(encoder.encode(Date()))
         try literal(",\"devices\":[")
-        try withDB { db in
+        try withDB { (db: OpaquePointer) throws -> Void in
             let devices=try Self.devices(db)
             guard devices.count <= 64 else {throw UsageLedgerError.invalid("设备数量超出单个用量包上限，请分批导出。")}
             for (index,device) in devices.enumerated() {
@@ -239,7 +239,7 @@ actor UsageLedger {
                 }
                 try literal("]")
                 if let local = try Self.readLocalUsage(db, deviceID:device.id) {
-                    records += local.events.count + local.coverageDays.count + local.coverageSessions.count + (local.baselineDays?.count ?? 0) + (local.baselineSessions?.count ?? 0) + (local.retainedUnknownEventIDs?.count ?? 0)
+                    records += Self.localUsageRecordCount(local)
                     guard records <= 200_000 else {throw UsageLedgerError.invalid("用量 JSON 超过 20 万条，请缩小用量 JSON 的时间或记录范围后重试。")}
                     try literal(",\"localUsage\":"); try write(encoder.encode(local))
                 }
@@ -289,8 +289,11 @@ actor UsageLedger {
         let data=try handle.read(upToCount:64 * 1_024 * 1_024 + 1) ?? Data()
         guard data.count <= 64 * 1_024 * 1_024 else {throw UsageLedgerError.invalid("用量 JSON 超过 64 MB。")}
         let archive = try decoder.decode(UsageLedgerArchive.self, from:data)
-        guard [1,2,3,4].contains(archive.format), archive.devices.count <= 64, Set(archive.devices.map(\.id)).count == archive.devices.count,
-              archive.devices.reduce(0, { $0 + $1.days.count + $1.sessions.count + ($1.cursorEvents?.count ?? 0) + ($1.localUsage?.events.count ?? 0) + ($1.localUsage?.coverageDays.count ?? 0) + ($1.localUsage?.coverageSessions.count ?? 0) + ($1.localUsage?.baselineDays?.count ?? 0) + ($1.localUsage?.baselineSessions?.count ?? 0) + ($1.localUsage?.retainedUnknownEventIDs?.count ?? 0) }) <= 200_000 else { throw UsageLedgerError.invalid("用量包格式、设备或记录数量无效。") }
+        guard (1...4).contains(archive.format), archive.devices.count <= 64,
+              Set(archive.devices.map(\.id)).count == archive.devices.count,
+              Self.archiveRecordCount(archive.devices) <= 200_000 else {
+            throw UsageLedgerError.invalid("用量包格式、设备或记录数量无效。")
+        }
         guard archive.format >= 4 || archive.devices.allSatisfy({$0.localUsage?.retainedUnknownEventIDs == nil}) else {throw UsageLedgerError.invalid("用量包的模型保留标记与格式不符，请使用新版应用重新导出。已有历史保持不变。")}
         for device in archive.devices {
             try Self.validateDevice(id: device.id, name: device.name)
@@ -305,7 +308,7 @@ actor UsageLedger {
         }
         // Own-device round trips are safe: the same high-water keys are idempotent and can
         // only restore observations; imported samples never trigger game rewards.
-        try withDB { db in
+        try withDB { (db: OpaquePointer) throws -> Void in
             try Self.transaction(db) {
                 for device in archive.devices {
                     try Self.writeDevice(db, id: device.id, name: device.id == deviceID ? deviceName : device.name, at: Date())
@@ -320,15 +323,42 @@ actor UsageLedger {
                         existing.baselineSessions=device.sessions.filter {existing.clients.contains($0.client)}
                         local=existing
                     }
-                    let managed = Set(local?.clients ?? [])
-                    try Self.writeRows(db, deviceID: device.id, days: device.days.filter { $0.client != "cursor" && !managed.contains($0.client) }, sessions: device.sessions.filter { $0.client != "cursor" && !managed.contains($0.client) })
+                    let managed: Set<String> = Set(local?.clients ?? [])
+                    let days: [UsageDayRow] = device.days.filter { $0.client != "cursor" && !managed.contains($0.client) }
+                    let sessions: [UsageSessionRow] = device.sessions.filter { $0.client != "cursor" && !managed.contains($0.client) }
+                    try Self.writeRows(db, deviceID: device.id, days: days, sessions: sessions)
                     if let local {try Self.writeLocalUsage(db, deviceID:device.id, batch:local, importing:true)}
                     try Self.writeCursorEvents(db, events: device.cursorEvents ?? [], at: Date(), importing: true)
                 }
                 try Self.validateDatabaseTotals(db)
             }
         }
-        return .init(deviceCount: archive.devices.count, dayCount: archive.devices.reduce(0) { $0 + $1.days.count }, sessionCount: archive.devices.reduce(0) { $0 + $1.sessions.count })
+        let dayCount: Int = archive.devices.reduce(0) { $0 + $1.days.count }
+        let sessionCount: Int = archive.devices.reduce(0) { $0 + $1.sessions.count }
+        return UsageLedgerImportResult(deviceCount: archive.devices.count, dayCount: dayCount, sessionCount: sessionCount)
+    }
+
+    private static func archiveRecordCount(_ devices: [UsageLedgerArchive.Device]) -> Int {
+        var count: Int = 0
+        for device in devices {
+            count += device.days.count
+            count += device.sessions.count
+            count += device.cursorEvents?.count ?? 0
+            if let local = device.localUsage {
+                count += localUsageRecordCount(local)
+            }
+        }
+        return count
+    }
+
+    private static func localUsageRecordCount(_ batch: LocalUsageBatch) -> Int {
+        var count: Int = batch.events.count
+        count += batch.coverageDays.count
+        count += batch.coverageSessions.count
+        count += batch.baselineDays?.count ?? 0
+        count += batch.baselineSessions?.count ?? 0
+        count += batch.retainedUnknownEventIDs?.count ?? 0
+        return count
     }
 
     private func validateExportDestination(_ url: URL) throws {
