@@ -65,6 +65,57 @@ function Read-Json([string]$Path) {
     Get-Content -LiteralPath $Path -Encoding UTF8 -Raw | ConvertFrom-Json
 }
 
+function Get-InstalledFilePath([string]$Path) {
+    if (-not ('GaoCiYuan.Smoke.FilePath' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+
+namespace GaoCiYuan.Smoke {
+    public static class FilePath {
+        private const uint VolumeNameNt = 2;
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+        private static extern uint GetFinalPathNameByHandleW(SafeFileHandle file, StringBuilder path, uint size, uint flags);
+
+        public static string Resolve(string path) {
+            using (var file = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) {
+                var resolved = new StringBuilder(32768);
+                uint length = GetFinalPathNameByHandleW(file, resolved, (uint)resolved.Capacity, VolumeNameNt);
+                if (length == 0) throw new Win32Exception(Marshal.GetLastWin32Error());
+                if (length >= resolved.Capacity) throw new PathTooLongException(path);
+                return resolved.ToString();
+            }
+        }
+    }
+}
+'@
+    }
+    return [GaoCiYuan.Smoke.FilePath]::Resolve($Path)
+}
+
+function Assert-ShortcutCommand([string]$Target, [string]$Arguments, [string]$ExpectedTarget) {
+    # Only spaces and tabs separate arguments. An explicit empty argument ("") still counts.
+    if ($Arguments -cnotmatch '\A[ \t]*\z') {
+        throw "The Start menu shortcut has unexpected launch arguments $(ConvertTo-Json -InputObject $Arguments -Compress)."
+    }
+    $diagnostic = "Expected '$ExpectedTarget'. Windows reported '$Target'."
+    Assert-Test ([IO.Path]::IsPathFullyQualified($Target)) "The Start menu shortcut has no absolute target. $diagnostic"
+    try {
+        $actualPath = Get-InstalledFilePath $Target
+        $expectedPath = Get-InstalledFilePath $ExpectedTarget
+    } catch {
+        throw "Could not resolve the Start menu shortcut target. $diagnostic $($_.Exception.Message)"
+    }
+    # Normalize drive aliases and 8.3 names. Copies in separate locations retain distinct paths.
+    Assert-Test ([string]::Equals($actualPath, $expectedPath, [StringComparison]::Ordinal)) (
+        "The Start menu shortcut targets a different file. $diagnostic Resolved to '$actualPath' and '$expectedPath'."
+    )
+}
+
 function Assert-X64Pe([string]$Path) {
     $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($Path))
     try {
@@ -256,7 +307,7 @@ try {
     $link = $null
     try {
         $link = $shell.CreateShortcut($shortcutPaths[0])
-        Assert-Test ($link.TargetPath -eq $appExe -and -not $link.Arguments) 'The Start menu shortcut target or arguments are incorrect.'
+        Assert-ShortcutCommand -Target $link.TargetPath -Arguments $link.Arguments -ExpectedTarget $appExe
     } finally {
         if ($link) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($link) }
         [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
