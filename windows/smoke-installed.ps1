@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$InstallerPath = (Join-Path $PSScriptRoot 'dist\GaoCiYuan-Windows-4.13-build3-x64-Setup.exe'),
+    [string]$InstallerPath = (Join-Path $PSScriptRoot 'dist\GaoCiYuan-Windows-4.13-build4-x64-Setup.exe'),
     [string]$PreviousInstallerPath,
     [switch]$HeadlessServerOnly,
     [switch]$KeepArtifacts
@@ -9,8 +9,8 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$expectedVersion = '4.13+3'
-$expectedFileVersion = '4.13.3.0'
+$expectedVersion = '4.13+4'
+$expectedFileVersion = '4.13.4.0'
 $productName = ConvertFrom-Json '"\u641e\u8bcd\u5143"'
 $fileConnection = ConvertFrom-Json '"\u81ea\u52a8\u8bfb\u53d6\u5feb\u7167\u6587\u4ef6"'
 $localConnection = ConvertFrom-Json '"\u672c\u673a\u8f6f\u4ef6\u81ea\u52a8\u8bfb\u53d6"'
@@ -198,7 +198,7 @@ Assert-Test ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [R
     'Run the release smoke on a native Windows x64 host.'
 )
 $installerPath = Confirm-Installer $InstallerPath $expectedFileVersion
-$previousInstaller = if ($PreviousInstallerPath) { Confirm-Installer $PreviousInstallerPath '4.13.2.0' }
+$previousInstaller = if ($PreviousInstallerPath) { Confirm-Installer $PreviousInstallerPath '4.13.3.0' }
 
 $normalInstall = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'Programs\GaoSeries\GaoCiYuan'
 $shortcutPaths = @(
@@ -292,7 +292,7 @@ try {
         Invoke-QuietProcess $previousInstaller ($installerArguments + ('/LOG="{0}"' -f $previousInstallLog)) 55000
         Assert-Test ((Get-RegistrationPath) -eq $installDir) 'The previous installer registered the wrong location.'
         $previousState = & $cliExe --data-dir $dataDir --inspect
-        Assert-Test ($LASTEXITCODE -eq 0 -and $previousState -ccontains 'version=4.13+2' -and
+        Assert-Test ($LASTEXITCODE -eq 0 -and $previousState -ccontains 'version=4.13+3' -and
             $previousState -ccontains 'status=ready' -and $previousState -ccontains 'accounts=2') 'The previous build did not open the isolated library.'
         foreach ($file in @($libraryFile, $alertsFile, $settingsFile, $keptCredential, $grokFile)) {
             $upgradeHashes[$file] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
@@ -317,6 +317,8 @@ try {
     }
     $cliVersion = & $cliExe --version
     Assert-Test ($LASTEXITCODE -eq 0 -and "$cliVersion".Trim() -ceq $expectedVersion) 'The installed CLI version is incorrect.'
+    $cliHelp = & $cliExe --data-dir $dataDir
+    Assert-Test ($LASTEXITCODE -eq 0 -and "$cliHelp" -match 'usage:') 'The CLI did not return command help on its own.'
 
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     $listener.Start()
@@ -338,8 +340,8 @@ try {
             if ($token.Success) {
                 $sessionHeader = @{ 'X-Gao-Token' = $token.Groups[1].Value }
                 $native = Invoke-AppApi '/api/native'
-                if ($HeadlessServerOnly) { $isReady = -not $native.desktop }
-                else { $isReady = $native.desktop -and $native.ready -and $native.cliPath -eq $cliExe }
+                if ($HeadlessServerOnly) { $isReady = -not $native.desktop -and -not $native.trayRegistered }
+                else { $isReady = $native.desktop -and $native.ready -and $native.cliPath -eq $cliExe -and -not $native.trayRegistered }
             }
         } catch { Write-Verbose 'Waiting for the isolated GaoCiYuan host.' }
         if (-not $isReady) { Start-Sleep -Milliseconds 250 }
@@ -412,7 +414,7 @@ try {
     $completed = $true
     $surface = if ($HeadlessServerOnly) { 'loopback server' } else { 'hidden main and floating WebView2' }
     Write-Output "Installed smoke passed for $expectedVersion ($surface). Installer, native and CLI PE files are AMD64."
-    if ($previousInstaller) { Write-Output 'In-place upgrade from 4.13+2 and unchanged user data verified.' }
+    if ($previousInstaller) { Write-Output 'In-place upgrade from 4.13+3 and unchanged user data verified.' }
 } finally {
     if (-not $completed) {
         try { Stop-SmokeApp } catch { Write-Warning $_.Exception.Message }

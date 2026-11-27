@@ -537,15 +537,17 @@ document.addEventListener("change", async (event) => {
   const file = event.target.files[0];
   event.target.value = "";
   if (!file) return;
-  usageMessage = "";
-  try {
-    if (file.size > 64 * 1024 * 1024) throw new Error(tr("文件过大。"));
-    await api("/api/usage/import", JSON.parse(await file.text()));
-    usageMessage = "导入完成";
-  } catch (error) {
-    usageMessage = error.message;
-  }
-  await loadUsage();
+  await trackOperation(async () => {
+    usageMessage = "";
+    try {
+      if (file.size > 64 * 1024 * 1024) throw new Error(tr("文件过大。"));
+      await api("/api/usage/import", JSON.parse(await file.text()));
+      usageMessage = "导入完成";
+    } catch (error) {
+      usageMessage = error.message;
+    }
+    await loadUsage();
+  });
 });
 
 function usageSettingsSection(title, glyph, controls, body) {
@@ -588,7 +590,12 @@ function drawUsageSettings() {
         <footer class="dialog-foot">${button("取消", "close-dialog")}<p id="sources-error" class="red caption" role="alert">${t(draft.error || "")}</p><button type="submit" class="primary"${draft.error ? " disabled" : ""}>${t("保存设置")}</button></footer>
     </form>`, "source-dialog");
   dialog.querySelector(".dialog-body").scrollTop = scroll;
-  dialog.querySelector("form").addEventListener("submit", saveUsageSettings);
+  const form = dialog.querySelector("form");
+  dialogDraftIsDirty = () => usageDraft.initialSignature !== usageSettingsSignature(draft)
+    || Boolean(form.elements.sourcePath?.value.trim());
+  form.addEventListener("submit", (event) => {
+    void trackOperation(() => saveUsageSettings(event));
+  });
 }
 
 function sourceCount() {
@@ -614,6 +621,29 @@ function sourceOptions() {
 
 const priceFields = [["model", "模型"], ["inputPerMillion", "输入"], ["outputPerMillion", "输出"], ["cacheReadPerMillion", "缓存读取"], ["cacheWritePerMillion", "缓存写入"], ["cacheWrite1hPerMillion", "1 小时缓存写入"]];
 
+function usageSettingsPayload(draft) {
+  return {
+    automaticallyScan: draft.automaticallyScan,
+    refreshMinutes: draft.refreshMinutes,
+    engine: draft.engine,
+    automaticExportPath: draft.automaticExportPath?.trim() || null,
+  };
+}
+
+function usageSettingsSignature(draft) {
+  const settings = usageSettingsPayload(draft);
+  const { enabledClientIDs, customPaths, modelPrices } = settings.engine;
+  return JSON.stringify({
+    ...settings,
+    engine: {
+      enabledClientIDs: [...enabledClientIDs].sort(),
+      customPaths: Object.keys(customPaths).sort().filter((key) => customPaths[key].length)
+        .map((key) => [key, [...customPaths[key]].sort()]),
+      modelPrices: (modelPrices || []).map((row) => priceFields.map(([key]) => row[key] ?? null)),
+    },
+  });
+}
+
 function priceEditor(item, index) {
   return `<div class="price-row" data-price-row="${index}">${priceFields.map(([name, label]) => `<label><span class="caption muted">${t(label)}</span>
     <input name="${name}" value="${text(item[name])}" ${name === "model" ? 'type="text" required' : 'type="number" min="0" step="any"'}></label>`).join("")}${button("移除", "remove-price", { value: index })}</div>`;
@@ -625,12 +655,7 @@ async function saveUsageSettings(event) {
   if (target) target.disabled = true;
   const { draft } = usageDraft;
   try {
-    const result = await api("/api/usage/settings", {
-      automaticallyScan: draft.automaticallyScan,
-      refreshMinutes: draft.refreshMinutes,
-      engine: draft.engine,
-      automaticExportPath: draft.automaticExportPath?.trim() || null,
-    });
+    const result = await api("/api/usage/settings", usageSettingsPayload(draft));
     usageSources = result.result?.sources ? result.result : await api("/api/usage/settings");
     closeDialog();
     if (page === "catalog" && catalogTab === "sources") refreshCatalogContent();
@@ -664,7 +689,8 @@ action("usage-settings", async (button) => {
     usageSources = draft;
     const client = draft.sources.find((item) => item.id === "codex" && item.supportsCustomPaths)
       || draft.sources.find((item) => item.supportsCustomPaths && item.supported !== false);
-    usageDraft = { draft: structuredClone(draft), clientID: client?.id, search: "", showUnsupported: false };
+    usageDraft = { draft: structuredClone(draft), initialSignature: usageSettingsSignature(draft),
+      clientID: client?.id, search: "", showUnsupported: false };
     drawUsageSettings();
   } finally {
     button.disabled = false;

@@ -60,7 +60,7 @@ $pyInstallerArgs = @(
 )
 & $Python @pyInstallerArgs --name GaoCiYuan --windowed launch.py
 Check-Exit 'Desktop package'
-& $Python @pyInstallerArgs --name GaoCiYuan-cli --console launch.py
+& $Python @pyInstallerArgs --name GaoCiYuan-cli --console launch_cli.py
 Check-Exit 'CLI package'
 
 & $compiler "/DAppVersion=$version" "/DAppBuild=$build" "/DStageDir=$stage" "/DOutputDir=$distDir" "/DAppIcon=$icon" "/DBootstrapper=$bootstrapper" 'installer.iss'

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
 from pathlib import Path
 
 from gaociyuan.credentials import open_credential_store
@@ -18,7 +19,7 @@ from gaociyuan.version import VERSION_LABEL
 from gaociyuan.web import serve
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, console: bool = False) -> int:
     parser = argparse.ArgumentParser(prog="GaoCiYuan", description="搞词元 Windows 版")
     parser.add_argument("--version", action="store_true")
     parser.add_argument("--data-dir", default=None)
@@ -34,6 +35,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.version:
         print(VERSION_LABEL)
+        return 0
+    if console and not any((args.serve, args.no_browser, args.create_empty, args.inspect,
+                            args.capture_claude_status, args.desktop_hidden)):
+        parser.print_help()
         return 0
     directory = (default_data_dir() if not args.data_dir else Path(args.data_dir)).resolve()
     if args.capture_claude_status:
@@ -51,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
         fragment = deep_link(args.link) if args.link else app_fragment()
     except ValueError:
         parser.error('无效的搞词元深链。')
-    desktop = os.name == 'nt' and (args.desktop_hidden or not (args.serve or args.no_browser))
+    desktop = os.name == 'nt' and (args.desktop_hidden or not (console or args.serve or args.no_browser))
     instance = None
     try:
         if desktop and not (args.create_empty or args.inspect):
@@ -59,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
 
             instance = Instance(directory)
             if not instance.primary:
-                instance.activate(fragment)
+                instance.activate(fragment if args.link else '')
                 return 0
         credentials = open_credential_store(directory, system_store=not args.data_dir)
         store = TokenStore(directory, credentials=credentials)
@@ -85,16 +90,20 @@ def main(argv: list[str] | None = None) -> int:
                 if not runtime_available():
                     raise AppError('需要 Microsoft Edge WebView2 运行时。请再运行搞词元安装程序以安装运行时。')
                 if discovery.enabled:
-                    import threading
+                    def discover_on_startup():
+                        with server.work() as admitted:
+                            if admitted:
+                                server.discover()
 
-                    threading.Thread(target=server.discover, name='gaociyuan-discovery', daemon=True).start()
+                    threading.Thread(target=discover_on_startup, name='gaociyuan-discovery', daemon=True).start()
                 Desktop(server, instance, fragment, args.desktop_hidden).start()
             else:
                 server.shutdown_requested.wait()
         finally:
-            server.shutdown_requested.set()
+            server.request_shutdown()
             server.shutdown()
             server.server_close()
+            server.drain_work()
     except (AppError, OSError) as exc:
         message = getattr(exc, 'message', '无法启动搞词元。请检查资料目录与运行环境。')
         if desktop and not args.desktop_hidden and not (args.inspect or args.create_empty):

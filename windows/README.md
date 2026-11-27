@@ -1,10 +1,11 @@
 # 搞词元 Windows 4.13
 
-Windows 10（2004 及更新版本）和 Windows 11 的 x64 当前用户安装包。正式版本为 **4.13**，Windows 构建号为 **3**。从 Release 下载 `GaoCiYuan-Windows-4.13-build3-x64-Setup.exe` 和同名 `.sha256`，核对 SHA-256 后运行安装程序。已有 4.13+2 时，退出应用并沿用原安装目录升级。安装程序创建开始菜单入口，注册 `gaociyuan://analytics`，并在缺少 WebView2 时调用 Microsoft 签名的引导程序。卸载移除程序、快捷方式和协议注册，保留用户资料和凭据。此 Windows 发布包目前没有 Authenticode 签名。
+Windows 10（2004 及更新版本）和 Windows 11 的 x64 当前用户安装包。正式版本为 **4.13**，Windows 构建号为 **4**。从 Release 下载 `GaoCiYuan-Windows-4.13-build4-x64-Setup.exe` 和同名 `.sha256`，核对 SHA-256 后运行安装程序。已有 Windows 版时，从通知区域退出应用，再沿用原安装目录升级。安装程序创建开始菜单入口，注册 `gaociyuan://analytics`，并在缺少 WebView2 时调用 Microsoft 签名的引导程序。卸载移除程序、快捷方式和协议注册，保留用户资料和凭据。此 Windows 发布包目前没有 Authenticode 签名。
 
 ## 使用
 
-- 从开始菜单打开「搞词元」。通过左侧导航切换总览、Agent 软件、用量分析、平台接入和设置。较窄窗口会收起导航文字，并将并排内容改为上下排列。关闭主窗口后可从 Windows 通知区域重新打开，也可在通知区域退出。
+- 从开始菜单打开「搞词元」。通过左侧导航切换总览、Agent 软件、用量分析、平台接入和设置。较窄窗口会收起导航文字，并将并排内容改为上下排列。
+- 关闭主窗口后，搞词元留在 Windows 通知区域，图标也可能位于「显示隐藏的图标」中。点图标或选「打开搞词元」可继续操作。选「退出搞词元」时，已提交的操作会完成后再退出，有未保存修改时可取消并返回。若 Windows 无法注册通知区域图标，关闭主窗口会走同一个退出流程。
 - 总览集中呈现剩余额度、下次重置、数据来源和需要处理的账户。Agent 软件页可在列表中快速选中账户，再在详情中核对额度、连接和读数。平台接入按可直接读额度、手动读取和其他连接路径组织。
 - 桌面悬浮窗在紧凑视图中显示额度和余额，展开后可查看来源、重置时间和过期状态。可拖到左、右或顶部停靠，也可松开为浮动位置。点额度环打开总览中的对应账户。支持单双列、跟随指针所在显示器、检测到全屏窗口时隐藏以及浅深色外观。
 - 可设置额度档位、余额下限、额度用尽、窗口重置及连续同步失败通知。Windows 原生通知受系统通知开关和勿扰设置控制。
@@ -46,6 +47,8 @@ py -3.12 -m venv .build-venv
 ./smoke-installed.ps1
 ```
 
-安装冒烟使用单独资料目录与合成凭据。已有正式 Windows 安装时，冒烟脚本会停止。在干净的 Windows 测试环境可传入 `-PreviousInstallerPath <4.13+2 安装包路径>`，按顺序安装两个构建并验证资料。可额外用 `python launch.py --serve --no-browser --data-dir <隔离目录> --no-refresh` 运行只监听本机的测试入口。已构建 CLI 与 Edge 可通过 `node tests/visual-smoke.mjs <CLI 路径> 4.13+3 <截图目录>` 验证代表性页面与高 DPI 布局。
+安装冒烟使用单独资料目录与合成凭据。已有正式 Windows 安装时，冒烟脚本会停止。在干净的 Windows 测试环境可传入 `-PreviousInstallerPath <4.13+3 安装包路径>`，按顺序安装两个构建并验证资料。直接运行 `GaoCiYuan-cli.exe` 会显示命令帮助。可用 `python launch.py --serve --no-browser --data-dir <隔离目录> --no-refresh` 运行只监听本机的测试入口。已构建 CLI 与 Edge 可通过 `node tests/visual-smoke.mjs <CLI 路径> 4.13+4 <截图目录>` 验证代表性页面与高 DPI 布局。
+
+可用 PowerShell 7 运行 `./tests/smoke-tray.ps1 -Executable <已安装程序路径> -ExpectedFileVersion 4.13.4.0`，在独立 Windows 桌面与合成资料中验证托盘和退出行为。加 `-ProbeExplorer` 可在当前桌面用隐藏测试窗口核验 Windows Shell 的图标注册和删除。
 
 v4.13 Windows 的附带差异包括原生窗口边框、字体与部分图标、部分平台提示的英文译文，以及悬浮窗视觉效果。Mac 专属的 WidgetKit、Dock/菜单栏集成、CLI 活跃指示点和网络诊断导出未迁移。安装、卸载、更新签名和核心交互在隔离资料下验收；未使用实际 Agent 订阅账户或 macOS 真机。

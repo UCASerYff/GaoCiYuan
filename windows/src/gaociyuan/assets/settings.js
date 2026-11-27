@@ -31,7 +31,7 @@ Object.assign(supplementalTranslations, {
   "版本": "Version",
   "时区": "Time zone",
   "连续同步失败达到 3 次时提醒。": "Notify after three consecutive sync failures.",
-  "总览和浮动条按剩余额度变色。系统通知的额度告警按已用百分比触发。关闭应用后停止自动同步，手动账户由你发起刷新。": "Remaining quota sets the overview and panel color. System alerts use the percentage already used. Automatic sync stops when the app closes. Manual accounts refresh on request.",
+  "总览和浮动条按剩余额度变色，系统通知按已用百分比触发。关闭主窗口后应用留在通知区域，退出应用后停止自动同步。手动账户由你发起刷新。": "Remaining quota sets overview and panel colors. System alerts use the percentage already used. The app stays in the notification area when you close the main window, and automatic sync stops when you quit. Manual accounts refresh on request.",
   "空闲时收成屏幕边缘的细条，悬停展开。": "The panel collapses to a narrow strip when idle and expands on hover.",
   "在 Codex 账户设置中可为该连接指定 Codex CLI。": "Choose a Codex CLI executable in the Codex account settings.",
   "在 Claude Code 账户选择状态栏推送连接，并按账户设置中的说明配置官方状态栏命令。": "Choose the status line connection in your Claude Code account and use its setup instructions.",
@@ -54,6 +54,7 @@ Object.assign(supplementalTranslations, {
 });
 
 let settingsQueue = Promise.resolve();
+let settingsBaseline = null;
 let updateResult = null;
 let updateMessage = "";
 let updateFile = null;
@@ -91,7 +92,7 @@ function moduleSettings() {
       settings.refreshFixedInterval ? settingsSelect("refreshMinutes", "同步间隔", interval.map((minutes) => [minutes, countText(minutes, "分钟", "min")]), library.refreshMinutes)
         : settingsDescription("同步频率由账户活动与平台规则决定。"),
       settingsField("剩余额度提醒阈值", `<span class="slider-field"><input name="warningThreshold" type="range" min="5" max="50" step="5" value="${text(library.warningThreshold ?? 20)}"><output>${number(library.warningThreshold ?? 20)}%</output></span>`),
-      settingsDescription("总览和浮动条按剩余额度变色。系统通知的额度告警按已用百分比触发。关闭应用后停止自动同步，手动账户由你发起刷新。"),
+      settingsDescription("总览和浮动条按剩余额度变色，系统通知按已用百分比触发。关闭主窗口后应用留在通知区域，退出应用后停止自动同步。手动账户由你发起刷新。"),
     ].join(""))}
     ${settingsPanel("屏幕边缘浮动条", "window", [
       switchInput("panelFloating", "显示浮动条", settings.panelFloating !== false),
@@ -184,7 +185,11 @@ function openSettings(tab = settingsTab, preserveScroll = false) {
     <footer class="dialog-foot"><p id="settings-status" class="caption muted" role="status"></p>${button("完成", "close-dialog", { classes: "primary" })}</footer>`, "settings-dialog");
   dialog.querySelector(".dialog-body").scrollTop = scroll;
   if (openDetails) dialog.querySelector('[data-settings-details="rail"]')?.setAttribute("open", "");
-  dialog.querySelector("form")?.addEventListener("submit", (event) => event.preventDefault());
+  const form = dialog.querySelector("form");
+  const baseline = new Map(editableControls(form).map((control) => [control, controlDraftValue(control)]));
+  settingsBaseline = baseline;
+  dialogDraftIsDirty = () => [...baseline].some(([control, value]) => controlDraftValue(control) !== value);
+  form.addEventListener("submit", (event) => event.preventDefault());
   if (tab === "data" && !preserveScroll) void syncUpdateState();
 }
 
@@ -204,6 +209,8 @@ async function syncUpdateState() {
 }
 function writeSettings(target) {
   const name = target.name;
+  const submittedValue = controlDraftValue(target);
+  const baseline = settingsBaseline;
   let value = target.value.trim();
   if (target.type === "checkbox") value = target.checked;
   else if (["notifyLowBalance", "notifyThreshold", "warningThreshold", "refreshMinutes"].includes(name)) value = Number(value);
@@ -213,13 +220,15 @@ function writeSettings(target) {
     pending.classList.remove("red");
     pending.textContent = tr("正在保存…");
   }
-  return settingsQueue = settingsQueue.catch(() => {}).then(async () => {
+  const previous = settingsQueue;
+  settingsQueue = trackOperation(() => previous.catch(() => {}).then(async () => {
     if (name === "rail-account") {
       const account = accounts().find((item) => item.id === target.dataset.account);
       if (account) await api("/api/accounts/save", { ...publicAccount(account), showInRail: value });
     } else {
       await api("/api/settings", { [name]: value });
     }
+    baseline?.set(target, submittedValue);
     if (["appearance", "language"].includes(name)) render();
     if (dialog.open && dialog.classList.contains("settings-dialog")
       && ["language", "refreshFixedInterval", "panelFloating"].includes(name)) {
@@ -231,7 +240,8 @@ function writeSettings(target) {
       status.classList.remove("red");
       status.textContent = tr("设置已保存");
     }
-  });
+  }));
+  return settingsQueue;
 }
 
 document.addEventListener("input", (event) => {

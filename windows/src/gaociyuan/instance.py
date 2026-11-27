@@ -49,6 +49,8 @@ class Instance:
             return None
         try:
             value = json.loads(pending.read_text(encoding='utf-8'))
+            if value == '':
+                return ''
             if not isinstance(value, str) or not value.startswith('#'):
                 return None
             page, _, query = value[1:].partition('?')

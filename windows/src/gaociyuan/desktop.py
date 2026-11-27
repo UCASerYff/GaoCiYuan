@@ -15,6 +15,7 @@ import webview
 from PIL import Image, ImageDraw
 from pystray import Menu, MenuItem
 from pystray._win32 import Icon
+from pystray._util import win32 as tray_win32
 
 from gaociyuan.errors import AppError
 from gaociyuan.resources import brand_dir
@@ -36,12 +37,69 @@ class MONITORINFO(ctypes.Structure):
 class DesktopTray(Icon):
     def __init__(self, desktop, image, menu):
         self.desktop = desktop
+        self.registered = False
+        self._stop_requested = threading.Event()
+        self._worker = None
         super().__init__(APP_ID, icon=image, title=APP_NAME, menu=menu)
+
+    def start(self):
+        self._worker = threading.Thread(target=self._run_tray, name='gaociyuan-tray')
+        self._worker.start()
+
+    def _run_tray(self):
+        try:
+            super()._run()
+        finally:
+            self._running = False
+            self.registered = False
+
+    def _mark_ready(self):
+        # The host owns the message-loop thread, without pystray's separate setup thread.
+        self._running = True
+        self.update_menu()
+        if self._stop_requested.is_set():
+            self._stop()
+        else:
+            self.visible = True
+
+    def stop(self):
+        if self._worker is None:
+            return
+        self._stop_requested.set()
+        if self._running:
+            if self._menu_hwnd:
+                tray_win32.PostMessage(self._menu_hwnd, 0x001F, 0, 0)  # WM_CANCELMODE
+            self._stop()
+        self._worker.join()
+        self._worker = None
+        self._release_icon()
+
+    def _message(self, code, flags, **fields):
+        data = tray_win32.NOTIFYICONDATAW(
+            cbSize=ctypes.sizeof(tray_win32.NOTIFYICONDATAW), hWnd=self._hwnd,
+            hID=id(self), uFlags=flags, **fields,
+        )
+        return bool(tray_win32.Shell_NotifyIcon(code, data))
+
+    def _show(self):
+        self._assert_icon_handle()
+        flags = tray_win32.NIF_MESSAGE | tray_win32.NIF_ICON | tray_win32.NIF_TIP
+        fields = {'uCallbackMessage': tray_win32.WM_NOTIFY, 'hIcon': self._icon_handle, 'szTip': self.title}
+        self.registered = (self._message(tray_win32.NIM_ADD, flags, **fields)
+                           or self._message(tray_win32.NIM_MODIFY, flags, **fields))
+
+    def _hide(self):
+        try:
+            super()._hide()
+        finally:
+            self.registered = False
 
     def _on_notify(self, wparam, lparam):
         if lparam == 0x405:  # NIN_BALLOONUSERCLICK
             self.desktop.open_main(self.desktop.notification_route)
         else:
+            if lparam == tray_win32.WM_RBUTTONUP:
+                self.update_menu()
             super()._on_notify(wparam, lparam)
 
 
@@ -54,7 +112,9 @@ class Desktop:
         self.exiting = False
         self.ready = False
         self.panel_ready = False
-        self.tray_ready = False
+        self._close_requested = threading.Event()
+        self._quit_requested = threading.Event()
+        self._quit_confirmed = False
         self.panel_visible = False
         self.notification_route = '#overview'
         self._requested_size = (74, 106, 0, 0)
@@ -76,6 +136,7 @@ class Desktop:
         self.user32.SetWindowPos.argtypes = (HWND, HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, UINT)
         self.user32.GetWindowRect.argtypes = (HWND, ctypes.POINTER(RECT))
         self.user32.GetDpiForWindow.argtypes = (HWND,)
+        self.user32.MessageBoxW.argtypes = (HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, UINT)
         try:
             self.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # Per-monitor v2
         except AttributeError:
@@ -106,7 +167,7 @@ class Desktop:
             MenuItem('悬浮窗', self.toggle_panel, checked=lambda _: bool(self.store.settings['panelFloating'])),
             MenuItem('设置', lambda: self.open_main('#settings')),
             Menu.SEPARATOR,
-            MenuItem('退出搞词元', self.server.shutdown_requested.set),
+            MenuItem('退出搞词元', self.request_quit),
         ))
         self.store.notify = self.notify
         server.native = self
@@ -140,31 +201,43 @@ class Desktop:
         try:
             webview.start(self._run, gui='edgechromium', private_mode=False, storage_path=str(profile))
         finally:
-            if self.tray_ready:
-                self.tray.stop()
+            self.tray.stop()
             if self.mutex:
                 ctypes.windll.kernel32.CloseHandle(self.mutex)
 
     def _run(self) -> None:
-        if not self.hidden:
-            self.tray.run_detached(setup=self._show_tray)
-        while not self.server.shutdown_requested.wait(.25):
-            fragment = self.instance.read_route()
-            if fragment:
-                self.open_main(fragment)
-            if self.ready:
-                self._update_titlebar()
-            if self.panel_ready:
-                self._sync_panel()
-            if self.tray_ready:
-                self._tray_status()
-        self.exiting = True
-        self.panel.destroy()
-        self.main.destroy()
-
-    def _show_tray(self, icon) -> None:
-        icon.visible = True
-        self.tray_ready = True
+        try:
+            if not self.hidden:
+                self.tray.start()
+            while not self.server.shutdown_requested.wait(.25):
+                if self._close_requested.is_set():
+                    self._close_requested.clear()
+                    if self.tray.registered:
+                        self.main.hide()
+                    else:
+                        self.request_quit()
+                fragment = self.instance.read_route()
+                if fragment is not None:
+                    self.open_main(fragment or None)
+                if self._quit_requested.is_set() and self._quit_if_ready():
+                    break
+                if self.ready:
+                    self._update_titlebar()
+                if self.panel_ready:
+                    self._sync_panel()
+                if self.tray.registered:
+                    self._tray_status()
+        finally:
+            self.exiting = True
+            self.server.request_shutdown()
+            self.server.drain_work()
+            try:
+                self.tray.stop()
+            finally:
+                try:
+                    self.panel.destroy()
+                finally:
+                    self.main.destroy()
 
     def _main_loaded(self) -> None:
         self.ready = True
@@ -183,19 +256,39 @@ class Desktop:
     def _close_main(self):
         if self.exiting:
             return True
-        if not self.tray_ready:
-            self.server.shutdown_requested.set()
-            return False
-        # Closing this view keeps the requested tray refreshes and quota rail running.
-        threading.Thread(target=self.main.hide, daemon=True).start()
+        self._close_requested.set()
         return False
+
+    def request_quit(self) -> None:
+        self._quit_requested.set()
+
+    def _quit_if_ready(self) -> bool:
+        state = self.main.run_js('window.gaociyuanExitState?.()') if self.ready else None
+        if isinstance(state, dict) and state.get('pending'):
+            return False
+        if not self._quit_confirmed and (not isinstance(state, dict) or state.get('dirty')):
+            self.open_main()
+            message = ('还有未保存的修改。确定退出会放弃这些修改。选择「取消」可继续编辑或保存。' if isinstance(state, dict)
+                       else '当前窗口的编辑状态无法确认。确定退出搞词元吗？')
+            confirmed = self.user32.MessageBoxW(HWND(self.handle(self.main)), message, f'退出{APP_NAME}', 0x131) == 1
+            if not confirmed:
+                self._quit_requested.clear()
+                return False
+            self._quit_confirmed = True
+            # Focusing the confirmation can accept an autosave in the editor.
+            state = self.main.run_js('window.gaociyuanExitState?.()') if self.ready else None
+            if isinstance(state, dict) and state.get('pending'):
+                return False
+        self.server.request_shutdown()
+        return True
 
     def open_main(self, fragment: str | None = None) -> None:
         if self.exiting:
             return
         if fragment:
             if self.ready:
-                self.main.run_js(f'window.location.hash = {json.dumps(fragment)}')
+                destination = json.dumps(fragment)
+                self.main.run_js(f'window.gaociyuanPresent ? window.gaociyuanPresent({destination}) : (location.hash = {destination})')
             else:
                 self.main.load_url(self.server.url + fragment)
         if self.hidden:
@@ -215,14 +308,14 @@ class Desktop:
         return result[0] if result else None
 
     def notify(self, account: dict, message: str) -> None:
-        if not self.tray_ready:
+        if not self.tray.registered or self.exiting:
             return
         try:
             self.notification_route = app_fragment('overview', account['id'])
         except ValueError:
             self.notification_route = '#overview'
         try:
-            self.tray.notify(message[:255], f'{APP_NAME} · {account["name"]}'[:63])
+            self.tray.notify(utf16_prefix(message, 255), utf16_prefix(f'{APP_NAME} · {account["name"]}', 63))
         except OSError:
             pass
 
@@ -241,12 +334,13 @@ class Desktop:
         self.tray.icon = image
 
     def toggle_panel(self) -> None:
-        with self.server.lock:
+        with self.server.work() as accepted, self.server.lock:
+            if not accepted:
+                return
             try:
                 self.store.update_settings({'panelFloating': not self.store.settings['panelFloating']})
             except AppError:
                 return
-        self.tray.update_menu()
 
     def _update_titlebar(self) -> None:
         dark = self.dark
@@ -382,6 +476,10 @@ class PanelBridge:
 
     def drag_end(self):
         self._desktop.end_drag()
+
+
+def utf16_prefix(text: str, units: int) -> str:
+    return text.encode('utf-16-le')[:units * 2].decode('utf-16-le', errors='ignore')
 
 
 def runtime_available() -> bool:

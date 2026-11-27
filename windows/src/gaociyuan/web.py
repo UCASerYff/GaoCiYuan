@@ -9,6 +9,7 @@ import re
 import secrets
 import threading
 import time
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 from gaociyuan.catalog import catalog_entries
@@ -29,6 +30,8 @@ class TokenServer(ThreadingHTTPServer):
         self.token = secrets.token_urlsafe(24)
         self.lock = store.lock
         self.shutdown_requested = threading.Event()
+        self._work_changed = threading.Condition()
+        self._active_work = 0
         self.local_usage = local_usage
         self.discovery = discovery
         self.native = None
@@ -40,6 +43,28 @@ class TokenServer(ThreadingHTTPServer):
     def url(self) -> str:
         host, port = self.server_address[:2]
         return f"http://{host}:{port}/"
+
+    @contextmanager
+    def work(self, *, drain: bool = True):
+        with self._work_changed:
+            admitted = not self.shutdown_requested.is_set()
+            if admitted and drain:
+                self._active_work += 1
+        try:
+            yield admitted
+        finally:
+            if admitted and drain:
+                with self._work_changed:
+                    self._active_work -= 1
+                    self._work_changed.notify_all()
+
+    def request_shutdown(self) -> None:
+        with self._work_changed:
+            self.shutdown_requested.set()
+
+    def drain_work(self) -> None:
+        with self._work_changed:
+            self._work_changed.wait_for(lambda: self._active_work == 0)
 
     def check_updates(self) -> dict:
         with self.updates_lock:
@@ -66,6 +91,10 @@ class TokenServer(ThreadingHTTPServer):
 
 class Handler(BaseHTTPRequestHandler):
     server: TokenServer
+
+    def setup(self) -> None:
+        self.request.settimeout(10)
+        super().setup()
 
     def do_GET(self) -> None:
         if not self._same_host():
@@ -144,23 +173,32 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authorized():
                 return
             self._json({"ok": True})
-            self.server.shutdown_requested.set()
-            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            native = self.server.native
+            if native is not None and not native.hidden:
+                native.request_quit()
+            else:
+                self.server.request_shutdown()
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
             return
         if not self._authorized():
             return
-        try:
-            payload = self._body()
-            result = self._action(parsed.path, payload)
-            with self.server.lock:
-                state = self.server.store.snapshot_state()
-            self._json({"ok": True, "result": result, "state": state})
-        except AppError as exc:
-            self._json({"ok": False, "error": exc.message, "code": exc.code}, 400)
-        except (KeyError, TypeError, ValueError):
-            self._json({"ok": False, "error": "请求格式无效。", "code": "invalid"}, 400)
-        except OSError:
-            self._json({'ok': False, 'error': '无法完成本机文件操作。', 'code': 'io'}, 400)
+        ui_only = parsed.path.startswith(('/api/choose/', '/api/open/')) or parsed.path in {'/api/window/open', '/api/panel/size'}
+        with self.server.work(drain=not ui_only) as admitted:
+            if not admitted:
+                self._json({'ok': False, 'error': '应用正在退出。', 'code': 'shutdown'}, 503)
+                return
+            try:
+                payload = self._body()
+                result = self._action(parsed.path, payload)
+                with self.server.lock:
+                    state = self.server.store.snapshot_state()
+                self._json({"ok": True, "result": result, "state": state})
+            except AppError as exc:
+                self._json({"ok": False, "error": exc.message, "code": exc.code}, 400)
+            except (KeyError, TypeError, ValueError):
+                self._json({"ok": False, "error": "请求格式无效。", "code": "invalid"}, 400)
+            except OSError:
+                self._json({'ok': False, 'error': '无法完成本机文件操作。', 'code': 'io'}, 400)
 
     def _action(self, path: str, payload: dict):
         store = self.server.store
@@ -240,7 +278,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/native':
             native = self.server.native
             self._json({'desktop': native is not None, 'cliPath': native.cli_path if native is not None else None,
-                        'ready': bool(native and native.ready and native.panel_ready)})
+                        'ready': bool(native and native.ready and native.panel_ready),
+                        'trayRegistered': bool(native and native.tray.registered)})
         elif path == '/api/updates':
             update = self.server.updates
             self._json(update.public_state if update.source == store.settings['updateAppcastURL'] else {'status': 'unconfigured'})
@@ -412,15 +451,19 @@ def serve(store: TokenStore, port: int = 0, open_browser: bool = True, start_tim
 
 def _timer(server: TokenServer) -> None:
     while not server.shutdown_requested.wait(60):
-        try:
-            server.store.refresh_due()
-        except (AppError, OSError):
-            pass
-        if server.local_usage is not None and not server.store.load_failed and server.store.library.get('autoRefresh', True):
+        with server.work() as admitted:
+            if not admitted:
+                return
             try:
-                server.local_usage.scan(server.store.now(), server.store.zone, automatic=True)
+                server.store.refresh_due()
             except (AppError, OSError):
                 pass
+            if (not server.shutdown_requested.is_set() and server.local_usage is not None
+                    and not server.store.load_failed and server.store.library.get('autoRefresh', True)):
+                try:
+                    server.local_usage.scan(server.store.now(), server.store.zone, automatic=True)
+                except (AppError, OSError):
+                    pass
 
 
 def _update_timer(server: TokenServer) -> None:
@@ -431,7 +474,10 @@ def _update_timer(server: TokenServer) -> None:
         if source and (source != previous or time.monotonic() - last_attempt >= 7200):
             previous = source
             last_attempt = time.monotonic()
-            try:
-                server.check_updates()
-            except AppError:
-                pass
+            with server.work() as admitted:
+                if not admitted:
+                    return
+                try:
+                    server.check_updates()
+                except AppError:
+                    pass

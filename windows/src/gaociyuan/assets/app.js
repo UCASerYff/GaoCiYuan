@@ -156,6 +156,7 @@ let catalogTab = "platforms";
 let catalogFilter = "all";
 let catalogQuery = "";
 let operationCount = 0;
+let dialogDraftIsDirty = null;
 let isSyncingAll = false;
 let transientMessage = "";
 let settingsTab = "module";
@@ -165,6 +166,32 @@ const actions = new Map();
 function action(name, callback) {
   actions.set(name, callback);
 }
+
+async function trackOperation(work) {
+  operationCount += 1;
+  try {
+    return await work();
+  } finally {
+    operationCount -= 1;
+  }
+}
+
+function editableControls(form) {
+  return [...form.elements].filter((control) => control.name && control.matches("input,select,textarea"));
+}
+
+function controlDraftValue(control) {
+  return control.type === "checkbox" ? control.checked : control.value;
+}
+
+function formDraftSignature(form) {
+  return JSON.stringify(editableControls(form).map((control) => [control.name, controlDraftValue(control)]));
+}
+
+window.gaociyuanExitState = () => ({
+  dirty: Boolean(dialog.open && dialogDraftIsDirty?.()),
+  pending: operationCount > 0,
+});
 
 function inEnglish() {
   const language = state?.settings?.language || "zh-Hans";
@@ -311,6 +338,7 @@ function updateAppearance() {
 }
 
 function openDialog(content, style = "") {
+  dialogDraftIsDirty = null;
   dialog.className = style;
   dialog.innerHTML = content;
   if (!dialog.open) dialog.showModal();
@@ -321,7 +349,10 @@ function closeDialog() {
 }
 
 dialog.addEventListener("close", () => {
-  if (!dialog.open) dialog.innerHTML = "";
+  if (!dialog.open) {
+    dialogDraftIsDirty = null;
+    dialog.innerHTML = "";
+  }
 });
 
 function showMessage(value = "") {
@@ -352,12 +383,17 @@ function go(nextPage) {
   location.hash = nextPage;
 }
 
+window.gaociyuanPresent = (fragment) => {
+  if (location.hash !== fragment) location.hash = fragment;
+  else if (state) route();
+};
+
 function route() {
   const [id, query] = location.hash.slice(1).split("?", 2);
   const aliases = { agent: "agents", usage: "analytics", providers: "catalog" };
   const next = aliases[id] || id;
   if (next === "settings") {
-    if (state) openSettings();
+    if (state && !(dialog.open && dialog.classList.contains("settings-dialog"))) openSettings();
     return;
   }
   closeDialog();
@@ -885,6 +921,7 @@ function openEditor(account, defaultProvider, overrideConnection) {
   let draft = account ? publicAccount(account) : draftFor(provider);
   if (overrideConnection && provider.connections.includes(overrideConnection)) draft.connection = overrideConnection;
   const original = account;
+  let initialForm;
   const availableProviders = providers.filter((item) => discoverableProvider(item) || item.id === account?.provider);
   const providerOptions = () => selectOptions(availableProviders.map((item) => [item.id, item.name]), provider.id);
   const draw = () => {
@@ -936,6 +973,8 @@ function openEditor(account, defaultProvider, overrideConnection) {
         <footer class="dialog-foot">${button("取消", "close-dialog")}<button type="submit" class="primary">${t("保存账户")}</button></footer>
       </form>`, "account-dialog");
     const form = dialog.querySelector("form");
+    initialForm ??= formDraftSignature(form);
+    dialogDraftIsDirty = () => formDraftSignature(form) !== initialForm;
     form.addEventListener("change", (event) => {
       const field = event.target.name;
       if (field === "provider") {
@@ -949,32 +988,34 @@ function openEditor(account, defaultProvider, overrideConnection) {
         dialog.querySelector('[name="connection"]').focus();
       }
     });
-    form.addEventListener("submit", async (event) => {
+    form.addEventListener("submit", (event) => {
       event.preventDefault();
       const submit = event.submitter;
-      if (submit) submit.disabled = true;
-      try {
-        const outgoing = readDraft(form);
-        const { result } = await api("/api/accounts/save", outgoing);
-        if (outgoing.enabled && outgoing.connection === fileConnection) {
-          await api("/api/accounts/refresh", { id: result.id });
+      void trackOperation(async () => {
+        if (submit) submit.disabled = true;
+        try {
+          const outgoing = readDraft(form);
+          const { result } = await api("/api/accounts/save", outgoing);
+          if (outgoing.enabled && outgoing.connection === fileConnection) {
+            await api("/api/accounts/refresh", { id: result.id });
+          }
+          if (result?.id && page === "agents") {
+            pickAgent(result.id);
+            agentFilter = "all";
+          }
+          closeDialog();
+          if (result?.id && !original && page === "catalog") {
+            location.hash = "agents?account=" + encodeURIComponent(result.id);
+            return;
+          }
+          render();
+          if (result?.id) document.getElementById(`account-${result.id}`)?.focus({ preventScroll: true });
+        } catch (error) {
+          form.querySelector("#editor-error").textContent = error.message;
+        } finally {
+          if (submit) submit.disabled = false;
         }
-        if (result?.id && page === "agents") {
-          pickAgent(result.id);
-          agentFilter = "all";
-        }
-        closeDialog();
-        if (result?.id && !original && page === "catalog") {
-          location.hash = "agents?account=" + encodeURIComponent(result.id);
-          return;
-        }
-        render();
-        if (result?.id) document.getElementById(`account-${result.id}`)?.focus({ preventScroll: true });
-      } catch (error) {
-        form.querySelector("#editor-error").textContent = error.message;
-      } finally {
-        if (submit) submit.disabled = false;
-      }
+      });
     });
   };
   function readDraft(form) {
@@ -1171,13 +1212,10 @@ document.addEventListener("click", async (event) => {
   if (!button || button.disabled) return;
   const callback = actions.get(button.dataset.action);
   if (!callback) return;
-  operationCount += 1;
   try {
-    await callback(button);
+    await trackOperation(() => callback(button));
   } catch (error) {
     showMessage(error.message);
-  } finally {
-    operationCount -= 1;
   }
 });
 
