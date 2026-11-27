@@ -47,7 +47,7 @@ py -3.12 -m venv .build-venv
 ./smoke-installed.ps1
 ```
 
-安装冒烟使用单独资料目录与合成凭据。已有正式 Windows 安装时，冒烟脚本会停止。在干净的 Windows 测试环境可传入 `-PreviousInstallerPath <4.13+3 安装包路径>`，按顺序安装两个构建并验证资料。直接运行 `GaoCiYuan-cli.exe` 会显示命令帮助。可用 `python launch.py --serve --no-browser --data-dir <隔离目录> --no-refresh` 运行只监听本机的测试入口。已构建 CLI 与 Edge 可通过 `node tests/visual-smoke.mjs <CLI 路径> 4.13+4 <截图目录>` 验证代表性页面与高 DPI 布局。
+安装冒烟使用单独资料目录与合成凭据。已有正式 Windows 安装时，冒烟脚本会停止。在干净的 Windows 测试环境可传入 `-PreviousInstallerPath <4.13+3 安装包路径>`，按顺序安装两个构建并验证资料。直接运行 `GaoCiYuan-cli.exe` 会显示命令帮助，标准输出和错误输出使用 UTF-8。可用 `python launch.py --serve --no-browser --data-dir <隔离目录> --no-refresh` 运行只监听本机的测试入口。已构建 CLI 与 Edge 可通过 `node tests/visual-smoke.mjs <CLI 路径> 4.13+4 <截图目录>` 验证代表性页面与高 DPI 布局。
 
 可用 PowerShell 7 运行 `./tests/smoke-tray.ps1 -Executable <已安装程序路径> -ExpectedFileVersion 4.13.4.0`，在独立 Windows 桌面与合成资料中验证托盘和退出行为。加 `-ProbeExplorer` 可在当前桌面用隐藏测试窗口核验 Windows Shell 的图标注册和删除。
 

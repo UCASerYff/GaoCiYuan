@@ -67,6 +67,35 @@ function Read-Json([string]$Path) {
     Get-Content -LiteralPath $Path -Encoding UTF8 -Raw | ConvertFrom-Json
 }
 
+function Assert-InstalledCliHelp([string]$Executable, [string]$DataDirectory) {
+    $start = [Diagnostics.ProcessStartInfo]::new($Executable)
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.StandardOutputEncoding = [Text.UTF8Encoding]::new($false, $true)
+    $start.StandardErrorEncoding = $start.StandardOutputEncoding
+    $start.ArgumentList.Add('--data-dir')
+    $start.ArgumentList.Add($DataDirectory)
+    $process = [Diagnostics.Process]::Start($start)
+    try {
+        $output = $process.StandardOutput.ReadToEndAsync()
+        $errors = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(10000)) {
+            $process.Kill()
+            throw 'The installed CLI timed out while printing command help.'
+        }
+        $helpText = $output.GetAwaiter().GetResult()
+        $errorText = $errors.GetAwaiter().GetResult()
+        $description = ConvertFrom-Json '"\u641e\u8bcd\u5143 Windows \u7248"'
+        Assert-Test ($process.ExitCode -eq 0 -and $helpText -match 'usage:' -and $helpText.Contains($description) -and -not $errorText) (
+            "The installed CLI did not return UTF-8 command help. Exit code $($process.ExitCode). $errorText"
+        )
+    } finally {
+        $process.Dispose()
+    }
+}
+
 function Assert-InstalledShortcut([string]$ShortcutFile, [string]$ExpectedTarget) {
     Assert-Test (Test-Path -LiteralPath $ShortcutFile -PathType Leaf) "The Start menu shortcut is missing at '$ShortcutFile'."
     $item = Get-Item -LiteralPath $ShortcutFile
@@ -317,8 +346,7 @@ try {
     }
     $cliVersion = & $cliExe --version
     Assert-Test ($LASTEXITCODE -eq 0 -and "$cliVersion".Trim() -ceq $expectedVersion) 'The installed CLI version is incorrect.'
-    $cliHelp = & $cliExe --data-dir $dataDir
-    Assert-Test ($LASTEXITCODE -eq 0 -and "$cliHelp" -match 'usage:') 'The CLI did not return command help on its own.'
+    Assert-InstalledCliHelp $cliExe $dataDir
 
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     $listener.Start()
