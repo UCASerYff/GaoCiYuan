@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$InstallerPath = (Join-Path $PSScriptRoot 'dist\GaoCiYuan-Windows-4.13-build4-x64-Setup.exe'),
+    [string]$InstallerPath = (Join-Path $PSScriptRoot 'dist\GaoCiYuan-Windows-4.13-build5-x64-Setup.exe'),
     [string]$PreviousInstallerPath,
     [switch]$HeadlessServerOnly,
     [switch]$KeepArtifacts
@@ -9,8 +9,10 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$expectedVersion = '4.13+4'
-$expectedFileVersion = '4.13.4.0'
+$expectedVersion = '4.13+5'
+$expectedFileVersion = '4.13.5.0'
+$previousVersion = '4.13+4'
+$previousFileVersion = '4.13.4.0'
 $productName = ConvertFrom-Json '"\u641e\u8bcd\u5143"'
 $fileConnection = ConvertFrom-Json '"\u81ea\u52a8\u8bfb\u53d6\u5feb\u7167\u6587\u4ef6"'
 $localConnection = ConvertFrom-Json '"\u672c\u673a\u8f6f\u4ef6\u81ea\u52a8\u8bfb\u53d6"'
@@ -227,7 +229,7 @@ Assert-Test ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [R
     'Run the release smoke on a native Windows x64 host.'
 )
 $installerPath = Confirm-Installer $InstallerPath $expectedFileVersion
-$previousInstaller = if ($PreviousInstallerPath) { Confirm-Installer $PreviousInstallerPath '4.13.3.0' }
+$previousInstaller = if ($PreviousInstallerPath) { Confirm-Installer $PreviousInstallerPath $previousFileVersion }
 
 $normalInstall = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'Programs\GaoSeries\GaoCiYuan'
 $shortcutPaths = @(
@@ -321,7 +323,7 @@ try {
         Invoke-QuietProcess $previousInstaller ($installerArguments + ('/LOG="{0}"' -f $previousInstallLog)) 55000
         Assert-Test ((Get-RegistrationPath) -eq $installDir) 'The previous installer registered the wrong location.'
         $previousState = & $cliExe --data-dir $dataDir --inspect
-        Assert-Test ($LASTEXITCODE -eq 0 -and $previousState -ccontains 'version=4.13+3' -and
+        Assert-Test ($LASTEXITCODE -eq 0 -and $previousState -ccontains "version=$previousVersion" -and
             $previousState -ccontains 'status=ready' -and $previousState -ccontains 'accounts=2') 'The previous build did not open the isolated library.'
         foreach ($file in @($libraryFile, $alertsFile, $settingsFile, $keptCredential, $grokFile)) {
             $upgradeHashes[$file] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
@@ -442,7 +444,7 @@ try {
     $completed = $true
     $surface = if ($HeadlessServerOnly) { 'loopback server' } else { 'hidden main and floating WebView2' }
     Write-Output "Installed smoke passed for $expectedVersion ($surface). Installer, native and CLI PE files are AMD64."
-    if ($previousInstaller) { Write-Output 'In-place upgrade from 4.13+3 and unchanged user data verified.' }
+    if ($previousInstaller) { Write-Output "In-place upgrade from $previousVersion and unchanged user data verified." }
 } finally {
     if (-not $completed) {
         try { Stop-SmokeApp } catch { Write-Warning $_.Exception.Message }

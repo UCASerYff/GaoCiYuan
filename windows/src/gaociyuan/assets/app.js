@@ -264,10 +264,10 @@ function externalLink(url, label, classes = "") {
   return href ? `<a class="${classes}" href="${text(href)}" target="_blank" rel="noopener noreferrer">${t(label)}</a>` : "";
 }
 
-function displayDate(iso) {
+function displayDate(iso, dateParts = {}) {
   const datetime = new Date(iso);
   if (!iso || !Number.isFinite(datetime.valueOf())) return "—";
-  const options = { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" };
+  const options = { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit", ...dateParts };
   try {
     return new Intl.DateTimeFormat(inEnglish() ? "en" : "zh-CN", {
       ...options, timeZone: state?.settings?.timeZone,
@@ -557,6 +557,7 @@ function renderOverview() {
   ];
   return `
     <dl class="panel overview-metrics">${stats.map(([label, value, glyph, tone]) => `<div class="${tone}"><dt>${icon(glyph)}${t(label)}</dt><dd>${number(value)}</dd></div>`).join("")}</dl>
+    ${renderForecastOverview()}
     <div class="overview-grid">
       ${!accounts().length ? onboardingPanel() : `<section class="overview-quota">
         <div class="section-heading">
@@ -663,26 +664,11 @@ function quotaRow(quota, stale, keepExpired) {
   const resetText = quota.resetsAt
     ? masked ? tr("重置时间已到，等待新数据") : `${tr("重置")} ${displayDate(quota.resetsAt)}`
     : tr("平台未提供重置时间");
-  const estimate = !stale && !expired ? quotaEstimate(quota) : "";
   return `<div class="quota ${color}${stale || expired ? " stale" : ""}">
     <div class="spread"><span title="${text(quota.title)}">${t(quota.title)}</span><strong>${masked ? t("待刷新") : `${Math.trunc(remaining)}% ${t("剩余")}`}</strong></div>
     <progress aria-label="${t(quota.title)}" max="100" value="${remaining}"></progress>
     <div class="spread quota-meta"><span>${text(resetText)}</span>${stale ? `<span class="amber">${t("历史数据")}</span>` : ""}</div>
-    ${estimate ? `<p class="quota-meta">${text(estimate)}</p>` : ""}
   </div>`;
-}
-
-function quotaEstimate({ usedPercent, resetsAt, windowSeconds }) {
-  const reset = Date.parse(resetsAt) / 1000;
-  if (!Number.isFinite(reset) || !(usedPercent > 0 && usedPercent < 100) || !(windowSeconds > 0)) return "";
-  const elapsed = (Date.now() / 1000 - reset + windowSeconds) / windowSeconds;
-  if (elapsed < 0.03 || elapsed > 1) return "";
-  const untilEmpty = (100 - usedPercent) / usedPercent * elapsed * windowSeconds;
-  if (untilEmpty >= (1 - elapsed) * windowSeconds || untilEmpty > 7200) return "";
-  const duration = untilEmpty < 3600
-    ? countText(Math.max(5, Math.round(untilEmpty / 300) * 5), "分钟后", "min")
-    : countText(Math.round(untilEmpty / 1800) / 2, "小时后", "h");
-  return inEnglish() ? `Estimated to run out in ${duration} at the current rate` : `按当前速率约 ${duration}耗尽（估算）`;
 }
 
 function credentialProblem(account) {
@@ -759,11 +745,12 @@ function renderAccount(account, inspector = false) {
       ${account.autoDiscovered ? tag("自动发现", "teal") : ""}
     </div>
     <div class="account-reading">
-      ${inspector ? `<h3>${t("连接与额度")}</h3>` : ""}
+      ${inspector ? `<h3>${t("实测额度")}</h3>` : ""}
       ${renderSnapshot(account)}
       ${status ? `<p class="info-row muted">${icon("info")}${t(status)}</p>` : ""}
       ${account.error ? `<p class="info-row amber">${icon("alert")}${t(account.error)}</p>` : ""}
     </div>
+    ${renderAccountForecast(account)}
     <div class="spread account-foot">
       <div class="cluster">
         ${button(syncing ? "同步中…" : grokManual(account) ? "读取本机额度" : "立即同步", grokManual(account) ? "grok" : "refresh", { value: account.id, glyph: "refresh", disabled: !account.enabled || syncing })}

@@ -324,6 +324,7 @@ main {
 .overview-quota, .overview-accounts { display: grid; gap: 12px; min-width: 0; }
 .overview-accounts { grid-template-columns: repeat(auto-fit, minmax(min(100%, 282px), 1fr)); align-items: stretch; }
 .overview-accounts .account-card { grid-template-rows: auto auto 1fr auto; }
+.overview-accounts .account-card:has(.account-forecast) { grid-template-rows: auto auto 1fr auto auto; }
 .overview-accounts .account-reading { align-content: start; }
 .overview-status { display: grid; gap: 17px; padding: 16px; }
 .overview-status .section-heading { column-gap: 5px; }
@@ -340,6 +341,60 @@ main {
 .health-label .icon { font-size: 12px; }
 .last-sync { border-top: 1px solid var(--border); padding-top: 12px; color: var(--muted); font-size: 12px; }
 .last-sync strong { color: var(--ink); text-align: right; }
+.forecast-overview { display: grid; gap: 14px; }
+.forecast-overview .marked > .stacked { min-width: 0; }
+.forecast-symbol {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-control);
+  background: var(--selection);
+  color: var(--accent);
+  font-size: 17px;
+}
+.forecast-risk-section { display: grid; gap: 8px; min-width: 0; }
+.forecast-risk-section h3 { font-size: 13px; }
+.forecast-risk-list { list-style: none; padding: 0; margin: 0; max-height: 320px; overflow: auto; }
+.forecast-risk {
+  display: grid;
+  grid-template-columns: minmax(145px, 1fr) minmax(0, 2.1fr) auto;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  padding: 11px 0;
+  border-top: 1px solid var(--border);
+}
+.forecast-risk:last-child { padding-bottom: 3px; }
+.forecast-risk .marked, .forecast-risk .stacked { min-width: 0; }
+.forecast-risk .marked :is(strong, span) { overflow-wrap: anywhere; }
+.forecast-risk .marked strong { font-size: 13px; }
+.forecast-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px 12px; }
+.forecast-metrics > div { min-width: 0; }
+.forecast-metrics dt { color: var(--muted); font-size: 11px; }
+.forecast-metrics dd { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.forecast-metric-note { display: block; color: var(--muted); font-size: 11px; font-weight: 400; }
+.forecast-emphasis { color: var(--amber); font-weight: 650; }
+.forecast-risk .forecast-emphasis dt { color: inherit; }
+.forecast-detail-link { color: var(--accent); padding-inline: 7px; white-space: nowrap; }
+.forecast-detail-link .icon { font-size: 10px; }
+.forecast-empty {
+  display: flex;
+  align-items: start;
+  gap: 9px;
+  background: var(--raised);
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+}
+.forecast-empty .icon { margin-top: 3px; }
+.forecast-empty strong { color: var(--ink); font-size: 13px; }
+.account-forecast { display: grid; gap: 6px; min-width: 0; padding: 8px 10px; border-radius: var(--radius-control); background: var(--raised); }
+.account-forecast h3 { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.account-forecast .icon-area { color: var(--accent); }
+.account-forecast .forecast-detail-link { min-height: 26px; background: none; border-color: transparent; }
+.account-forecast .forecast-detail-link:hover { background: var(--control-hover); }
+.inspected-account .account-forecast { border-top: 1px solid var(--border); border-radius: 0; padding: 12px 16px; background: var(--panel); }
 .onboarding { padding: 0; display: grid; }
 .onboarding-intro { padding: 26px; display: grid; gap: 9px; justify-items: start; }
 .onboarding-intro h2 { font-size: 23px; font-weight: 650; }
@@ -551,6 +606,30 @@ dialog::backdrop { background: var(--scrim); }
 .small-dialog { width: min(440px, calc(100% - 28px)); }
 .settings-dialog { width: min(820px, calc(100% - 28px)); }
 .source-dialog { width: min(760px, calc(100% - 28px)); }
+.forecast-dialog { width: min(670px, calc(100% - 28px)); }
+.forecast-dialog[open] { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; }
+.forecast-dialog .dialog-foot { justify-content: flex-end; }
+.forecast-dialog-content { min-height: 0; max-height: none; background: var(--canvas); }
+.forecast-dialog-context { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; overflow-wrap: anywhere; }
+.forecast-dialog-context strong { font-size: 15px; }
+.forecast-window { display: grid; gap: 12px; }
+.forecast-window h3, .forecast-window h4 { overflow-wrap: anywhere; }
+.forecast-window-readings { display: grid; gap: 13px; }
+.forecast-window-readings:has(.forecast-estimate) { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+.forecast-window-readings > div, .forecast-basis { display: grid; align-content: start; gap: 7px; min-width: 0; }
+.forecast-window-readings .forecast-metrics, .forecast-basis .forecast-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.forecast-estimate {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--raised);
+}
+.forecast-estimate .forecast-metrics { grid-template-columns: minmax(0, 1fr); }
+.forecast-stable { color: var(--teal); font-weight: 600; font-size: 13px; }
+.forecast-basis { border-top: 1px solid var(--border); padding-top: 11px; }
+.forecast-basis .forecast-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.forecast-reason, .forecast-exclusion { overflow-wrap: anywhere; }
+.forecast-exclusion { display: grid; gap: 8px; justify-items: start; }
 .settings-body { background: var(--canvas); }
 .settings-dialog .settings-body { max-height: min(615px, calc(100dvh - 185px)); }
 .settings-sections { display: grid; gap: 16px; align-content: start; }
@@ -669,6 +748,8 @@ th { white-space: nowrap; }
   .agent-inspector { position: static; }
   .return-agent-list { display: inline-flex; }
   .price-row { grid-template-columns: repeat(4, minmax(60px, 1fr)); }
+  .forecast-risk { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; }
+  .forecast-risk .forecast-metrics { grid-column: 1 / -1; grid-row: 2; }
 }
 @media (max-width: 700px) {
   .overview-grid { grid-template-columns: minmax(0, 1fr); }
@@ -713,4 +794,6 @@ th { white-space: nowrap; }
   .agent-columns { gap: 5px; }
   .price-row { grid-template-columns: repeat(2, minmax(55px, 1fr)); }
   .source-options { grid-template-columns: 1fr; }
+  .forecast-window-readings:has(.forecast-estimate) { grid-template-columns: minmax(0, 1fr); }
+  .forecast-basis .forecast-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

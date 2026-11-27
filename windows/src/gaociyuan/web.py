@@ -285,8 +285,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(update.public_state if update.source == store.settings['updateAppcastURL'] else {'status': 'unconfigured'})
         elif path == '/api/panel':
             with self.server.lock:
-                state = store.snapshot_state()
-                self._json({key: state[key] for key in ('rail', 'railOverflow', 'settings')})
+                self._json(store.panel_state())
         elif path == '/api/usage/settings':
             self._json(self._require_usage().settings_state())
         elif path == '/api/export/local-usage.csv':

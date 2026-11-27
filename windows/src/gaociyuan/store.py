@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -36,6 +37,7 @@ from gaociyuan.grokbot import (
     presentation,
     status_line,
 )
+from gaociyuan.quota_forecast import MAX_OBSERVATIONS, quota_forecast, record_quota_observation
 from gaociyuan.rings import adaptive_interval, attention, health_of, rail_accounts, ring_for
 from gaociyuan.routes import ACCOUNT_ID
 from gaociyuan.snapshots import (
@@ -51,6 +53,8 @@ from gaociyuan.timeutil import format_iso, grokbot_snapshot_path, parse_instant,
 from gaociyuan.usage import UsageLedger
 
 LIBRARY_KEYS = {"schema", "accounts", "refreshMinutes", "warningThreshold", "autoRefresh"}
+FORECAST_HISTORY = "quotaForecastHistory"
+SOURCE_FIELDS = ("provider", "kind", "connection", "filePath", "scopeID", "region", "customConfig")
 ACCOUNT_KEYS = {
     "id",
     "provider",
@@ -77,6 +81,8 @@ ACCOUNT_KEYS = {
     "autoDiscovered",
     "connectorAuthorized",
     "grokBotManualReading",
+    "quotaForecast",
+    FORECAST_HISTORY,
 }
 SECRET_FIELDS = {"secret", "apiKey", "token", "password", "credential"}
 UNSUPPORTED = "Windows 版不调用这条连接的在线接口或辅助功能，也不会写入百分比。可改用「快照文件」导入真实读数。上次数据已保留。"
@@ -161,6 +167,7 @@ class TokenStore:
         if not isinstance(payload, dict):
             raise AppError("账户格式无效。")
         secret = payload.get("secret")
+        new_credential = isinstance(secret, str) and bool(secret.strip())
         provider = payload.get("provider")
         if not isinstance(provider, str) or not known_provider(provider):
             raise AppError("未知的 Agent 软件。")
@@ -219,16 +226,24 @@ class TokenStore:
             same = _same_source(existing, account)
             if same:
                 account["connectorAuthorized"] = existing.get("connectorAuthorized", False)
-            if same and not (isinstance(secret, str) and secret.strip()):
+            if same and not new_credential:
                 for key in ("snapshot", "lastAttempt", "error", "statusNote", "grokBotManualReading", "lastQuotaChangedAt"):
                     account[key] = existing.get(key)
+                if account['plan'] == existing['plan'] and FORECAST_HISTORY in existing:
+                    account[FORECAST_HISTORY] = existing[FORECAST_HISTORY]
             for key, value in existing.items():
                 if key not in ACCOUNT_KEYS and key not in SECRET_FIELDS:
                     account[key] = value
-            if existing.get("connection") != connection and not (isinstance(secret, str) and secret.strip()):
+        try:
+            if new_credential:
+                self.credentials.put(account_id, secret.strip())
+            elif existing and existing.get("connection") != connection:
                 self.credentials.delete(account_id)
-        if isinstance(secret, str) and secret.strip():
-            self.credentials.put(account_id, secret.strip())
+        except (AppError, OSError):
+            # DPAPI and Credential Manager writes can succeed independently.
+            if existing:
+                self._discard_forecast_evidence(existing)
+            raise
         self._replace(account)
         self._validate()
         self._write_library()
@@ -261,16 +276,36 @@ class TokenStore:
         self._write_alerts()
 
     def set_credential(self, account_id: str, secret: str) -> None:
-        self._ensure_writable()
-        if self._find(account_id) is None:
-            raise AppError("没有这个账户。", "missing")
-        self.credentials.put(account_id, secret)
+        with self.lock:
+            self._ensure_writable()
+            account = self._find(account_id)
+            if account is None:
+                raise AppError("没有这个账户。", "missing")
+            if not isinstance(secret, str) or not secret.strip():
+                raise AppError("凭据不能为空。", "credential")
+            try:
+                self.credentials.put(account_id, secret)
+            finally:
+                self._discard_forecast_evidence(account)
 
     def delete_credential(self, account_id: str) -> None:
-        self._ensure_writable()
-        if self._find(account_id) is None:
-            raise AppError("没有这个账户。", "missing")
-        self.credentials.delete(account_id)
+        with self.lock:
+            self._ensure_writable()
+            account = self._find(account_id)
+            if account is None:
+                raise AppError("没有这个账户。", "missing")
+            try:
+                self.credentials.delete(account_id)
+            finally:
+                self._discard_forecast_evidence(account)
+
+    def _discard_forecast_evidence(self, account: dict) -> None:
+        updated = dict(account)
+        updated.pop(FORECAST_HISTORY, None)
+        # An in-flight connector holds the original object and must not publish after a key change.
+        self._replace(updated)
+        if FORECAST_HISTORY in account:
+            self._write_library()
 
     def credential_present(self, account_id: str) -> bool:
         return self._find(account_id) is not None and self.credentials.has(account_id)
@@ -362,7 +397,8 @@ class TokenStore:
             with self.lock:
                 if self._find(account_id) is account:
                     account["connectorAuthorized"] = True
-                    self._apply_snapshot(account, snapshot, now)
+                    source_key = _quota_source_key(account, snapshot.get("source"))
+                    self._apply_snapshot(account, snapshot, now, source_key)
         except AppError as exc:
             with self.lock:
                 if self._find(account_id) is account:
@@ -387,7 +423,7 @@ class TokenStore:
             raise AppError("请保存账户，再用「读取本机额度」读取 Grok Bot。")
         now = self.now()
         if mode == "file":
-            snapshot = self._read_snapshot_file(draft, now)
+            snapshot, _ = self._read_snapshot_file(draft, now)
         elif mode == "connector" and self.connector_reader is not None:
             secret = payload.get("secret")
             if not secret and payload.get("id"):
@@ -477,11 +513,14 @@ class TokenStore:
             rows.append(view)
         return rows
 
-    def view_account(self, account: dict) -> dict:
+    def view_account(self, account: dict, *, include_forecast: bool = True) -> dict:
         now = self.now().astimezone(self.zone)
         threshold = float(self.library.get("warningThreshold") or 20)
         failures = self.failures.get(account["id"], 0)
         view = dict(account)
+        view.pop(FORECAST_HISTORY, None)
+        if include_forecast:
+            view["quotaForecast"] = quota_forecast(account, now)
         view["hasCredential"] = self.credentials.has(account["id"])
         observed = parse_instant((account.get("snapshot") or {}).get("observedAt") or "") if account.get("snapshot") else None
         view["stale"] = observed is not None and (now - observed).total_seconds() > 900
@@ -497,9 +536,6 @@ class TokenStore:
 
     def snapshot_state(self, query: str = "", provider: str = "", health: str = "") -> dict:
         accounts = self.filtered_accounts(query, provider, health) if (query or provider or health) else [self.view_account(item) for item in self.library["accounts"]]
-        rail_source = [item for item in self.library["accounts"] if self.rail_visible(item)]
-        rail = rail_accounts(rail_source, self.now())
-        rail_views = [self.view_account(item) for item in rail[:12]]
         return {
             "version": __import__("gaociyuan.version", fromlist=["VERSION_LABEL"]).VERSION_LABEL,
             "status": "readonly" if self.load_failed else "ready",
@@ -514,23 +550,30 @@ class TokenStore:
                 "warningThreshold": self.library.get("warningThreshold"),
                 "autoRefresh": self.library.get("autoRefresh"),
             },
-            "settings": self.settings,
+            **self.panel_state(),
             "accounts": accounts,
-            "rail": rail_views,
-            "railOverflow": max(0, len(rail) - 12),
             "grokReads": self.grok_reads,
             "refreshing": sorted(self._refreshing),
         }
 
+    def panel_state(self) -> dict:
+        rail_source = [item for item in self.library["accounts"] if self.rail_visible(item)]
+        rail = rail_accounts(rail_source, self.now())
+        return {
+            "settings": self.settings,
+            "rail": [self.view_account(item, include_forecast=False) for item in rail[:12]],
+            "railOverflow": max(0, len(rail) - 12),
+        }
+
     def _refresh_file(self, account: dict, now: datetime) -> None:
         try:
-            snapshot = self._read_snapshot_file(account, now)
+            snapshot, source_key = self._read_snapshot_file(account, now)
         except AppError as exc:
             self._set_error(account, exc.message, now)
             return
-        self._apply_snapshot(account, snapshot, now)
+        self._apply_snapshot(account, snapshot, now, source_key)
 
-    def _read_snapshot_file(self, account: dict, now: datetime) -> dict:
+    def _read_snapshot_file(self, account: dict, now: datetime) -> tuple[dict, str]:
         path = account.get("filePath") or ""
         if not path:
             raise AppError("请选择快照 JSON 文件。")
@@ -545,18 +588,20 @@ class TokenStore:
             if len(data) > 2_000_000:
                 raise AppError("快照文件不能超过 2 MB。")
             snapshot = strip_status_quotas(normalize_snapshot(json.loads(data.decode("utf-8-sig")), now))
+            source_key = _quota_source_key(account, snapshot["source"])
             snapshot["source"] = "快照文件"
             validate_snapshot(snapshot, now)
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise AppError("快照文件无法读取，已保留上次数据。") from exc
-        return snapshot
+        return snapshot, source_key
 
-    def _apply_snapshot(self, account: dict, snapshot: dict, now: datetime) -> None:
+    def _apply_snapshot(self, account: dict, snapshot: dict, now: datetime, source_key: str) -> None:
         current = account.get("snapshot")
         account["lastAttempt"] = format_iso(now)
         account["error"] = None
         account["statusNote"] = None
         self.failures[account["id"]] = 0
+        record_quota_observation(account, snapshot, source_key, now)
         events = reading_alerts(self.alert_memory.setdefault(account["id"], {}), self.settings, account, snapshot, now)
         if current and same_observation(current, snapshot):
             current_at = parse_instant(current.get('observedAt'))
@@ -738,6 +783,14 @@ class TokenStore:
             "connectorAuthorized": raw.get("connectorAuthorized") is True,
             "grokBotManualReading": raw.get("grokBotManualReading") if isinstance(raw.get("grokBotManualReading"), dict) else None,
         }
+        forecast = raw.get(FORECAST_HISTORY)
+        if (isinstance(forecast, dict) and isinstance(forecast.get("source"), str)
+                and forecast["source"].startswith(_quota_account_key(account) + ":")
+                and isinstance(forecast.get("observations"), list)):
+            account[FORECAST_HISTORY] = {
+                "source": forecast["source"],
+                "observations": forecast["observations"][-MAX_OBSERVATIONS:],
+            }
         for key, value in raw.items():
             if key not in ACCOUNT_KEYS and key not in SECRET_FIELDS:
                 account[key] = value
@@ -846,8 +899,19 @@ class TokenStore:
 
 
 def _same_source(left: dict, right: dict) -> bool:
-    keys = ("provider", "kind", "connection", "filePath", "scopeID", "region", "customConfig")
-    return all(left.get(key) == right.get(key) for key in keys)
+    return all(left.get(key) == right.get(key) for key in SOURCE_FIELDS)
+
+
+def _quota_account_key(account: dict) -> str:
+    return _source_digest([account.get(key) for key in ("id", *SOURCE_FIELDS, "plan")])
+
+
+def _quota_source_key(account: dict, origin: str | None) -> str:
+    return _quota_account_key(account) + ":" + _source_digest(origin)
+
+
+def _source_digest(value: object) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode("ascii")).hexdigest()
 
 
 def _atomic_json(path: Path, payload: dict) -> None:
