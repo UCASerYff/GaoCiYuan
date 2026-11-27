@@ -93,10 +93,14 @@ enum QuotaForecast {
         guard let snapshot = account.snapshot else { return .init(status: .insufficient, reason: .noReadings) }
         let quotas = percentageQuotas(snapshot)
         guard !quotas.isEmpty else { return .init(status: .excluded, reason: .nonQuota) }
-        let history = account.quotaForecastHistory?.observations.suffix(maxObservations) ?? []
+        let observations = account.quotaForecastHistory?.observations ?? []
+        let history: ArraySlice<QuotaForecastObservation> = observations.suffix(maxObservations)
         let syncIssue = account.error != nil || account.statusNote != nil
-        let windows = quotas.map { evaluate(window: $0, snapshot: snapshot, history: history, now: now, syncIssue: syncIssue) }
-        return .init(status: windows.contains { $0.status != .insufficient } ? .available : .insufficient, windows: windows)
+        let windows: [QuotaWindowForecast] = quotas.map {
+            evaluate(window: $0, snapshot: snapshot, history: history, now: now, syncIssue: syncIssue)
+        }
+        let status: QuotaForecastStatus = windows.contains { $0.status != .insufficient } ? .available : .insufficient
+        return .init(status: status, windows: windows)
     }
 
     private static func percentageQuotas(_ snapshot: UsageSnapshot) -> [Quota] {
