@@ -1,0 +1,144 @@
+name: macOS parity validation
+on:
+  push:
+    branches: ['codex/macos-parity-verify-20261127-32ebb61c17']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Compile and run focused macOS checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          uname -m
+          xcodebuild -version
+          #!/usr/bin/env bash
+          # Run from a committed checkout of GaoCiYuan on GitHub's macos-15 ARM64 image.
+          set -euo pipefail
+          
+          if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
+            echo "This recipe requires a macOS ARM64 Xcode runner." >&2
+            exit 1
+          fi
+          
+          export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+          xcrun swiftc --version
+          SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          MACROS="$DEVELOPER_DIR/Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins/libSwiftUIMacros.dylib"
+          [[ -f "$MACROS" ]] || { echo "Xcode SwiftUI macro plug-in missing: $MACROS" >&2; exit 1; }
+          
+          root="$(pwd -P)"
+          [[ "$root" == "$(git rev-parse --show-toplevel)" && -f scripts/build_framework.sh && -d Host ]]
+          revision="$(git rev-parse HEAD)"
+          echo "GaoCiYuan source $revision"
+          temp_base="${RUNNER_TEMP:-${TMPDIR:-/private/tmp}}"
+          temp_base="$(cd "$temp_base" && pwd -P)"
+          scratch="$(mktemp -d "$temp_base/GaoCiYuan-mac-ci.XXXXXXXX")"
+          trap 'rm -rf -- "$scratch"' EXIT
+          checkout="$scratch/GaoCiYuan"
+          mkdir -p "$checkout" "$scratch/Linked.noindex"
+          git archive --format=tar "$revision" | tar -xf - -C "$checkout"
+          cd "$checkout"
+          export GAO_BUILD_DIR="$checkout/build.noindex"
+          
+          # Keep the production source and signing stages intact. The temporary script
+          # copies retain the actual framework source lists, SDK flags and module layout,
+          # and replace exactly the intermediate ad-hoc command with a no-op. This also
+          # retains valid shell syntax when that command is in a conditional branch.
+          python3 - <<'PY'
+          from pathlib import Path
+          
+          scripts = Path("scripts")
+          name = "build_framework.sh"
+          integrated = "build_integrated_frameworks.sh"
+          intermediate_sign = 'codesign --force --sign - "$FRAMEWORK"'
+          sign_commands = {"codesign", "security", "hdiutil"}
+          
+          def stage(filename):
+              source = (scripts / filename).read_text(encoding="utf-8")
+              lines = source.splitlines()
+              matches = [line for line in lines if line.strip() == intermediate_sign]
+              if len(matches) != 1:
+                  raise SystemExit(f"{filename}: production intermediate signing stage changed")
+              kept = [line[:len(line) - len(line.lstrip())] + ":" if line.strip() == intermediate_sign else line
+                      for line in lines]
+              if any(line.lstrip().split(maxsplit=1)[0] in sign_commands for line in kept if line.strip()):
+                  raise SystemExit(f"{filename}: unexpected production signing or packaging command")
+              result = "\n".join(kept) + "\n"
+              integrated_call = '"$ROOT/scripts/build_integrated_frameworks.sh"'
+              if integrated_call in result:
+                  stage(integrated)
+                  result = result.replace(integrated_call, '/bin/zsh "$ROOT/scripts/ci-build_integrated_frameworks.sh"')
+              (scripts / ("ci-" + filename)).write_text(result, encoding="utf-8")
+          
+          stage(name)
+          PY
+          /bin/zsh -n scripts/ci-build_framework.sh
+          /bin/zsh scripts/ci-build_framework.sh
+          # The macOS Token app has no WidgetKit extension.
+          
+          # Link the production host input set against the just-built frameworks.
+          # The executable is used for a Mach-O check only.
+          frameworks=( Token )
+          framework_flags=()
+          for framework in "${frameworks[@]}"; do
+            framework_flags+=(-framework "$framework")
+            xcrun lipo -verify_arch arm64 "build.noindex/Frameworks/$framework.framework/Versions/A/$framework"
+          done
+          host_inputs=( "$checkout"/Host/*.swift  )
+          xcrun swiftc -swift-version 5 -parse-as-library -O -sdk "$SDK" \
+            -target arm64-apple-macosx14.0 -module-cache-path "$checkout/build.noindex/cache" \
+            -load-plugin-library "$MACROS" -F "$checkout/build.noindex/Frameworks" \
+            "${framework_flags[@]}" -framework AppKit -framework SwiftUI \
+            -framework UserNotifications -framework CryptoKit -lsqlite3 \
+            -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
+            "${host_inputs[@]}" -o "$scratch/Linked.noindex/GaoCiYuan"
+          xcrun lipo -verify_arch arm64 "$scratch/Linked.noindex/GaoCiYuan"
+          echo "Linked GaoCiYuan for arm64"
+          
+          # Link the optional local reader without invoking its production signing stage.
+          xcrun swiftc -O -module-cache-path "$checkout/build.noindex/cache" -framework AppKit \
+            scripts/doubao-reader/main.swift Sources/AXShared.swift Sources/DoubaoAX.swift \
+            Sources/QuotaValueParser.swift -o "$scratch/Linked.noindex/doubao-reader"
+          xcrun lipo -verify_arch arm64 "$scratch/Linked.noindex/doubao-reader"
+          
+          xcrun swiftc -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 \
+            -sdk "$SDK" -module-cache-path "$checkout/build.noindex/cache" \
+            Sources/GrokBotUsageReport.swift Tests/GrokBotUsageReportRegression.swift \
+            -o "$scratch/Linked.noindex/grokbot-usage-report"
+          "$scratch/Linked.noindex/grokbot-usage-report"
+          
+          models=(Sources/{Models,AgentTables,ProviderIntegrations}.swift)
+          if [[ -f Tests/QuotaForecastRegression.swift ]]; then
+            models+=(Sources/{GrokBotUsageReport,QuotaForecast}.swift)
+            xcrun swiftc -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 \
+              -sdk "$SDK" -module-cache-path "$checkout/build.noindex/cache" \
+              "${models[@]}" Tests/QuotaForecastRegression.swift -o "$scratch/Linked.noindex/quota-forecast"
+            "$scratch/Linked.noindex/quota-forecast"
+          fi
+          
+          # Exercise the production store against the suite's synthetic connectors.
+          xcrun swiftc -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 \
+            -sdk "$SDK" -module-cache-path "$checkout/build.noindex/cache" \
+            "${models[@]}" \
+            Sources/Pacing.swift Sources/RefreshCoordinator.swift Sources/MonitorStore.swift \
+            Sources/LegacyAccountMigration.swift Sources/UsageAnalyticsStore.swift Sources/TokenLifecycleWork.swift \
+            Tests/RefreshSchedulingRegression.swift -framework SwiftUI -framework AppKit \
+            -framework UniformTypeIdentifiers -framework CryptoKit -lsqlite3 -o "$scratch/Linked.noindex/refresh-scheduling"
+          "$scratch/Linked.noindex/refresh-scheduling"
+          echo "GaoCiYuan arm64 compile/link and targeted regression complete for $revision."
+          xcrun swiftc -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 Sources/TokenLifecycleWork.swift Tests/TokenLifecycleWorkRegression.swift -o "$scratch/Linked.noindex/token-lifecycle"
+          "$scratch/Linked.noindex/token-lifecycle"
+          xcrun swiftc -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 Sources/{GrokBotUsageReport,GrokBotAX,AXShared}.swift Tests/GrokBotAXRegression.swift -framework AppKit -framework ApplicationServices -framework CoreGraphics -o "$scratch/Linked.noindex/grokbot-ax"
+          "$scratch/Linked.noindex/grokbot-ax"
+          python3 -B Tests/InstallNoBackupRegression.py
+          plist="$checkout/build.noindex/Frameworks/Token.framework/Versions/A/Resources/Info.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")" = 4.13
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")" = 15
