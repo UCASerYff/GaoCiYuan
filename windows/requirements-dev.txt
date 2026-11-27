@@ -1,3 +1,8 @@
 pytest>=8.2
-pyinstaller>=6.10
+pyinstaller==6.22.3
 tzdata>=2024.1
+cryptography>=45,<51
+pywebview==6.1
+pythonnet==3.2.1
+pystray==0.19.5
+Pillow>=11,<14

@@ -2,6 +2,8 @@ build.noindex/
 .test.noindex/
 .worktrees/
 dist/
+windows/build/
+windows/.build-venv/
 .release.noindex/
 .install.noindex/
 rollback/

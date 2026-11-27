@@ -8,6 +8,7 @@ FILE = "自动读取快照文件"
 AGENT_LOCAL = "本机软件自动读取"
 CODEX = "本机 Codex"
 CLAUDE_DESKTOP = "Claude 桌面会话"
+CLAUDE_STATUSLINE = "Claude Code 状态栏推送"
 CURSOR = "Cursor 编辑器登录态"
 COPILOT = "GitHub 设备流登录"
 GROK_ACCOUNT = "Grok 账号额度"
@@ -21,10 +22,12 @@ WORKBUDDY = "WorkBuddy 积分余额（本机只读）"
 GEMINI_APP = "Gemini App 中的 Antigravity"
 CUSTOM_API = "自定义 API 余额查询（GET）"
 MINIMAX = "MiniMax Token Plan API"
+MINIMAX_CLI = "MiniMax CLI 套餐额度"
 GLM = "GLM Coding Plan API"
 KIMI_CODING = "Kimi Code 额度 API"
 KIMI_DESKTOP = "Kimi 桌面订阅页"
 OPENCODE = "OpenCode 套餐额度"
+OPENCODE_GO = "OpenCode Go 官方套餐额度"
 CLINE = "Cline 账户额度"
 FACTORY = "Factory Droid 账户额度"
 ZED = "Zed 套餐额度"
@@ -34,6 +37,8 @@ TYPESAFE = "TypeSafe 账户余额"
 OPENROUTER = "OpenRouter Key 额度"
 TRAE = "Trae 中国站额度"
 ALIBABA = "阿里云 Coding Plan 额度"
+ALIBABA_TOKEN_CLI = "百炼 CLI Token Plan 额度"
+ALIBABA_CODING_CLI = "百炼 CLI Coding Plan 额度"
 STEPFUN = "StepFun 套餐额度"
 NEW_API = "New API / One API 额度"
 SUB2API = "Sub2API 账户额度"
@@ -102,7 +107,7 @@ _CORE = {
     "hy": ("腾讯", "混元", "混元", "元", "https://hunyuan.tencent.com", "WorkBuddy 使用独立 Agent 入口；此处不再提供大模型 API 账户。"),
     "mimo": ("小米", "MiMo", "MiMo Agent", "mi", "https://platform.xiaomimimo.com", "MiMo Agent 自动检测本机软件，并按所选连接方式读取真实额度。"),
     "devin": ("Devin", "Devin", "Devin", "◆", "https://app.devin.ai", "Devin 支持本机保存 plan 或账单连接，两路独立展示，互不回退、不混用口径。"),
-    "ollama": ("Ollama", "Ollama Cloud", "Ollama", "ol", "https://ollama.com", "Ollama 按显式提供的账号会话读取 Session 与 Weekly 用量。"),
+    "ollama": ("Ollama", "Ollama Cloud", "Ollama", "ol", "https://ollama.com/settings", "Ollama 按显式提供的账号会话读取 Session 与 Weekly 用量。"),
     "commandcode": ("Command Code", "Command Code", "Command Code", "⌘", "https://commandcode.ai", "Command Code 读取滚动窗、组织上限、套餐额度与余额。"),
     "dsh": ("DeepSeek", "Harness", "DeepSeek Harness", "ds", "https://harness.deepseek.com/usage", "DeepSeek Harness 自动检测本机软件与登录凭证，读取钱包余额、赠金与累计消费。"),
     "workbuddy": ("腾讯", "WorkBuddy", "WorkBuddy", "W", "https://www.workbuddy.cn", "WorkBuddy 只读读取桌面端积分余额，后台采集并做 5 分钟节流，积分值不写日志。"),
@@ -200,13 +205,17 @@ def creation_kinds(provider: str) -> list[str]:
 def available_connections(provider: str, kind: str) -> list[str]:
     item = INTEGRATIONS.get(provider)
     if item:
+        if provider == "opencode":
+            return [OPENCODE_GO, item.connection, FILE]
+        if provider == "alibaba":
+            return [ALIBABA_TOKEN_CLI, ALIBABA_CODING_CLI, item.connection, FILE]
         return [item.connection, FILE]
     if kind == "Agent":
         listed: list[str] = []
         if provider == "openai":
             listed.append(CODEX)
         if provider == "claude":
-            listed.append(CLAUDE_DESKTOP)
+            listed.extend((CLAUDE_STATUSLINE, CLAUDE_DESKTOP))
         if provider == "cursor":
             listed.append(CURSOR)
         if provider == "copilot":
@@ -230,7 +239,7 @@ def available_connections(provider: str, kind: str) -> list[str]:
         if provider == "custom":
             listed.append(CUSTOM_API)
         if provider == "minimax":
-            listed.append(MINIMAX)
+            listed.extend((MINIMAX_CLI, MINIMAX))
         elif provider == "glm":
             listed.append(GLM)
         elif provider == "kimi":
@@ -258,6 +267,8 @@ def available_connections(provider: str, kind: str) -> list[str]:
 
 
 def needs_key(connection: str) -> bool:
+    if connection == OPENCODE_GO:
+        return True
     item_connections = {item.connection for item in INTEGRATIONS.values()}
     if connection in item_connections and connection != KIRO:
         return True
@@ -265,18 +276,86 @@ def needs_key(connection: str) -> bool:
 
 
 def windows_read_mode(provider: str, connection: str) -> str:
-    """file：读取用户快照。grokbot：只在手动点击时读约定文件。unsupported：不调用在线或辅助功能接口。"""
+    """Select the Windows reader without reinterpreting saved connection names."""
     if connection == FILE:
         return "file"
     if provider == "grok" and connection == AGENT_LOCAL:
         return "grokbot"
+    if (provider, connection) in _WINDOWS_CONNECTORS:
+        return "connector"
     return "unsupported"
+
+
+_WINDOWS_CONNECTORS = {
+    ("openai", CODEX), ("openai", AGENT_LOCAL),
+    ("claude", CLAUDE_STATUSLINE), ("claude", AGENT_LOCAL),
+    ("mimo", MIMO),
+    ("minimax", MINIMAX_CLI),
+    ("opencode", OPENCODE_GO),
+    ("alibaba", ALIBABA_TOKEN_CLI), ("alibaba", ALIBABA_CODING_CLI),
+}
+
+_WINDOWS_LIMITS = {
+    "cursor": "Cursor 的组织管理 API 不提供个人双额度池。可在 Cursor 官方用量页查看。",
+    "copilot": "GitHub 的公共账单 API 不返回个人的所有套餐额度窗口。可在 GitHub 官方用量页查看。",
+    "grok": "Grok 账号额度与 Grok Bot 本机手动用量是两个独立来源。此账号连接没有公开查询接口。",
+    "gemini": "内置 Gemini 和独立 Antigravity 的 macOS 本机桥接无法在 Windows 上使用。",
+    "claude": "Claude 桌面会话读取依赖 macOS。Claude Code 可通过官方状态栏推送额度。",
+    "kimi": "Windows 可以使用 Kimi 官方用量页查看额度。Mac 的本机桌面订阅页读取暂未移植。",
+    "doubao": "豆包订阅页的本机读取已在 macOS 验证。请在豆包客户端查看额度。",
+    "glm": "Zcode 的个人／团队额度可在客户端使用统计页查看。",
+    "minimax": "请切换到 MiniMax CLI 套餐额度，并使用官方 mmx CLI 登录。",
+    "alibaba": "使用官方百炼 CLI 的 Token Plan 或 Coding Plan 连接查询本人的订阅。",
+    "opencode": "Windows 支持 OpenCode Go 的官方额度接口。Zen 仍可从其官方控制台查看。",
+    "devin": "Devin 本机计划文件或网页账单会话目前在 macOS 可用。",
+    "ollama": "Ollama Cloud 两个时段的用量可在官方设置页查看。",
+    "dsh": "DeepSeek Harness 钱包余额可在官方用量页查看。",
+    "workbuddy": "WorkBuddy 积分页的本机读取已在 macOS 验证。请在 WorkBuddy 客户端查看积分。",
+    "kiro": "已登录的 Kiro CLI 支持交互式 /usage。",
+    "qoder": "已登录的 Qoder CLI 支持交互式 /usage。",
+}
+
+
+def default_connection(provider: str) -> str:
+    preferred = {"openai": CODEX, "claude": CLAUDE_STATUSLINE, "grok": AGENT_LOCAL, "mimo": MIMO,
+                 "minimax": MINIMAX_CLI, "opencode": OPENCODE_GO, "alibaba": ALIBABA_TOKEN_CLI}
+    return preferred.get(provider, FILE)
+
+
+def connection_details(provider: str, connection: str) -> dict:
+    mode = windows_read_mode(provider, connection)
+    details = {"mode": mode, "label": connection, "help": "", "credentialLabel": "", "pathLabel": "",
+               "scopeLabel": "", "regions": []}
+    if mode == "file":
+        details.update(pathLabel="快照文件路径", help="读取明确选择的本地 JSON 快照。")
+    elif mode == "grokbot":
+        details.update(label="Grok Bot 本机用量", help="只有点击「读取本机额度」才读取应用资料里的 grokbot-usage.json。")
+    elif mode == "unsupported":
+        details.update(help=_WINDOWS_LIMITS.get(provider, "此连接在 Windows 暂无经验证的读取方式。可从官方页面查看，或选择本地快照。"))
+    elif provider == "openai":
+        details.update(pathLabel="Codex CLI 可执行文件（可选）", help="使用已安装且已登录 ChatGPT 的 Codex CLI 查询额度。首次点击刷新以启用。")
+    elif provider == "claude":
+        details.update(help="在 Claude Code 配置官方 statusLine，用命令行工具的 --capture-claude-status 接收额度。")
+    elif provider == "mimo":
+        details.update(credentialLabel="MiMo 个人 Token Plan 专属密钥（tp-）",
+                       regions=[{"value": "cn", "label": "中国"}, {"value": "sgp", "label": "新加坡"}, {"value": "ams", "label": "欧洲"}],
+                       help="使用专属密钥查询个人套餐当前周期的积分与余量。请选择密钥所属集群。")
+    elif provider == "minimax":
+        details.update(help="安装官方 mmx CLI，在其中登录 Token Plan，再点击刷新查询 5 小时和每周额度。")
+    elif provider == "opencode":
+        details.update(credentialLabel="OpenCode Go API Key", help="使用 Go 专属密钥查询 5 小时、每周、每月额度。")
+    elif provider == "alibaba":
+        plan = "Token Plan" if connection == ALIBABA_TOKEN_CLI else "Coding Plan"
+        details.update(help=f"安装官方百炼 CLI 并运行 bl auth login --console 完成授权，然后刷新 {plan} 额度。")
+    return details
 
 
 def catalog_entries() -> list[dict]:
     rows = []
     for provider in list(_CORE) + list(INTEGRATIONS):
         kinds = creation_kinds(provider)
+        connections = available_connections(provider, "Agent")
+        preferred = default_connection(provider)
         rows.append(
             {
                 "id": provider,
@@ -285,10 +364,12 @@ def catalog_entries() -> list[dict]:
                 "company": company(provider),
                 "agent": agent_software(provider),
                 "mark": mark(provider),
-                "note": note(provider),
+                "note": connection_details(provider, preferred)["help"] if preferred != FILE else _WINDOWS_LIMITS.get(provider, "可查看官方用量页，或接入明确选择的本地快照。"),
                 "url": member_url(provider),
                 "creatable": bool(kinds),
-                "connections": available_connections(provider, "Agent"),
+                "connections": connections,
+                "defaultConnection": preferred,
+                "connectionDetails": {item: connection_details(provider, item) for item in connections},
                 "removed": provider == "custom" or (INTEGRATIONS.get(provider) is not None and INTEGRATIONS[provider].kind != "Agent"),
             }
         )

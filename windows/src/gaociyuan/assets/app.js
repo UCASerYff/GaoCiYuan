@@ -1,22 +1,219 @@
 const token = document.querySelector('meta[name="gao-token"]').content;
-let state = null;
-let page = "overview";
-let usageRows = [];
-
 const main = document.querySelector("#main");
-const rail = document.querySelector("#rail");
-const notice = document.querySelector("#notice");
+const dialog = document.querySelector("#dialog");
+const navigation = document.querySelector("#navigation");
+const topActions = document.querySelector("#top-actions");
+const message = document.querySelector("#message");
+const systemTheme = matchMedia("(prefers-color-scheme: dark)");
+const fileConnection = "自动读取快照文件";
+const localConnection = "本机软件自动读取";
+const routeDefinitions = {
+  overview: ["总览", "Agent 额度与状态，一眼看清", "overview"],
+  agents: ["Agent 软件", "只记录本机 Agent 软件", "computer"],
+  analytics: ["用量分析", "按日期、工具、模型与会话分析本地用量", "chart"],
+  catalog: ["平台接入", "发现软件、连接额度、管理采集", "stack"],
+};
+const icons = {
+  overview: "ECA5", computer: "E7F4", chart: "E9D2", stack: "E81E", refresh: "E72C",
+  plus: "E710", more: "E712", settings: "E713", alert: "E783", pause: "E769",
+  time: "E823", info: "E946", right: "E72A", database: "EDA2", bell: "E7ED",
+  palette: "E790", download: "E896", upload: "E898", terminal: "E756", search: "E721",
+  folder: "E8B7", key: "E8D7", down: "E74B", close: "E711", left: "E72B", cost: "E8C7",
+  signal: "E702", window: "E737", cache: "EEA0", checklist: "E73A", external: "E8A7",
+};
+const supplementalTranslations = {
+  "总览": "Overview",
+  "Agent 额度与状态，一眼看清": "Agent quotas and status at a glance",
+  "只记录本机 Agent 软件": "Manage your local Agent apps",
+  "用量分析": "Usage analytics",
+  "按日期、工具、模型与会话分析本地用量": "Analyze local usage by date, tool, model and session",
+  "发现软件、连接额度、管理采集": "Discover apps, connect quotas and manage collection",
+  "已启用 Agent": "Enabled agents",
+  "已接入平台": "Connected platforms",
+  "需处理": "Needs attention",
+  "账户与自动发现合并统计": "Configured and discovered accounts",
+  "当前没有必须处理项": "Everything is up to date",
+  "低额度、凭据或连续失败": "Low quotas, credentials or recurring failures",
+  "从第一个 Agent 开始": "Connect your first Agent",
+  "常用 AI 软件，一处查看。": "Your AI apps in one place.",
+  "自动发现本机 Agent，读取真实额度与本地用量；不再记录大模型 API 账户。": "Discover installed Agent apps and see measured quotas and local usage.",
+  "浏览 Agent 平台": "Browse Agent platforms",
+  "添加 Codex": "Add Codex",
+  "搜索软件、账户或套餐": "Search apps, accounts or plans",
+  "选择 Agent 平台": "Choose an Agent platform",
+  "添加 Agent 软件": "Add Agent app",
+  "导出账户快照 CSV": "Export account snapshots as CSV",
+  "添加与导出": "Add and export",
+  "刷新全部 Agent": "Refresh all agents",
+  "正在同步": "Syncing",
+  "没有匹配的 Agent 软件": "No matching Agent apps",
+  "暂无已接入的 Agent 软件": "No Agent apps connected",
+  "暂无已启用的 Agent 软件": "No Agent apps enabled",
+  "账户设置": "Account settings",
+  "移除账户": "Remove account",
+  "平台": "Platform",
+  "账户名称": "Account name",
+  "套餐 / 组织备注": "Plan / organization note",
+  "连接方式": "Connection",
+  "已保存凭据": "Credential saved",
+  "Windows 快照文件路径": "Windows snapshot file path",
+  "启用此账户": "Enable this account",
+  "显示在悬浮条": "Show in the floating panel",
+  "立即同步": "Sync now",
+  "控制台 ↗": "Console ↗",
+  "未找到匹配的 Agent 软件。": "No matching Agent apps.",
+  "本机软件发现": "Local app discovery",
+  "本机 Agent 软件状态": "Local Agent app status",
+  "自动检测实际安装的软件和 CLI；账户配置不会被当作软件安装记录。": "Detect installed apps and command-line tools. A configured account does not count as an installation.",
+  "刷新检测": "Rescan",
+  "本机发现 · 额度连接": "Local discovery · quota connection",
+  "采集设置": "Collection settings",
+  "搜索 Agent 软件或本地来源": "Search Agent apps and local sources",
+  "接入": "Connect",
+  "已选择采集": "Selected",
+  "未选择采集": "Not selected",
+  "该采集源暂不支持 Windows": "This collection source is unavailable on Windows",
+  "正在读取本机资料…": "Loading local data…",
+  "账户快照": "Account snapshots",
+  "CLI 与桌面端按实际日志格式归并": "Command-line and desktop tools are grouped by log format",
+  "只分析 Agent 软件留下的 Token、模型和会话记录；没有日志时不显示成零用量。": "Analyze Agent token, model and session records. Missing records leave usage blank.",
+  "未找到匹配的本地用量来源。": "No local usage sources match.",
+  "尚未获取额度": "Quota unavailable",
+  "上一计费周期已结束，等待平台新读数。": "The previous quota window ended. Waiting for a new reading.",
+  "剩余": "remaining",
+  "重置": "Resets",
+  "数据截至": "Data as of",
+  "采集说明": "Collection details",
+  "状态栏配置示例": "Status line configuration example",
+  "复制配置示例": "Copy configuration",
+  "将下方 statusLine 字段合并到 Claude Code 的用户设置。若已使用自定义状态栏，请把接收命令加入现有脚本，并让它读取相同的标准输入。": "Merge the statusLine field below into your Claude Code user settings. If you already use a custom status line, add the capture command to your script and pass it the same standard input.",
+  "移除 Agent 软件？": "Remove Agent app?",
+  "将移除该软件在本机的额度快照和专属凭据，不影响平台上的账号。": "This removes the app's local quota snapshots and its saved credential. Your platform account remains active.",
+  "请求失败": "Request failed",
+  "下载失败": "Download failed",
+  "资料库无法写入": "Local data is read-only",
+  "添加": "Add",
+};
+const translations = new Map();
+let state = null;
+let providers = [];
+let usageSources = null;
+let discovery = null;
+let nativeInterface = null;
+let page = "overview";
+let accountQuery = sessionStorage.getItem("accountQuery") || "";
+let catalogQuery = "";
+let operationCount = 0;
+let isSyncingAll = false;
+let transientMessage = "";
+let settingsTab = "module";
+let stateRevision = 0;
 
-document.querySelectorAll("nav button").forEach((button) => {
-  button.addEventListener("click", () => {
-    page = button.dataset.page;
-    document.querySelectorAll("nav button").forEach((item) => item.classList.toggle("active", item === button));
-    render();
-  });
-});
+const actions = new Map();
+function action(name, callback) {
+  actions.set(name, callback);
+}
+
+function inEnglish() {
+  const language = state?.settings?.language || "zh-Hans";
+  return language === "en" || language === "system" && !navigator.language.toLowerCase().startsWith("zh");
+}
+
+function tr(value) {
+  return inEnglish() ? supplementalTranslations[value] || translations.get(value) || value : value;
+}
+
+function countText(number, chinese, english) {
+  return inEnglish() ? `${number} ${english}` : `${number} ${chinese}`;
+}
+
+function text(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[character]);
+}
+function t(value) {
+  return text(tr(value));
+}
+
+function icon(name, extra = "") {
+  const code = icons[name] || icons.info;
+  return `<span class="icon ${extra}" aria-hidden="true">&#x${code};</span>`;
+}
+
+function button(label, name, { glyph, classes = "", value, disabled = false, iconOnly = false } = {}) {
+  return `<button type="button" class="${classes}${iconOnly ? " icon-button" : ""}" data-action="${name}"${value !== undefined ? ` data-value="${text(value)}"` : ""}${disabled ? " disabled" : ""}${iconOnly ? ` aria-label="${t(label)}" title="${t(label)}"` : ""}>${glyph ? icon(glyph) : ""}${iconOnly ? "" : t(label)}</button>`;
+}
+
+function menu(label, glyph, body, classes = "", iconOnly = false) {
+  return `<details class="menu ${classes}"><summary class="${iconOnly ? "icon-button" : "button"}" title="${t(label)}"${iconOnly ? ` aria-label="${t(label)}"` : ""}>${icon(glyph)}${iconOnly ? "" : t(label)}</summary><div class="menu-items">${body}</div></details>`;
+}
+
+function selectOptions(items, value) {
+  return items.map(([key, title]) => `<option value="${text(key)}"${String(key) === String(value) ? " selected" : ""}>${t(title)}</option>`).join("");
+}
+
+function switchInput(name, title, checked, attribs = "") {
+  return `<label class="switch-row"><span>${t(title)}</span><input class="switch" type="checkbox" name="${text(name)}"${checked ? " checked" : ""}${attribs ? " " + attribs : ""}></label>`;
+}
+
+function providerFor(id) {
+  return providers.find((item) => item.id === id);
+}
+
+function providerMark(item, size = 34) {
+  const id = item?.id || "";
+  const html = `<span class="provider-mark" style="--mark-size:${size}px" aria-hidden="true">${text(item?.mark || id.slice(0, 1).toUpperCase())}`;
+  return html + (/^[a-z0-9]+$/.test(id) ? `<img src="/brand/${id}.png" alt="">` : "") + "</span>";
+}
+
+document.addEventListener("error", (event) => {
+  if (event.target.matches?.(".provider-mark img")) event.target.remove();
+}, true);
+
+function externalURL(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function externalLink(url, label, classes = "") {
+  const href = externalURL(url);
+  return href ? `<a class="${classes}" href="${text(href)}" target="_blank" rel="noopener noreferrer">${t(label)}</a>` : "";
+}
+
+function displayDate(iso) {
+  const datetime = new Date(iso);
+  if (!iso || !Number.isFinite(datetime.valueOf())) return "—";
+  const options = { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" };
+  try {
+    return new Intl.DateTimeFormat(inEnglish() ? "en" : "zh-CN", {
+      ...options, timeZone: state?.settings?.timeZone,
+    }).format(datetime);
+  } catch {
+    return new Intl.DateTimeFormat(undefined, options).format(datetime);
+  }
+}
+
+function number(value) {
+  return value === null || value === undefined || !Number.isFinite(Number(value))
+    ? "—"
+    : Intl.NumberFormat(inEnglish() ? "en" : "zh-CN", { maximumFractionDigits: 2 }).format(Number(value));
+}
+
+function money(value, currency) {
+  try {
+    return Intl.NumberFormat(inEnglish() ? "en" : "zh-CN", { style: "currency", currency }).format(value);
+  } catch {
+    return `${number(value)} ${currency || ""}`.trim();
+  }
+}
 
 async function api(path, body) {
-  const options = { headers: { "X-Gao-Token": token } };
+  const options = { headers: { "X-Gao-Token": token }, cache: "no-store" };
   if (body !== undefined) {
     options.method = "POST";
     options.headers["Content-Type"] = "application/json";
@@ -24,271 +221,743 @@ async function api(path, body) {
   }
   const response = await fetch(path, options);
   const payload = await response.json();
-  if (!response.ok || payload.ok === false) throw new Error(payload.error || "请求失败");
-  if (payload.state) state = payload.state;
+  if (!response.ok || payload.ok === false) {
+    const error = new Error(payload.error || tr("请求失败"));
+    error.code = payload.code;
+    throw error;
+  }
+  if (payload.state) {
+    state = payload.state;
+    stateRevision += 1;
+  }
   return payload;
 }
 
-function ringHTML(ring) {
-  const face = ring || { fill: 0, label: "—", color: "secondary", opacity: 1, help: "" };
-  const fill = face.showsDash ? 0 : face.fill || 0;
-  return `<div class="ring-wrap" style="opacity:${face.opacity ?? 1}" title="${escapeAttr(face.help || "")}">
-    <div class="ring ${face.color || "secondary"}" style="--fill:${fill}"><span>${escapeHTML(face.label || "—")}</span></div>
-    <div class="ring-label">${escapeHTML(face.label || "—")}</div>
-  </div>`;
+async function downloadFile(path, fileName) {
+  const response = await fetch(path, { headers: { "X-Gao-Token": token } });
+  if (!response.ok) {
+    const payload = await response.json();
+    throw new Error(payload.error || tr("下载失败"));
+  }
+  saveBlob(await response.blob(), fileName);
 }
 
-function escapeHTML(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+function saveBlob(blob, fileName) {
+  const object = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = object;
+  anchor.download = fileName;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(object), 60_000);
 }
-function escapeAttr(value) { return escapeHTML(value); }
 
-function accounts() { return state?.accounts || []; }
+function updateAppearance() {
+  const selected = state?.settings?.appearance || "system";
+  const appearance = selected === "system" ? (systemTheme.matches ? "dark" : "light") : selected;
+  document.documentElement.dataset.appearance = appearance;
+  document.documentElement.lang = inEnglish() ? "en" : "zh-Hans";
+}
 
-function render() {
-  document.body.dataset.appearance = resolvedAppearance();
-  if (!state) { main.innerHTML = "<p>正在读取本机资料…</p>"; return; }
-  notice.classList.toggle("hidden", !state.notice);
-  notice.textContent = state.notice || "";
-  if (state.status === "readonly") {
-    main.innerHTML = `<section class="panel"><h2>资料库无法写入</h2><p>${escapeHTML(state.notice || "")}</p></section>`;
-    rail.innerHTML = "";
+function openDialog(content, style = "") {
+  dialog.className = style;
+  dialog.innerHTML = content;
+  if (!dialog.open) dialog.showModal();
+}
+
+function closeDialog() {
+  if (dialog.open) dialog.close();
+}
+
+dialog.addEventListener("close", () => {
+  if (!dialog.open) dialog.innerHTML = "";
+});
+
+function showMessage(value = "") {
+  transientMessage = value;
+  renderMessages();
+}
+
+function renderMessages() {
+  const value = transientMessage || state?.notice || "";
+  message.classList.toggle("hidden", !value);
+  message.innerHTML = value ? `<span>${t(value)}</span>${transientMessage ? button("关闭", "dismiss-message", { glyph: "close", iconOnly: true }) : ""}` : "";
+}
+
+function accounts() {
+  return state?.accounts || [];
+}
+
+function activeAccounts() {
+  return accounts().filter((account) => account.enabled);
+}
+
+function go(nextPage) {
+  if (nextPage === "settings") {
+    openSettings();
     return;
   }
-  if (page === "overview") renderOverview();
-  else if (page === "agents") renderAgents();
-  else if (page === "usage") renderUsage();
-  else if (page === "catalog") renderCatalog();
-  else renderSettings();
-  renderRail();
+  if (location.hash === "#" + nextPage) return;
+  location.hash = nextPage;
 }
 
-function resolvedAppearance() {
-  const choice = state?.settings?.appearance || "system";
-  if (choice === "system") return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  return choice;
+function route() {
+  const [id, query] = location.hash.slice(1).split("?", 2);
+  const aliases = { agent: "agents", usage: "analytics", providers: "catalog" };
+  const next = aliases[id] || id;
+  if (next === "settings") {
+    if (state) openSettings();
+    return;
+  }
+  closeDialog();
+  page = routeDefinitions[next] ? next : "overview";
+  render();
+  window.scrollTo(0, 0);
+  const params = new URLSearchParams(query);
+  const target = params.get("account");
+  if (target) {
+    let card = document.getElementById(`account-${target}`);
+    if (!card && accountQuery && accounts().some((entry) => entry.id === target)) {
+      accountQuery = "";
+      sessionStorage.removeItem("accountQuery");
+      render();
+      card = document.getElementById(`account-${target}`);
+    }
+    if (card) {
+      card.scrollIntoView({ block: "center" });
+      card.focus({ preventScroll: true });
+    }
+  }
+  if (page === "analytics") void loadUsage();
+  if (page === "catalog" && !usageSources) void refreshSourceCards();
+}
+
+function renderNav() {
+  document.querySelector("#brand").textContent = tr("搞词元");
+  navigation.innerHTML = Object.entries(routeDefinitions).map(([target, definition]) =>
+    `<button type="button" data-action="page" data-value="${target}"${page === target ? ' aria-current="page"' : ""}>${icon(definition[2])}${t(definition[0])}</button>`
+  ).join("");
+  const active = activeAccounts().length;
+  const syncing = isSyncingAll || state?.refreshing?.length;
+  const syncLabel = syncing ? tr("正在同步") : countText(active, "个 Agent", active === 1 ? "Agent" : "Agents");
+  topActions.innerHTML = `
+    <span class="agent-count"><span class="status-dot${syncing ? " syncing" : ""}"></span>${text(syncLabel)}</span>
+    ${button("刷新全部 Agent", "refresh-all", { glyph: "refresh", iconOnly: true, disabled: !active || !!syncing })}
+    ${menu("添加与导出", "plus", [
+      button("选择 Agent 平台", "page", { value: "catalog" }),
+      button("添加 Agent 软件", "edit", { value: "openai" }),
+      "<hr>",
+      button("导出账户快照 CSV", "export-accounts"),
+    ].join(""), "", true)}
+    ${button("设置", "settings", { glyph: "settings", iconOnly: true })}
+  `;
+}
+
+function heading(pageInfo) {
+  return `<header class="page-heading"><div><h1>${t(pageInfo[0])}</h1><p class="muted">${t(pageInfo[1])}</p></div>${
+    page === "analytics" ? button("采集设置", "usage-settings") : ""
+  }</header>`;
+}
+
+function render() {
+  updateAppearance();
+  renderNav();
+  renderMessages();
+  main.setAttribute("aria-busy", String(!state));
+  if (!state) return;
+  if (state.status === "readonly") {
+    main.innerHTML = `${heading(routeDefinitions[page])}<section class="panel"><h2>${t("资料库无法写入")}</h2><p>${t(state.notice)}</p>${button("打开数据目录", "open-data")}</section>`;
+    return;
+  }
+  const contents = { overview: renderOverview, agents: renderAgents, analytics: renderUsage, catalog: renderCatalog };
+  main.innerHTML = heading(routeDefinitions[page]) + contents[page]();
+}
+
+function metric(title, value, detail, glyph, tone = "") {
+  return `<div class="panel metric ${tone}"><div class="metric-heading"><span>${t(title)}</span>${icon(glyph)}</div><strong>${text(value)}</strong><p>${t(detail)}</p></div>`;
+}
+
+function tag(title, tone = "accent") {
+  return `<span class="tag ${tone}">${t(title)}</span>`;
+}
+
+function emptyPanel(title, glyph, description = "", controls = "") {
+  return `<section class="panel empty-panel">${icon(glyph)}<h2>${t(title)}</h2>${description ? `<p class="muted">${t(description)}</p>` : ""}${controls}</section>`;
+}
+
+function accountSearch() {
+  return `<input class="search" id="account-search" type="search" aria-label="${t("搜索软件、账户或套餐")}" placeholder="${t("搜索软件、账户或套餐")}" value="${text(accountQuery)}">`;
 }
 
 function renderOverview() {
   const rows = accounts();
-  const counts = { needsAction: 0, syncPaused: 0, historical: 0, ok: 0 };
-  rows.forEach((row) => { counts[row.health] = (counts[row.health] || 0) + 1; });
-  main.innerHTML = `
-    <section class="stats">
-      <div class="card stat"><strong>${rows.length}</strong><span>Agent</span></div>
-      <div class="card stat"><strong>${counts.needsAction || 0}</strong><span>需处理</span></div>
-      <div class="card stat"><strong>${counts.syncPaused || 0}</strong><span>暂时无法同步</span></div>
-      <div class="card stat"><strong>${counts.historical || 0}</strong><span>历史数据</span></div>
-    </section>
-    <div class="toolbar">
-      <input id="q" placeholder="搜索名称或平台" value="${escapeAttr(sessionStorage.getItem("q") || "")}">
-      <select id="health"><option value="">全部状态</option><option value="needsAction">需处理</option><option value="syncPaused">暂时无法同步</option><option value="historical">历史数据</option><option value="ok">正常</option></select>
+  const active = activeAccounts();
+  const counts = { needsAction: 0, syncPaused: 0, historical: 0 };
+  for (const account of active) {
+    if (account.health in counts) counts[account.health] += 1;
+  }
+  const stats = `<section class="metric-grid">
+    ${metric("已启用 Agent", active.length, countText(new Set(active.map((account) => account.provider)).size, "个软件平台", "app platforms"), "computer")}
+    ${metric("已接入平台", new Set(rows.map((account) => account.provider)).size, "账户与自动发现合并统计", "stack", "teal")}
+    ${metric("需处理", counts.needsAction, counts.needsAction ? "低额度、凭据或连续失败" : "当前没有必须处理项", "alert", counts.needsAction ? "red" : "teal")}
+  </section>`;
+  if (!rows.length) {
+    return stats + `<section class="panel onboarding">
+      <div>${tag("从第一个 Agent 开始", "teal")}<h2>${t("常用 AI 软件，一处查看。")}</h2>
+      <p class="muted">${t("自动发现本机 Agent，读取真实额度与本地用量；不再记录大模型 API 账户。")}</p>
+      <div class="cluster">${button("浏览 Agent 平台", "page", { value: "catalog", glyph: "right", classes: "primary" })}${button("添加 Codex", "edit", { value: "openai" })}</div></div>
+      ${icon("computer", "onboarding-icon")}
+    </section>`;
+  }
+  const alerts = [
+    [counts.needsAction, "需处理", "alert", "red", "needsAction"],
+    [counts.syncPaused, "暂未同步", "pause", "amber", "syncPaused"],
+    [counts.historical, "历史数据", "time", "secondary", "historical"],
+  ];
+  return `${stats}<div class="toolbar">${accountSearch()}${
+    alerts.filter(([count]) => count).map(([count, title, glyph, tone, health]) =>
+      button(countText(count, title, tr(title)), "health-target", { glyph, value: health, classes: `plain ${tone}` })
+    ).join("")
+  }</div><div id="account-grid" class="account-grid">${renderAccountGrid()}</div>`;
+}
+
+function renderAgents() {
+  return `<div class="toolbar">${accountSearch()}<span class="spacer"></span><span class="muted caption">${text(countText(accounts().length, "个 Agent 账户", "Agent accounts"))}</span>${button("添加", "page", { value: "catalog", glyph: "plus" })}</div>
+    <div id="account-grid" class="account-grid">${renderAccountGrid()}</div>`;
+}
+
+function renderAccountGrid() {
+  const needle = accountQuery.toLocaleLowerCase().trim();
+  const candidates = page === "overview"
+    ? [...activeAccounts()].sort((left, right) => {
+      const actionOrder = Number(right.health === "needsAction") - Number(left.health === "needsAction");
+      if (actionOrder) return actionOrder;
+      const latest = (account) => Date.parse(account.lastQuotaChangedAt || account.snapshot?.observedAt) || 0;
+      return latest(right) - latest(left);
+    })
+    : accounts();
+  const visible = candidates.filter((account) => {
+    const item = providerFor(account.provider);
+    return [account.name, account.plan, account.provider, item?.name, item?.agent].some((part) =>
+      String(part ?? "").toLocaleLowerCase().includes(needle));
+  });
+  if (visible.length) return visible.map(renderAccount).join("");
+  const label = needle ? "没有匹配的 Agent 软件" : page === "overview" ? "暂无已启用的 Agent 软件" : "暂无已接入的 Agent 软件";
+  return emptyPanel(label, "computer", "", !needle ? button("选择 Agent 平台", "page", { value: "catalog" }) : "");
+}
+
+function grokManual(account) {
+  return account.provider === "grok" && account.connection === localConnection;
+}
+
+function quotaRow(quota, stale, keepExpired) {
+  if (typeof quota.usedPercent !== "number") return "";
+  const remaining = Math.max(0, Math.min(100, 100 - quota.usedPercent));
+  const expired = quota.resetsAt && Date.parse(quota.resetsAt) <= Date.now();
+  const masked = expired && !keepExpired;
+  const color = remaining <= (state.library.warningThreshold ?? 20) ? "amber" : "teal";
+  const resetText = quota.resetsAt
+    ? masked ? tr("重置时间已到，等待新数据") : `${tr("重置")} ${displayDate(quota.resetsAt)}`
+    : tr("平台未提供重置时间");
+  const estimate = !stale && !expired ? quotaEstimate(quota) : "";
+  return `<div class="quota ${color}${stale || expired ? " stale" : ""}">
+    <div class="spread"><span title="${text(quota.title)}">${t(quota.title)}</span><strong>${masked ? t("待刷新") : `${Math.trunc(remaining)}% ${t("剩余")}`}</strong></div>
+    <progress aria-label="${t(quota.title)}" max="100" value="${remaining}"></progress>
+    <div class="spread quota-meta"><span>${text(resetText)}</span>${stale ? `<span class="amber">${t("历史数据")}</span>` : ""}</div>
+    ${estimate ? `<p class="quota-meta">${text(estimate)}</p>` : ""}
+  </div>`;
+}
+
+function quotaEstimate({ usedPercent, resetsAt, windowSeconds }) {
+  const reset = Date.parse(resetsAt) / 1000;
+  if (!Number.isFinite(reset) || !(usedPercent > 0 && usedPercent < 100) || !(windowSeconds > 0)) return "";
+  const elapsed = (Date.now() / 1000 - reset + windowSeconds) / windowSeconds;
+  if (elapsed < 0.03 || elapsed > 1) return "";
+  const untilEmpty = (100 - usedPercent) / usedPercent * elapsed * windowSeconds;
+  if (untilEmpty >= (1 - elapsed) * windowSeconds || untilEmpty > 7200) return "";
+  const duration = untilEmpty < 3600
+    ? countText(Math.max(5, Math.round(untilEmpty / 300) * 5), "分钟后", "min")
+    : countText(Math.round(untilEmpty / 1800) / 2, "小时后", "h");
+  return inEnglish() ? `Estimated to run out in ${duration} at the current rate` : `按当前速率约 ${duration}耗尽（估算）`;
+}
+
+function renderSnapshot(account) {
+  const snapshot = account.snapshot;
+  const credentialError = account.errorIsCredential || account.errorCode === "credential"
+    || /密钥无效|登录(?:态)?已过期|凭证已被拒绝|凭据失效|会话已过期|缺少会话项/.test(account.error || "");
+  if (credentialError) {
+    return `<p class="info-row amber">${icon("key")}${t("凭证已失效，重新连接前不展示旧读数。")}</p>`;
+  }
+  if (!snapshot) {
+    return `<div class="no-quota"><span>—</span><p>${t("尚未获取额度")}</p><p class="caption muted">${t("连接后读取真实数据，不预填额度。")}</p></div>`;
+  }
+  const quotas = (snapshot.quotas || []).filter((quota) => !String(quota.id).includes("status") && !/运行中|未启动/.test(quota.title));
+  const keepExpired = !!account.keepsSnapshotOnError || !!account.error
+    && (account.provider === "gemini" || account.provider === "openai" && account.connection === "本机 Codex");
+  const unexpired = quotas.filter((quota) => !quota.resetsAt || Date.parse(quota.resetsAt) > Date.now());
+  const shown = keepExpired ? quotas : unexpired;
+  const creditRows = (snapshot.creditBalances || []).map((credit) => `<div class="spread"><span class="muted">${t(credit.title)}</span><strong>${text(number(credit.value))} ${text(credit.unit)}</strong></div>`);
+  const balanceLabel = account.provider === "dsh" ? "钱包余额" : account.provider === "workbuddy" ? "积分余额" : "账户余额";
+  const balances = (snapshot.balances || []).map((balance) =>
+    `<div class="spread money-row"><span class="muted">${t(balanceLabel)}</span><strong>${text(account.provider === "workbuddy" ? number(balance.value) : money(balance.value, balance.currency))}</strong></div>`);
+  const costs = (snapshot.costs || []).map((cost) =>
+    `<div class="spread"><span class="muted">${t("统计期费用")}</span><strong>${text(money(cost.value, cost.currency))}</strong></div>`);
+  const note = snapshot.note || "";
+  const noteMarkup = note.length > 40
+    ? `<details class="detail-note"><summary>${t("采集说明")}</summary><p>${t(note)}</p></details>`
+    : note ? `<p class="caption muted">${t(note)}</p>` : "";
+  return [
+    shown.map((quota) => quotaRow(quota, account.stale, keepExpired)).join(""),
+    ...creditRows, ...balances, ...costs,
+    !shown.length && quotas.length ? `<p class="caption muted">${t("上一计费周期已结束，等待平台新读数。")}</p>` : "",
+    !quotas.length && !creditRows.length && !balances.length && !costs.length ? `<p class="muted">${t("— 尚未读取到额度")}</p>` : "",
+    noteMarkup,
+    `<p class="caption-small muted">${account.stale ? t("数据截至") + " " + text(displayDate(snapshot.observedAt)) + " · " + text(snapshot.source) : text(snapshot.source) + " · " + text(displayDate(snapshot.observedAt))}</p>`,
+  ].join("");
+}
+
+function renderAccount(account) {
+  const provider = providerFor(account.provider) || { id: account.provider, agent: account.provider };
+  const connection = provider.connectionDetails?.[account.connection]?.label || account.connection;
+  const status = account.grokStatus || account.statusNote;
+  const id = text(account.id);
+  const syncing = state?.refreshing?.includes(account.id);
+  return `<article id="account-${id}" class="panel account-card${account.stale && account.snapshot ? " historical" : ""}" data-health="${text(account.health)}" tabindex="-1">
+    <div class="spread account-header"><div class="marked">${providerMark(provider)}<div><h2 title="${text(account.name)}">${text(account.name)}</h2><p class="caption muted">${t(provider.agent)}</p></div></div>
+      ${menu("账户设置", "more", [
+        button("账户设置", "edit", { value: account.id }),
+        externalLink(provider.url, "打开官方控制台"),
+        "<hr>",
+        button("移除账户", "remove", { value: account.id, classes: "red" }),
+      ].join(""), "", true)}
     </div>
-    <div class="grid">${rows.filter(matchFilter).map(cardHTML).join("") || `<div class="panel">还没有 Agent。到「平台接入」添加，或导入快照文件。</div>`}</div>`;
-  bindFilters();
-  bindCards();
-}
-
-function matchFilter(account) {
-  const query = (document.querySelector("#q")?.value || sessionStorage.getItem("q") || "").trim().toLowerCase();
-  const health = document.querySelector("#health")?.value || "";
-  if (health && account.health !== health) return false;
-  if (!query) return true;
-  return `${account.name} ${account.provider} ${account.plan || ""}`.toLowerCase().includes(query);
-}
-
-function cardHTML(account) {
-  const note = account.grokStatus || account.statusNote || account.error || "";
-  return `<article class="card" data-id="${account.id}">
-    <div class="account-head">${ringHTML(account.ring)}<div><strong>${escapeHTML(account.name)}</strong><div class="muted">${escapeHTML(account.provider)} · ${escapeHTML(account.connection)}</div></div></div>
-    <p class="muted">${escapeHTML(note)}</p>
-    <div class="actions">
-      ${account.provider === "grok" && account.connection === "本机软件自动读取" ? `<button class="primary" data-grok="${account.id}">读取本机额度</button>` : `<button class="ghost" data-refresh="${account.id}">刷新</button>`}
+    <div class="cluster tags">
+      ${tag(account.enabled ? connection : "已暂停", account.enabled ? "accent" : "secondary")}
+      ${account.autoDiscovered ? tag("自动发现", "teal") : ""}
+      ${account.stale && account.snapshot ? tag("历史数据", "amber") : ""}
+    </div>
+    ${renderSnapshot(account)}
+    ${status ? `<p class="info-row muted">${icon("info")}${t(status)}</p>` : ""}
+    ${account.error ? `<p class="info-row amber">${icon("alert")}${t(account.error)}</p>` : ""}
+    <div class="spread">
+      ${button(syncing ? "同步中…" : grokManual(account) ? "读取本机额度" : "立即同步", grokManual(account) ? "grok" : "refresh", { value: account.id, glyph: "refresh", disabled: !account.enabled || syncing })}
+      ${externalLink(provider.url, "控制台 ↗", "muted caption")}
     </div>
   </article>`;
 }
 
-function renderAgents() {
-  main.innerHTML = `<h2 class="page-title">Agent 软件</h2><div class="grid">${accounts().map((account) => `<article class="card">
-    <div class="account-head"><span class="mark">${escapeHTML(account.provider.slice(0, 1))}</span><div><strong>${escapeHTML(account.name)}</strong><div class="muted">${escapeHTML(account.connection)}</div></div>${ringHTML(account.ring)}</div>
-    <p class="muted">${escapeHTML(account.plan || "未填写套餐")} · 悬浮条 ${account.showInRail ? "显示" : "隐藏"} · 凭据 ${account.hasCredential ? "已保存" : "未保存"}</p>
-    <p class="muted">历史 ${ (account.history || []).length } 条。Grok Bot 的手动读数不进入历史。</p>
-    <div class="actions">
-      <button class="ghost" data-rail="${account.id}">${account.showInRail ? "移出悬浮条" : "放回悬浮条"}</button>
-      <button class="ghost" data-delete="${account.id}">删除</button>
-    </div>
-    <details><summary>最近快照</summary><pre>${escapeHTML(JSON.stringify(account.snapshot || account.grokBotManualReading || {}, null, 2))}</pre></details>
-  </article>`).join("") || `<div class="panel">还没有账户。</div>`}</div>`;
-  main.querySelectorAll("[data-delete]").forEach((button) => button.onclick = async () => {
-    await api("/api/accounts/delete", { id: button.dataset.delete });
-    render();
-  });
-  main.querySelectorAll("[data-rail]").forEach((button) => button.onclick = async () => {
-    const account = accounts().find((item) => item.id === button.dataset.rail);
-    await api("/api/accounts/save", { ...publicAccount(account), showInRail: !account.showInRail });
-    render();
-  });
+function renderCatalog() {
+  return `<div class="toolbar"><input class="search catalog-search" id="catalog-search" type="search" aria-label="${t("搜索 Agent 软件或本地来源")}" placeholder="${t("搜索 Agent 软件或本地来源")}" value="${text(catalogQuery)}"><span class="spacer"></span>${button("采集设置", "usage-settings")}</div>
+    <div id="catalog-providers" class="catalog-grid">${providerCards()}</div>
+    <details class="panel disclosure" id="discovery"><summary>${icon("computer")}${t("本机软件发现")}</summary><div id="discovery-body">${renderDiscovery()}</div></details>
+    <hr>
+    <div id="source-cards">${sourceCards()}</div>`;
+}
+
+function discoverableProvider(item) {
+  return item.creatable && !item.removed;
+}
+
+function providerCards() {
+  const needle = catalogQuery.trim().toLocaleLowerCase();
+  const found = providers.filter((item) => discoverableProvider(item)
+    && `${item.name} ${item.agent} ${item.company} ${item.id}`.toLocaleLowerCase().includes(needle));
+  return found.map((item) => `<article class="panel catalog-card">
+    <div class="marked">${providerMark(item, 32)}<div><h2>${t(item.agent)}</h2><p class="caption-small muted">${t(item.company)}</p></div></div>
+    <p class="caption muted catalog-note">${t(item.note)}</p>
+    <div class="spread"><span class="caption-small teal">${t(item.integrationLabel || (item.agent === item.defaultName ? item.connections[0] : "") || "本机发现 · 额度连接")}</span>${button("接入", "edit", { value: item.id })}</div>
+  </article>`).join("") || `<p class="panel muted catalog-empty">${t("未找到匹配的 Agent 软件。")}</p>`;
+}
+
+function renderDiscovery() {
+  const rows = discovery?.observations || [];
+  return `<section class="panel discovery-inner">
+    <div class="spread"><h2>${icon("signal")}${t("本机 Agent 软件状态")}</h2>${button("刷新检测", "discover", { glyph: "refresh" })}</div>
+    <p class="muted">${t("自动检测实际安装的软件和 CLI；账户配置不会被当作软件安装记录。")}</p>
+    ${discovery?.error ? `<p class="red" role="alert">${text(discovery.error)}</p>` : ""}
+    ${rows.length ? `<div class="discovery-grid">${rows.map((item) => `<div class="discovered">
+      ${providerMark(providerFor(item.provider), 24)}<div><strong>${t(item.softwareName)}</strong><p class="${item.isRunning ? "teal" : "muted"}">${t(item.status)}</p></div><span class="spacer"></span>
+      ${!accounts().some((account) => account.provider === item.provider) && providerFor(item.provider)?.creatable ? button("接入", "discovery-add", { value: item.id }) : ""}
+    </div>`).join("")}</div>` : `<p class="discovered caption muted">${t(discovery ? "暂未检测到本机已安装的 Agent 软件（如 Codex、Claude Code、Antigravity 等）。" : "等待读取软件安装状态…")}</p>`}
+  </section>`;
+}
+
+function sourceCards() {
+  if (!usageSources) return "";
+  const needle = catalogQuery.trim().toLocaleLowerCase();
+  const selected = new Set(usageSources.engine?.enabledClientIDs || []);
+  const sources = usageSources.sources || [];
+  const matching = sources.filter((item) => `${item.name} ${item.id}`.toLocaleLowerCase().includes(needle));
+  return `<div class="spread source-heading"><h2>${icon("chart")}${text(inEnglish() ? `Local usage collection · ${sources.length} sources` : `本地用量采集 · ${sources.length} 类来源`)}</h2><span class="caption muted">${t("CLI 与桌面端按实际日志格式归并")}</span></div>
+    <p class="caption muted source-intro">${t("只分析 Agent 软件留下的 Token、模型和会话记录；没有日志时不显示成零用量。")}</p>
+    <div class="catalog-grid source-grid">${matching.map((item) => `<article class="panel source-card">${icon("terminal")}<div>
+      <h3>${t(item.name)}</h3><p class="caption-small muted" title="${text((item.paths || []).join(" · "))}">${text((item.paths || []).join(" · "))}</p>
+      ${tag(item.supported === false ? "该采集源暂不支持 Windows" : selected.has(item.id) ? "已选择采集" : "未选择采集", selected.has(item.id) && item.supported !== false ? "teal" : "secondary")}
+    </div></article>`).join("") || `<p class="muted">${t("未找到匹配的本地用量来源。")}</p>`}</div>`;
+}
+
+async function refreshSourceCards() {
+  try {
+    usageSources = await api("/api/usage/settings");
+    const target = document.querySelector("#source-cards");
+    if (target) target.innerHTML = sourceCards();
+  } catch (error) {
+    const target = document.querySelector("#source-cards");
+    if (target) target.innerHTML = `<p class="red" role="alert">${text(error.message)}</p>`;
+  }
+}
+
+function editorField(label, control) {
+  return `<label class="field"><span>${t(label)}</span>${control}</label>`;
+}
+
+function editorHeading(title, kicker = "") {
+  return `<header class="dialog-head"><div><h2 id="dialog-title">${t(title)}</h2>${kicker ? `<p class="muted">${t(kicker)}</p>` : ""}</div>
+    ${button("关闭", "close-dialog", { glyph: "close", iconOnly: true })}</header>`;
 }
 
 function publicAccount(account) {
+  return Object.fromEntries([
+    "id", "provider", "connection", "name", "plan", "filePath", "enabled", "budget",
+    "currency", "showInRail", "scopeID", "region", "autoDiscovered", "balanceBasis", "baselines",
+  ].map((key) => [key, account[key]]));
+}
+
+function draftFor(provider) {
   return {
-    id: account.id, provider: account.provider, connection: account.connection, name: account.name,
-    plan: account.plan, filePath: account.filePath, enabled: account.enabled, budget: account.budget,
-    currency: account.currency, showInRail: account.showInRail, scopeID: account.scopeID, region: account.region,
+    provider: provider.id,
+    connection: provider.defaultConnection || provider.connections[0],
+    name: provider.defaultName, plan: "", filePath: "", currency: "USD", enabled: true, showInRail: true,
   };
 }
 
-function renderCatalog() {
-  api("/api/catalog").then((payload) => {
-    const providers = payload.providers || [];
-    main.innerHTML = `<h2 class="page-title">平台接入</h2>
-      <div class="grid">${providers.map((item) => `<article class="card">
-        <div class="account-head"><span class="mark">${escapeHTML(item.mark)}</span><strong>${escapeHTML(item.name)}</strong></div>
-        <p>${escapeHTML(item.note)}</p>
-        ${item.creatable ? `<form class="form" data-provider="${item.id}">
-          <input name="name" value="${escapeAttr(item.defaultName)}">
-          <select name="connection">${item.connections.map((connection) => `<option>${escapeHTML(connection)}</option>`).join("")}</select>
-          <input name="filePath" placeholder="快照 JSON 路径（快照文件连接时填写）">
-          <input name="secret" type="password" placeholder="凭据（只写入凭据管理器）" autocomplete="off">
-          <button class="primary" type="submit">添加</button>
-        </form>` : `<p class="muted">V4.13 起不再新增这一类账户。</p>`}
-      </article>`).join("")}</div>`;
-    main.querySelectorAll("form").forEach((form) => form.onsubmit = async (event) => {
-      event.preventDefault();
-      const data = Object.fromEntries(new FormData(form).entries());
-      await api("/api/accounts/save", { provider: form.dataset.provider, ...data });
-      page = "agents";
-      document.querySelectorAll("nav button").forEach((item) => item.classList.toggle("active", item.dataset.page === "agents"));
-      render();
+function openEditor(account, defaultProvider, overrideConnection) {
+  let provider = providerFor(account?.provider || defaultProvider);
+  if (!provider) return;
+  let draft = account ? publicAccount(account) : draftFor(provider);
+  if (overrideConnection && provider.connections.includes(overrideConnection)) draft.connection = overrideConnection;
+  const original = account;
+  const availableProviders = providers.filter((item) => discoverableProvider(item) || item.id === account?.provider);
+  const providerOptions = () => selectOptions(availableProviders.map((item) => [item.id, item.name]), provider.id);
+  const draw = () => {
+    const current = provider.connectionDetails?.[draft.connection] || {};
+    const options = provider.connections.map((item) => [item, provider.connectionDetails?.[item]?.label || item]);
+    if (draft.connection && !options.some(([id]) => id === draft.connection)) options.push([draft.connection, draft.connection]);
+    const regions = (current.regions || []).map((item) => Array.isArray(item) ? item : [item.id || item.value, item.label || item.name]);
+    const isFile = draft.connection === fileConnection || current.mode === "file";
+    const isClaudeStatus = draft.connection === "Claude Code 状态栏推送";
+    const showSecret = !!current.credentialLabel && current.mode !== "unsupported";
+    const savedSecret = original?.hasCredential && original.connection === draft.connection;
+    const pathLabel = current.pathLabel || "Windows 快照文件路径";
+    openDialog(`${editorHeading("账户设置")}
+      <form id="account-editor">
+        <div class="dialog-body editor-body">
+          <div class="panel form-panel">
+            ${editorField("平台", `<select name="provider"${original ? " disabled" : ""}>${providerOptions()}</select>`)}
+            <div class="spread field"><span>${t("专属 Agent 软件")}</span><strong class="teal">${t(provider.agent)}</strong></div>
+            ${editorField("账户名称", `<input name="name" value="${text(draft.name)}" required>`)}
+            ${editorField("套餐 / 组织备注", `<input name="plan" value="${text(draft.plan)}" placeholder="${t("如 Plus、Pro、Max、Coding Plan")}">`)}
+            ${editorField("连接方式", `<select name="connection">${selectOptions(options, draft.connection)}</select>`)}
+            ${current.scopeLabel ? editorField(current.scopeLabel, `<input name="scopeID" value="${text(draft.scopeID)}">`) : ""}
+            ${regions.length ? editorField("服务地区", `<select name="region">${selectOptions(regions, draft.region)}</select>`) : ""}
+            ${showSecret ? editorField(current.credentialLabel, `<input name="secret" type="password" autocomplete="new-password"${savedSecret ? ` placeholder="${t("留空保留已存密钥")}"` : " required"}>`) : ""}
+            ${showSecret && savedSecret ? `<p class="caption muted">${t("已保存凭据")}</p>` : ""}
+            ${isFile || current.pathLabel ? editorField(pathLabel, `<input name="filePath" value="${text(draft.filePath)}" placeholder="${isFile ? "C:\\…\\snapshot.json" : "C:\\…\\codex.exe"}"${isFile ? " required" : ""}>`) : ""}
+            ${isFile ? `<div class="form-action">${button("选择…", "pick-snapshot", { glyph: "folder" })}</div>` : ""}
+            ${current.help ? `<p class="caption muted connection-help">${t(current.help)}</p>` : ""}
+            ${isClaudeStatus ? claudeSetupMarkup() : ""}
+            ${isFile ? `<p class="caption muted">${t("读取标准 JSON 快照，不是任意平台原始账单。格式示例见设置页，可由外部脚本持续更新。")}</p>` : ""}
+            ${switchInput("showInRail", "显示在悬浮条", draft.showInRail)}
+            ${switchInput("enabled", "启用此账户", draft.enabled)}
+          </div>
+          <div class="cluster">${button("测试连接", "test-account", { disabled: current.mode === "unsupported" || current.mode === "grokbot" })}<p id="editor-result" class="caption" role="status"></p></div>
+          <p class="caption muted">${t(provider.note)}</p>
+          <p id="editor-error" class="red" role="alert"></p>
+        </div>
+        <footer class="dialog-foot">${button("取消", "close-dialog")}<button type="submit" class="primary">${t("保存账户")}</button></footer>
+      </form>`, "account-dialog");
+    const form = dialog.querySelector("form");
+    form.addEventListener("change", (event) => {
+      const field = event.target.name;
+      if (field === "provider") {
+        provider = providerFor(event.target.value);
+        draft = draftFor(provider);
+        draw();
+      } else if (field === "connection") {
+        draft = { ...readDraft(form), filePath: "", scopeID: null, region: null, secret: undefined };
+        draw();
+      }
     });
-  }).catch((error) => { main.innerHTML = `<p>${escapeHTML(error.message)}</p>`; });
-}
-
-function renderUsage() {
-  main.innerHTML = `<h2 class="page-title">用量分析</h2>
-    <div class="toolbar">
-      <select id="range"><option value="today">今天</option><option value="7d" selected>7 天</option><option value="30d">30 天</option><option value="month">本月</option><option value="all">全部</option></select>
-      <input id="usage-provider" placeholder="provider，例如 claude">
-      <button class="ghost" id="load-usage">查看</button>
-      <a class="ghost" id="csv-history">导出额度 CSV</a>
-      <a class="ghost" id="csv-usage">导出用量 CSV</a>
-    </div>
-    <p class="muted">这里只汇总已导入快照里的 Token、费用和额度窗口。没有读到的数字保持空白，不会写成 0。Mac 版的 Tokscale 本地日志扫描没有搬到 Windows。</p>
-    <div class="panel"><table><thead><tr><th>时间</th><th>平台</th><th>来源</th><th>输入</th><th>输出</th><th>费用</th></tr></thead>
-      <tbody>${usageRows.map((row) => `<tr><td>${escapeHTML(row.observedAt)}</td><td>${escapeHTML(row.provider)}</td><td>${escapeHTML(row.source)}</td><td>${row.inputTokens ?? "—"}</td><td>${row.outputTokens ?? "—"}</td><td>${row.cost ?? "—"} ${escapeHTML(row.currency || "")}</td></tr>`).join("") || `<tr><td colspan="6">这个范围内没有 Token 或费用记录。</td></tr>`}</tbody></table></div>
-    <h3>额度历史</h3>
-    <div class="panel" id="quota-history"></div>`;
-  const range = () => document.querySelector("#range").value;
-  const provider = () => document.querySelector("#usage-provider").value.trim();
-  document.querySelector("#load-usage").onclick = loadUsage;
-  document.querySelector("#csv-history").href = `/api/export/history.csv?range=${range()}&provider=${encodeURIComponent(provider())}`;
-  document.querySelector("#csv-usage").href = `/api/export/usage.csv?range=${range()}&provider=${encodeURIComponent(provider())}`;
-  document.querySelectorAll("#csv-history,#csv-usage").forEach((link) => {
-    link.addEventListener("click", (event) => {
+    form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const url = link.id === "csv-history"
-        ? `/api/export/history.csv?range=${range()}&provider=${encodeURIComponent(provider())}`
-        : `/api/export/usage.csv?range=${range()}&provider=${encodeURIComponent(provider())}`;
-      fetch(url, { headers: { "X-Gao-Token": token } }).then((response) => response.blob()).then((blob) => {
-        const object = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = object;
-        anchor.download = link.id + ".csv";
-        anchor.click();
-        URL.revokeObjectURL(object);
-      });
+      const submit = event.submitter;
+      if (submit) submit.disabled = true;
+      try {
+        const outgoing = readDraft(form);
+        const { result } = await api("/api/accounts/save", outgoing);
+        if (outgoing.enabled && outgoing.connection === fileConnection) {
+          await api("/api/accounts/refresh", { id: result.id });
+        }
+        closeDialog();
+        render();
+        if (result?.id) document.getElementById(`account-${result.id}`)?.focus({ preventScroll: true });
+      } catch (error) {
+        form.querySelector("#editor-error").textContent = error.message;
+      } finally {
+        if (submit) submit.disabled = false;
+      }
     });
-  });
-}
-
-async function loadUsage() {
-  const range = document.querySelector("#range").value;
-  const provider = document.querySelector("#usage-provider").value.trim();
-  const payload = await api(`/api/usage?range=${range}&provider=${encodeURIComponent(provider)}`);
-  usageRows = payload.rows || [];
-  renderUsage();
-}
-
-function renderSettings() {
-  const library = state.library || {};
-  const settings = state.settings || {};
-  main.innerHTML = `<h2 class="page-title">设置</h2>
-    <form class="panel form" id="settings-form">
-      <label>外观 <select name="appearance"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
-      <label>语言 <select name="language"><option value="zh-Hans">简体中文</option><option value="en">English</option><option value="system">跟随系统</option></select></label>
-      <label>时区 <input name="timeZone" value="${escapeAttr(settings.timeZone || "Asia/Shanghai")}"></label>
-      <label>自动刷新快照文件 <input type="checkbox" name="autoRefresh" ${library.autoRefresh ? "checked" : ""}></label>
-      <label>固定间隔 <input type="checkbox" name="refreshFixedInterval" ${settings.refreshFixedInterval ? "checked" : ""}></label>
-      <label>间隔（分钟） <input name="refreshMinutes" type="number" min="1" max="60" value="${library.refreshMinutes ?? 5}"></label>
-      <label>剩余额度提醒阈值 <input name="warningThreshold" type="number" min="5" max="50" value="${library.warningThreshold ?? 20}"></label>
-      <label>悬浮条 <input type="checkbox" name="panelFloating" ${settings.panelFloating !== false ? "checked" : ""}></label>
-      <p class="muted">资料目录 ${escapeHTML(state.dataDir)}。Grok Bot 快照 ${escapeHTML(state.grokbotPath)}。凭据后端 ${escapeHTML(state.credentialBackend)}。自动刷新不会读取 Grok Bot 快照。</p>
-      <button class="primary" type="submit">保存</button>
-    </form>`;
-  const form = document.querySelector("#settings-form");
-  form.appearance.value = settings.appearance || "system";
-  form.language.value = settings.language || "zh-Hans";
-  form.onsubmit = async (event) => {
-    event.preventDefault();
-    const data = Object.fromEntries(new FormData(form).entries());
-    data.autoRefresh = form.autoRefresh.checked;
-    data.refreshFixedInterval = form.refreshFixedInterval.checked;
-    data.panelFloating = form.panelFloating.checked;
-    data.refreshMinutes = Number(data.refreshMinutes);
-    data.warningThreshold = Number(data.warningThreshold);
-    await api("/api/settings", data);
-    render();
   };
+  function readDraft(form) {
+    const { elements } = form;
+    const accountDraft = {
+      ...draft,
+      provider: provider.id,
+      name: elements.name.value.trim(),
+      plan: elements.plan.value.trim(),
+      connection: elements.connection.value,
+      filePath: elements.filePath?.value.trim() || "",
+      scopeID: elements.scopeID?.value.trim() || draft.scopeID,
+      region: elements.region?.value || draft.region,
+      enabled: elements.enabled.checked,
+      showInRail: elements.showInRail.checked,
+    };
+    if (elements.secret?.value.trim()) accountDraft.secret = elements.secret.value;
+    return accountDraft;
+  }
+  dialog.editorDraft = readDraft;
+  draw();
 }
 
-function renderRail() {
-  if (state.settings && state.settings.panelFloating === false) { rail.classList.add("hidden"); return; }
-  rail.classList.remove("hidden");
-  const items = state.rail || [];
-  rail.innerHTML = items.map((account) => `<button data-open="${account.id}" title="${escapeAttr(account.name)}">${ringHTML(account.ring)}</button>`).join("")
-    + (state.railOverflow ? `<div class="muted">+${state.railOverflow}</div>` : "");
-  rail.querySelectorAll("[data-open]").forEach((button) => button.onclick = () => {
-    page = "agents";
-    document.querySelectorAll("nav button").forEach((item) => item.classList.toggle("active", item.dataset.page === "agents"));
+function setEditorError(error) {
+  const target = dialog.querySelector("#editor-error");
+  if (target) target.textContent = error.message;
+}
+
+function claudeSetupMarkup() {
+  const executable = nativeInterface?.cliPath?.replaceAll("\\", "/") || "GaoCiYuan-cli.exe";
+  const configuration = JSON.stringify({
+    statusLine: { type: "command", command: '"' + executable + '" --capture-claude-status' },
+  }, null, 2);
+  return `<details class="disclosure claude-setup"><summary>${t("状态栏配置示例")}</summary>
+    <p class="caption muted">${t("将下方 statusLine 字段合并到 Claude Code 的用户设置。若已使用自定义状态栏，请把接收命令加入现有脚本，并让它读取相同的标准输入。")}</p>
+    <pre id="claude-setup-code">${text(configuration)}</pre>
+    ${button("复制配置示例", "copy-claude")}</details>`;
+}
+
+action("page", (button) => go(button.dataset.value));
+action("settings", () => openSettings());
+action("close-dialog", closeDialog);
+action("dismiss-message", () => showMessage());
+action("open-data", () => api("/api/open/data", {}));
+action("copy-claude", async () => {
+  const configuration = dialog.querySelector("#claude-setup-code");
+  if (configuration) await navigator.clipboard.writeText(configuration.textContent);
+});
+action("edit", (button) => {
+  const value = button.dataset.value;
+  openEditor(accounts().find((item) => item.id === value), value);
+});
+
+action("export-accounts", () => downloadFile("/api/export/accounts.csv", "GaoCiYuan-accounts.csv"));
+action("health-target", (button) => {
+  const card = [...main.querySelectorAll(".account-card")].find((item) => item.dataset.health === button.dataset.value);
+  if (card) {
+    card.scrollIntoView({ block: "start" });
+    card.focus({ preventScroll: true });
+  }
+});
+
+action("refresh-all", async () => {
+  isSyncingAll = true;
+  renderNav();
+  try {
+    await api("/api/accounts/refresh-all", {});
+  } finally {
+    isSyncingAll = false;
     render();
-  });
-}
+  }
+});
 
-function bindFilters() {
-  const input = document.querySelector("#q");
-  const health = document.querySelector("#health");
-  if (!input) return;
-  const apply = () => {
-    sessionStorage.setItem("q", input.value);
-    const grid = document.querySelector(".grid");
-    if (!grid) return;
-    const visible = accounts().filter(matchFilter);
-    grid.innerHTML = visible.map(cardHTML).join("") || `<div class="panel">还没有 Agent。到「平台接入」添加，或导入快照文件。</div>`;
-    bindCards();
-  };
-  input.oninput = apply;
-  health.onchange = apply;
-}
-
-function bindCards() {
-  main.querySelectorAll("[data-grok]").forEach((button) => button.onclick = async () => {
-    button.disabled = true;
-    button.textContent = "正在读取本机额度…";
-    try { await api("/api/grokbot/read", { id: button.dataset.grok }); }
-    finally { render(); }
-  });
-  main.querySelectorAll("[data-refresh]").forEach((button) => button.onclick = async () => {
-    await api("/api/accounts/refresh", { id: button.dataset.refresh });
+async function refreshAccount(button, manualGrok) {
+  const oldHTML = button.innerHTML;
+  button.disabled = true;
+  button.innerHTML = icon("refresh") + t("同步中…");
+  try {
+    await api(manualGrok ? "/api/grokbot/read" : "/api/accounts/refresh", { id: button.dataset.value });
     render();
-  });
+  } finally {
+    if (button.isConnected) {
+      button.disabled = false;
+      button.innerHTML = oldHTML;
+    }
+  }
 }
+action("refresh", (button) => refreshAccount(button, false));
+action("grok", (button) => refreshAccount(button, true));
+
+action("remove", (trigger) => {
+  const id = trigger.dataset.value;
+  openDialog(`${editorHeading("移除 Agent 软件？")}<div class="dialog-body"><p>${t("将移除该软件在本机的额度快照和专属凭据，不影响平台上的账号。")}</p></div>
+    <footer class="dialog-foot">${button("取消", "close-dialog")}${button("移除", "confirm-remove", { value: id, classes: "danger" })}</footer>`, "small-dialog");
+});
+
+action("confirm-remove", async (button) => {
+  button.disabled = true;
+  try {
+    await api("/api/accounts/delete", { id: button.dataset.value });
+    closeDialog();
+    render();
+  } finally {
+    button.disabled = false;
+  }
+});
+
+action("test-account", async (button) => {
+  const form = dialog.querySelector("form");
+  if (!form.reportValidity()) return;
+  const result = dialog.querySelector("#editor-result");
+  button.disabled = true;
+  result.textContent = tr("测试中…");
+  result.className = "caption";
+  try {
+    const payload = await api("/api/accounts/test", dialog.editorDraft(form));
+    const details = payload.result || payload;
+    result.textContent = tr(details.message || details.note || "连接成功 ✓");
+    result.classList.add(details.supported === false || details.ok === false ? "amber" : "teal");
+  } catch (error) {
+    result.textContent = error.message;
+    result.classList.add("red");
+  } finally {
+    button.disabled = false;
+  }
+});
+
+action("pick-snapshot", async () => {
+  try {
+    const { result } = await api("/api/choose/snapshot", {});
+    const filePath = dialog.querySelector('[name="filePath"]');
+    if (result?.path && filePath) filePath.value = result.path;
+  } catch (error) {
+    setEditorError(error);
+  }
+});
+
+action("discover", async (button) => {
+  button.disabled = true;
+  try {
+    discovery = await api("/api/discovery?rescan=1");
+  } catch (error) {
+    discovery = { error: error.message };
+  }
+  const target = document.querySelector("#discovery-body");
+  if (target) target.innerHTML = renderDiscovery();
+});
+
+action("discovery-add", (button) => {
+  const observed = discovery?.observations?.find((item) => String(item.id) === button.dataset.value);
+  if (!observed) return;
+  openEditor(null, observed.provider, observed.defaultConnection);
+});
+
+document.addEventListener("toggle", async (event) => {
+  if (event.target.id !== "discovery" || !event.target.open || discovery) return;
+  try {
+    discovery = await api("/api/discovery");
+  } catch (error) {
+    discovery = { error: error.message };
+  }
+  const target = document.querySelector("#discovery-body");
+  if (target) target.innerHTML = renderDiscovery();
+}, true);
+
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-action]");
+  for (const item of document.querySelectorAll(".menu[open]")) {
+    if (button?.closest(".menu") === item || !item.contains(event.target)) item.open = false;
+  }
+  if (!button || button.disabled) return;
+  const callback = actions.get(button.dataset.action);
+  if (!callback) return;
+  operationCount += 1;
+  try {
+    await callback(button);
+  } catch (error) {
+    showMessage(error.message);
+  } finally {
+    operationCount -= 1;
+  }
+});
+
+document.addEventListener("input", (event) => {
+  if (event.target.id === "account-search") {
+    accountQuery = event.target.value;
+    sessionStorage.setItem("accountQuery", accountQuery);
+    document.querySelector("#account-grid").innerHTML = renderAccountGrid();
+  } else if (event.target.id === "catalog-search") {
+    catalogQuery = event.target.value;
+    document.querySelector("#catalog-providers").innerHTML = providerCards();
+    document.querySelector("#source-cards").innerHTML = sourceCards();
+  }
+});
+
+systemTheme.addEventListener("change", updateAppearance);
+window.addEventListener("hashchange", route);
 
 async function boot() {
-  if (!state || !state.persisted) {
-    try { await api("/api/library/create", {}); } catch (error) { /* 已存在或只读时继续读取状态 */ }
+  try {
+    const [initial, providerList, dictionary, native] = await Promise.all([
+      api("/api/state"), api("/api/catalog"),
+      fetch("/translations.tsv").then((response) => response.ok ? response.text() : "").catch(() => ""),
+      api("/api/native").catch(() => null),
+    ]);
+    for (const entry of dictionary.split(/\r?\n/)) {
+      const [key, value] = entry.split("\t", 2);
+      if (value) translations.set(key, value);
+    }
+    state = initial;
+    providers = providerList.providers || [];
+    nativeInterface = native;
+    if (!state.persisted && state.status === "ready") {
+      try {
+        await api("/api/library/create", {});
+      } catch (error) {
+        if (error.code !== "exists") throw error;
+        state = await api("/api/state");
+      }
+    }
+    route();
+    if (!main.querySelector("h1")) render();
+  } catch (error) {
+    main.setAttribute("aria-busy", "false");
+    showMessage(error.message);
   }
-  const response = await fetch("/api/state", { headers: { "X-Gao-Token": token } });
-  state = await response.json();
-  render();
 }
-boot();
+
+window.addEventListener("DOMContentLoaded", () => {
+  void boot();
+  setInterval(async () => {
+    if (!state || operationCount || dialog.open || document.hidden || document.querySelector(".menu[open]")) return;
+    const revision = stateRevision;
+    try {
+      const current = await api("/api/state");
+      if (revision !== stateRevision || operationCount || dialog.open || document.querySelector(".menu[open]")) return;
+      const changed = JSON.stringify(current) !== JSON.stringify(state);
+      state = current;
+      if (changed && (page === "overview" || page === "agents")) {
+        const grid = document.querySelector("#account-grid");
+        if (grid && !grid.contains(document.activeElement) && !grid.querySelector("details[open]")) {
+          if (document.activeElement?.id === "account-search") {
+            grid.innerHTML = renderAccountGrid();
+            renderNav();
+          } else {
+            render();
+          }
+        } else if (!grid) {
+          render();
+        }
+      }
+    } catch {
+      // The window may still be open after the desktop service has stopped.
+    }
+  }, 12000);
+});

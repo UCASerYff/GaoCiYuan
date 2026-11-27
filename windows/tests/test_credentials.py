@@ -1,4 +1,5 @@
 import sys
+import uuid
 
 import pytest
 
@@ -20,11 +21,12 @@ def test_windows_dpapi_and_credential_manager(tmp_path):
     from gaociyuan.credentials import WindowsCredentialStore, _cred_read
 
     vault = WindowsCredentialStore(tmp_path)
+    account = 'test-' + str(uuid.uuid4())
     try:
-        vault.put("account-1", "windows-secret")
-        assert vault.get("account-1") == "windows-secret"
-        assert _cred_read("account-1") == b"windows-secret"
-        assert "windows-secret" not in (tmp_path / "credentials" / "account-1.dpapi").read_bytes().decode("latin1")
+        vault.put(account, "windows-secret")
+        assert vault.get(account) == "windows-secret"
+        assert _cred_read(account) == b"windows-secret"
+        assert b"windows-secret" not in (tmp_path / "credentials" / f'{account}.dpapi').read_bytes()
     finally:
-        vault.delete("account-1")
-    assert vault.get("account-1") is None
+        vault.delete(account)
+    assert vault.get(account) is None

@@ -40,10 +40,11 @@ class WindowsCredentialStore:
 
     backend = "windows"
 
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, *, system_store: bool = True):
         if sys.platform != "win32":
             raise AppError("Windows 凭据库只能在 Windows 上使用。", "platform")
         self.directory = Path(directory) / "credentials"
+        self.system_store = system_store
 
     def put(self, account_id: str, secret: str) -> None:
         _require_secret(secret)
@@ -54,6 +55,8 @@ class WindowsCredentialStore:
         temporary = path.with_suffix(".tmp")
         temporary.write_bytes(protected)
         temporary.replace(path)
+        if not self.system_store:
+            return
         if len(blob) <= CRED_MAX:
             _cred_write(account_id, blob)
         else:
@@ -66,7 +69,7 @@ class WindowsCredentialStore:
                 return _unprotect(path.read_bytes()).decode("utf-8")
             except OSError as exc:
                 raise AppError("凭据无法读取。", "credential") from exc
-        blob = _cred_read(account_id)
+        blob = _cred_read(account_id) if self.system_store else None
         if blob is None:
             return None
         return blob.decode("utf-8")
@@ -75,20 +78,23 @@ class WindowsCredentialStore:
         path = self._path(account_id)
         if path.exists():
             path.unlink()
-        _cred_delete(account_id)
+        if self.system_store:
+            _cred_delete(account_id)
 
     def has(self, account_id: str) -> bool:
-        return self.get(account_id) is not None
+        if self._path(account_id).is_file():
+            return True
+        return self.system_store and _cred_read(account_id) is not None
 
     def _path(self, account_id: str) -> Path:
         safe = account_id.replace("/", "").replace("\\", "")
         return self.directory / f"{safe}.dpapi"
 
 
-def open_credential_store(directory: Path, force_memory: bool = False):
+def open_credential_store(directory: Path, force_memory: bool = False, *, system_store: bool = True):
     if force_memory or sys.platform != "win32":
         return MemoryCredentialStore()
-    return WindowsCredentialStore(directory)
+    return WindowsCredentialStore(directory, system_store=system_store)
 
 
 def _require_secret(secret: str) -> None:

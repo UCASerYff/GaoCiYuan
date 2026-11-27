@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from gaociyuan.alerts import failure_alert, reading_alerts
 from gaociyuan.catalog import (
     AGENT_LOCAL,
     available_connections,
@@ -34,6 +37,7 @@ from gaociyuan.grokbot import (
     status_line,
 )
 from gaociyuan.rings import adaptive_interval, attention, health_of, rail_accounts, ring_for
+from gaociyuan.routes import ACCOUNT_ID
 from gaociyuan.snapshots import (
     credential_error,
     has_measured_values,
@@ -71,6 +75,7 @@ ACCOUNT_KEYS = {
     "customConfig",
     "showInRail",
     "autoDiscovered",
+    "connectorAuthorized",
     "grokBotManualReading",
 }
 SECRET_FIELDS = {"secret", "apiKey", "token", "password", "credential"}
@@ -88,7 +93,18 @@ def default_settings() -> dict:
         "refreshFixedInterval": False,
         "timeZone": "Asia/Shanghai",
         "panelFloating": True,
+        "panelDock": "right",
+        "panelTwoColumns": False,
+        "panelHideFullScreen": False,
+        "panelFollowDisplay": False,
+        "panelPosition": None,
         "notifyThreshold": 0,
+        "notifyLowBalance": 0,
+        "notifyExhausted": False,
+        "notifyFailures": False,
+        "notifyOnReset": False,
+        "updateAppcastURL": "",
+        "updatePublicKey": "",
     }
 
 
@@ -109,6 +125,12 @@ class TokenStore:
         self.extras: dict = {}
         self.settings = default_settings()
         self.failures: dict[str, int] = {}
+        self.alert_memory: dict[str, dict] = {}
+        self.notify = lambda account, message: None
+        self.rail_visible = lambda account: account.get('showInRail', True)
+        self.connector_reader = None
+        self.lock = threading.RLock()
+        self._refreshing: set[str] = set()
         self.unknown_connections: list[str] = []
         self.grok_reads = 0
         self._changes: dict[str, datetime] = {}
@@ -143,6 +165,8 @@ class TokenStore:
         if not isinstance(provider, str) or not known_provider(provider):
             raise AppError("未知的 Agent 软件。")
         account_id = payload.get("id") or str(uuid.uuid4())
+        if not isinstance(account_id, str) or not ACCOUNT_ID.fullmatch(account_id):
+            raise AppError("账户编号无效。")
         existing = self._find(account_id)
         if existing is None and not creation_kinds(provider):
             raise AppError("搞词元仅记录 Agent 软件，不支持 API 账户。")
@@ -186,11 +210,15 @@ class TokenStore:
             "customConfig": None,
             "showInRail": bool(payload.get("showInRail", True)),
             "autoDiscovered": bool(payload.get("autoDiscovered", False)),
+            "connectorAuthorized": False,
             "grokBotManualReading": None,
         }
         if existing:
+            account["autoDiscovered"] = existing.get("autoDiscovered", False)
             account["history"] = existing.get("history") or []
             same = _same_source(existing, account)
+            if same:
+                account["connectorAuthorized"] = existing.get("connectorAuthorized", False)
             if same and not (isinstance(secret, str) and secret.strip()):
                 for key in ("snapshot", "lastAttempt", "error", "statusNote", "grokBotManualReading", "lastQuotaChangedAt"):
                     account[key] = existing.get(key)
@@ -206,6 +234,20 @@ class TokenStore:
         self._write_library()
         return account
 
+    def add_discovered(self, suggested: list[dict]) -> list[str]:
+        if self.load_failed:
+            return []
+        added = []
+        existing = {item["provider"] for item in self.library["accounts"]}
+        for candidate in suggested:
+            provider = candidate["provider"]
+            if provider in existing or ("id" in candidate and self._find(candidate["id"]) is not None):
+                continue
+            account = self.save_account({**candidate, "autoDiscovered": True})
+            added.append(account["id"])
+            existing.add(provider)
+        return added
+
     def delete_account(self, account_id: str) -> None:
         self._ensure_writable()
         before = len(self.library["accounts"])
@@ -214,6 +256,7 @@ class TokenStore:
             raise AppError("没有这个账户。", "missing")
         self.credentials.delete(account_id)
         self.failures.pop(account_id, None)
+        self.alert_memory.pop(account_id, None)
         self._write_library()
         self._write_alerts()
 
@@ -224,7 +267,13 @@ class TokenStore:
         self.credentials.put(account_id, secret)
 
     def delete_credential(self, account_id: str) -> None:
+        self._ensure_writable()
+        if self._find(account_id) is None:
+            raise AppError("没有这个账户。", "missing")
         self.credentials.delete(account_id)
+
+    def credential_present(self, account_id: str) -> bool:
+        return self._find(account_id) is not None and self.credentials.has(account_id)
 
     def update_settings(self, payload: dict) -> dict:
         if self.load_failed:
@@ -243,6 +292,23 @@ class TokenStore:
                 raise AppError("无法识别这个时区。") from exc
         if "panelFloating" in payload:
             self.settings["panelFloating"] = bool(payload["panelFloating"])
+        if payload.get("panelDock") in ("left", "right", "top", "floating"):
+            self.settings["panelDock"] = payload["panelDock"]
+        position = payload.get("panelPosition")
+        if isinstance(position, list) and len(position) == 2 and all(type(value) is int and abs(value) < 100000 for value in position):
+            self.settings["panelPosition"] = position
+        for key in ("panelTwoColumns", "panelHideFullScreen", "panelFollowDisplay", "notifyExhausted", "notifyFailures", "notifyOnReset"):
+            if key in payload:
+                self.settings[key] = bool(payload[key])
+        if "notifyLowBalance" in payload:
+            value = payload["notifyLowBalance"]
+            self.settings["notifyLowBalance"] = value if type(value) in (int, float) and 0 < value <= 1e9 and math.isfinite(value) else 0
+        for key in ("updateAppcastURL", "updatePublicKey"):
+            if key in payload:
+                value = payload[key]
+                if not isinstance(value, str) or len(value) > 4096:
+                    raise AppError("更新源设置无效。")
+                self.settings[key] = value.strip()
         if "notifyThreshold" in payload:
             value = payload["notifyThreshold"]
             self.settings["notifyThreshold"] = value if value in {0, 75, 80, 90, 95} else 0
@@ -265,24 +331,81 @@ class TokenStore:
         return self.settings
 
     def refresh(self, account_id: str, user_initiated: bool = False) -> None:
-        if self.load_failed or not user_initiated and not self.library.get("autoRefresh", True):
-            return
-        account = self._find(account_id)
-        if account is None or not account.get("enabled", True) or account.get("kind") != "Agent":
-            return
-        if is_grok_bot_route(account):
+        with self.lock:
+            if self.load_failed or not user_initiated and not self.library.get("autoRefresh", True):
+                return
+            account = self._find(account_id)
+            if account is None or not account.get("enabled", True) or account.get("kind") != "Agent":
+                return
+            if is_grok_bot_route(account):
+                if user_initiated:
+                    self.read_grokbot(account_id)
+                return
+            mode = windows_read_mode(account["provider"], account["connection"])
+            now = self.now()
             if user_initiated:
-                self.read_grokbot(account_id)
-            return
-        mode = windows_read_mode(account["provider"], account["connection"])
+                self._actions[account_id] = now
+            if mode == "file":
+                self._refresh_file(account, now)
+                return
+            if mode != "connector" or self.connector_reader is None:
+                if user_initiated:
+                    self._set_status(account, UNSUPPORTED, now)
+                return
+            if account_id in self._refreshing or not user_initiated and not account.get("connectorAuthorized"):
+                return
+            secret = self.credentials.get(account_id)
+            self._refreshing.add(account_id)
+        try:
+            snapshot = self.connector_reader(dict(account), secret, now, data_dir=self.directory)
+            validate_snapshot(snapshot, now)
+            with self.lock:
+                if self._find(account_id) is account:
+                    account["connectorAuthorized"] = True
+                    self._apply_snapshot(account, snapshot, now)
+        except AppError as exc:
+            with self.lock:
+                if self._find(account_id) is account:
+                    if exc.code in {"missing", "unsupported", "neutral", "unavailable"}:
+                        self._set_status(account, exc.message, now)
+                    else:
+                        self._set_error(account, exc.message, now)
+        finally:
+            with self.lock:
+                self._refreshing.discard(account_id)
+
+    def test_account(self, payload: dict) -> dict:
+        provider = payload.get("provider")
+        if not isinstance(provider, str) or not known_provider(provider) or not creation_kinds(provider):
+            raise AppError("请选择 Agent 软件。")
+        connection, _ = normalize_connection(str(payload.get("connection") or AGENT_LOCAL))
+        if connection not in available_connections(provider, "Agent"):
+            raise AppError("这个 Agent 没有该连接方式。")
+        draft = {**payload, "connection": connection, "kind": "Agent", "provider": provider}
+        mode = windows_read_mode(provider, connection)
+        if is_grok_bot_route(draft):
+            raise AppError("请保存账户，再用「读取本机额度」读取 Grok Bot。")
         now = self.now()
-        if user_initiated:
-            self._actions[account_id] = now
         if mode == "file":
-            self._refresh_file(account, now)
-            return
-        if user_initiated:
-            self._set_status(account, UNSUPPORTED, now)
+            snapshot = self._read_snapshot_file(draft, now)
+        elif mode == "connector" and self.connector_reader is not None:
+            secret = payload.get("secret")
+            if not secret and payload.get("id"):
+                with self.lock:
+                    existing = self._find(payload["id"])
+                    secret = self.credentials.get(payload["id"]) if existing and _same_source(existing, draft) else None
+            snapshot = self.connector_reader(draft, secret, now, data_dir=self.directory)
+            validate_snapshot(snapshot, now)
+        else:
+            raise AppError(UNSUPPORTED, "unsupported")
+        return {"snapshot": snapshot}
+
+    def refresh_all(self) -> list[str]:
+        with self.lock:
+            account_ids = [item["id"] for item in self.library["accounts"] if item.get("enabled") and not is_grok_bot_route(item)]
+        for account_id in account_ids:
+            self.refresh(account_id, user_initiated=True)
+        return account_ids
 
     def read_grokbot(self, account_id: str) -> None:
         """唯一会打开 grokbot-usage.json 的入口。"""
@@ -310,30 +433,28 @@ class TokenStore:
         self._write_library()
 
     def refresh_due(self) -> list[str]:
-        if self.load_failed or not self.library.get("autoRefresh", True):
-            return []
-        now = self.now()
-        fixed = bool(self.settings.get("refreshFixedInterval"))
-        done = []
-        for account in list(self.library["accounts"]):
-            if is_grok_bot_route(account):
-                continue
-            if windows_read_mode(account["provider"], account["connection"]) != "file":
-                continue
-            if not account.get("enabled", True):
-                continue
-            interval = self.library["refreshMinutes"] * 60 if fixed else adaptive_interval(
-                self._changes.get(account["id"]),
-                self._actions.get(account["id"]),
-                now,
-                True,
-            )
-            last = parse_instant(account.get("lastAttempt") or "")
-            elapsed = 10**12 if last is None else (now - last).total_seconds()
-            if elapsed >= interval:
-                self.refresh(account["id"], user_initiated=False)
-                done.append(account["id"])
-        return done
+        with self.lock:
+            if self.load_failed or not self.library.get("autoRefresh", True):
+                return []
+            now = self.now()
+            fixed = bool(self.settings.get("refreshFixedInterval"))
+            due = []
+            for account in self.library["accounts"]:
+                if is_grok_bot_route(account) or not account.get("enabled", True):
+                    continue
+                mode = windows_read_mode(account["provider"], account["connection"])
+                if mode != "file" and not (mode == "connector" and account.get("connectorAuthorized")):
+                    continue
+                account_id = account["id"]
+                interval = self.library["refreshMinutes"] * 60 if fixed else adaptive_interval(
+                    self._changes.get(account_id), self._actions.get(account_id), now, True,
+                )
+                last = parse_instant(account.get("lastAttempt") or "")
+                if last is None or (now - last).total_seconds() >= interval:
+                    due.append(account_id)
+        for account_id in due:
+            self.refresh(account_id, user_initiated=False)
+        return due
 
     def usage_rows(self, key: str, provider: str = "") -> list[dict]:
         path = self.directory / "usage-ledger.sqlite"
@@ -376,7 +497,7 @@ class TokenStore:
 
     def snapshot_state(self, query: str = "", provider: str = "", health: str = "") -> dict:
         accounts = self.filtered_accounts(query, provider, health) if (query or provider or health) else [self.view_account(item) for item in self.library["accounts"]]
-        rail_source = [item for item in self.library["accounts"] if item.get("showInRail", True)]
+        rail_source = [item for item in self.library["accounts"] if self.rail_visible(item)]
         rail = rail_accounts(rail_source, self.now())
         rail_views = [self.view_account(item) for item in rail[:12]]
         return {
@@ -398,30 +519,37 @@ class TokenStore:
             "rail": rail_views,
             "railOverflow": max(0, len(rail) - 12),
             "grokReads": self.grok_reads,
+            "refreshing": sorted(self._refreshing),
         }
 
     def _refresh_file(self, account: dict, now: datetime) -> None:
-        path = account.get("filePath") or ""
         try:
-            if not path:
-                raise AppError("请选择快照 JSON 文件。")
-            if is_grokbot_filename(path):
-                raise AppError("grokbot-usage.json 只能通过「读取本机额度」读取。")
-            file_path = Path(path)
-            data = file_path.read_bytes()
-            if len(data) > 2_000_000:
-                raise AppError("快照文件不能超过 2 MB。")
-            snapshot = normalize_snapshot(json.loads(data.decode("utf-8")), now)
-            snapshot = strip_status_quotas(snapshot)
-            snapshot["source"] = "快照文件"
-            validate_snapshot(snapshot, now)
+            snapshot = self._read_snapshot_file(account, now)
         except AppError as exc:
             self._set_error(account, exc.message, now)
             return
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            self._set_error(account, "快照文件无法读取，已保留上次数据。", now)
-            return
         self._apply_snapshot(account, snapshot, now)
+
+    def _read_snapshot_file(self, account: dict, now: datetime) -> dict:
+        path = account.get("filePath") or ""
+        if not path:
+            raise AppError("请选择快照 JSON 文件。")
+        if is_grokbot_filename(path):
+            raise AppError("grokbot-usage.json 只能通过「读取本机额度」读取。")
+        try:
+            file_path = Path(path)
+            if self.grok_path.exists() and file_path.samefile(self.grok_path):
+                raise AppError("grokbot-usage.json 只能通过「读取本机额度」读取。")
+            with file_path.open('rb') as handle:
+                data = handle.read(2_000_001)
+            if len(data) > 2_000_000:
+                raise AppError("快照文件不能超过 2 MB。")
+            snapshot = strip_status_quotas(normalize_snapshot(json.loads(data.decode("utf-8-sig")), now))
+            snapshot["source"] = "快照文件"
+            validate_snapshot(snapshot, now)
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise AppError("快照文件无法读取，已保留上次数据。") from exc
+        return snapshot
 
     def _apply_snapshot(self, account: dict, snapshot: dict, now: datetime) -> None:
         current = account.get("snapshot")
@@ -429,9 +557,15 @@ class TokenStore:
         account["error"] = None
         account["statusNote"] = None
         self.failures[account["id"]] = 0
+        events = reading_alerts(self.alert_memory.setdefault(account["id"], {}), self.settings, account, snapshot, now)
         if current and same_observation(current, snapshot):
+            current_at = parse_instant(current.get('observedAt'))
+            observed_at = parse_instant(snapshot.get('observedAt'))
+            if observed_at and (current_at is None or observed_at > current_at):
+                account['snapshot'] = snapshot
             self._write_library()
             self._write_alerts()
+            self._notify(account, events)
             return
         history = list(account.get("history") or [])
         history.append(snapshot)
@@ -442,6 +576,7 @@ class TokenStore:
         self._usage_ledger().record(account, snapshot)
         self._write_library()
         self._write_alerts()
+        self._notify(account, events)
 
     def _set_status(self, account: dict, message: str, now: datetime) -> None:
         account["statusNote"] = message
@@ -461,6 +596,15 @@ class TokenStore:
                 self.failures[account["id"]] = self.failures.get(account["id"], 0) + 1
         self._write_library()
         self._write_alerts()
+        memory = self.alert_memory.setdefault(account["id"], {})
+        events = failure_alert(memory, self.settings["notifyFailures"], self.failures.get(account["id"], 0), message)
+        if events:
+            self._write_alerts()
+            self._notify(account, events)
+
+    def _notify(self, account: dict, events: list[str]) -> None:
+        if events:
+            self.notify(account, "\n".join(events))
 
     def _load_library(self) -> None:
         if not self.library_path.exists():
@@ -506,9 +650,9 @@ class TokenStore:
             if not isinstance(library["refreshMinutes"], int) or isinstance(library["refreshMinutes"], bool):
                 raise AppError("不兼容或无效的存档。")
             self.library = library
+            self._validate()
             for account_id in removed:
                 self.credentials.delete(account_id)
-            self._validate()
             self.persisted = True
             self.load_failed = False
             if self.unknown_connections:
@@ -591,6 +735,7 @@ class TokenStore:
             "customConfig": raw.get("customConfig"),
             "showInRail": bool(raw.get("showInRail", True)),
             "autoDiscovered": bool(raw.get("autoDiscovered", False)),
+            "connectorAuthorized": raw.get("connectorAuthorized") is True,
             "grokBotManualReading": raw.get("grokBotManualReading") if isinstance(raw.get("grokBotManualReading"), dict) else None,
         }
         for key, value in raw.items():
@@ -643,7 +788,7 @@ class TokenStore:
         _atomic_json(self.settings_path, self.settings)
 
     def _write_alerts(self) -> None:
-        _atomic_json(self.alerts_path, {"failures": self.failures})
+        _atomic_json(self.alerts_path, {"failures": self.failures, "notifications": self.alert_memory})
 
     def _usage_ledger(self) -> UsageLedger:
         if self._ledger is None:
@@ -658,6 +803,16 @@ class TokenStore:
             if isinstance(raw, dict):
                 self.settings.update({key: raw[key] for key in default_settings() if key in raw})
                 self.zone = ZoneInfo(self.settings.get("timeZone") or "Asia/Shanghai")
+                balance = self.settings["notifyLowBalance"]
+                if type(balance) not in (int, float) or not 0 <= balance <= 1e9:
+                    self.settings["notifyLowBalance"] = 0
+                if self.settings["notifyThreshold"] not in (0, 75, 80, 90, 95):
+                    self.settings["notifyThreshold"] = 0
+                if self.settings["panelDock"] not in ("left", "right", "top", "floating"):
+                    self.settings["panelDock"] = "right"
+                for key in ("updateAppcastURL", "updatePublicKey"):
+                    if not isinstance(self.settings[key], str):
+                        self.settings[key] = ""
         except Exception:
             self.settings = default_settings()
 
@@ -669,6 +824,9 @@ class TokenStore:
             failures = raw.get("failures") if isinstance(raw, dict) else None
             if isinstance(failures, dict):
                 self.failures = {str(key): int(value) for key, value in failures.items()}
+            memory = raw.get("notifications") if isinstance(raw, dict) else None
+            if isinstance(memory, dict):
+                self.alert_memory = {key: value for key, value in memory.items() if isinstance(value, dict) and isinstance(value.get("windows", {}), dict)}
         except Exception:
             self.failures = {}
 
