@@ -7,18 +7,28 @@
   <title>搞词元 V{{VERSION}}</title>
   <link rel="icon" href="/brand/GaoCiYuanIcon.png">
   <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/analytics-settings.css">
   <script src="/app.js" defer></script>
   <script src="/settings.js" defer></script>
   <script src="/usage-view.js" defer></script>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand"><img src="/brand/GaoCiYuanIcon.png" alt=""><strong id="brand">搞词元</strong></div>
-    <nav id="navigation" aria-label="页面"></nav>
-    <div id="top-actions" class="top-actions"></div>
-  </header>
-  <div id="message" class="status-banner hidden" role="status"></div>
-  <main id="main" aria-busy="true"><p class="muted">正在读取本机资料…</p></main>
+  <a class="skip-link" href="#main" id="skip-link">跳到主内容</a>
+  <div class="app-shell">
+    <aside class="workspace-sidebar" id="sidebar">
+      <div class="brand"><img src="/brand/GaoCiYuanIcon.png" alt=""><strong id="brand">搞词元</strong></div>
+      <nav id="navigation" aria-label="页面"></nav>
+      <div class="sidebar-footer" id="sidebar-actions"></div>
+    </aside>
+    <div class="workspace">
+      <header class="workspace-topbar">
+        <div class="workspace-context"><span id="workspace-context"></span></div>
+        <div id="top-actions" class="top-actions"></div>
+      </header>
+      <div id="message" class="status-banner hidden" role="status"></div>
+      <main id="main" aria-busy="true" tabindex="-1"><p class="muted">正在读取本机资料…</p></main>
+    </div>
+  </div>
   <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
 </body>
 </html>

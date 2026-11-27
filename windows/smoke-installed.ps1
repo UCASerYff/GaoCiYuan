@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$InstallerPath = (Join-Path $PSScriptRoot 'dist\GaoCiYuan-Windows-4.13-x64-Setup.exe'),
+    [string]$InstallerPath = (Join-Path $PSScriptRoot 'dist\GaoCiYuan-Windows-4.13-build3-x64-Setup.exe'),
+    [string]$PreviousInstallerPath,
     [switch]$HeadlessServerOnly,
     [switch]$KeepArtifacts
 )
@@ -8,7 +9,8 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$expectedVersion = '4.13+2'
+$expectedVersion = '4.13+3'
+$expectedFileVersion = '4.13.3.0'
 $productName = ConvertFrom-Json '"\u641e\u8bcd\u5143"'
 $fileConnection = ConvertFrom-Json '"\u81ea\u52a8\u8bfb\u53d6\u5feb\u7167\u6587\u4ef6"'
 $localConnection = ConvertFrom-Json '"\u672c\u673a\u8f6f\u4ef6\u81ea\u52a8\u8bfb\u53d6"'
@@ -108,6 +110,18 @@ function Assert-X64Pe([string]$Path) {
     } finally { $reader.Close() }
 }
 
+function Confirm-Installer([string]$Path, [string]$FileVersion) {
+    $resolved = (Resolve-Path -LiteralPath $Path).ProviderPath
+    $hashPath = "$resolved.sha256"
+    Assert-Test (Test-Path -LiteralPath $hashPath -PathType Leaf) "The matching SHA-256 file is required for '$resolved'."
+    $expectedHash = ((Get-Content -LiteralPath $hashPath -Raw).Trim() -split '\s+')[0]
+    Assert-Test ($expectedHash -match '^[0-9A-Fa-f]{64}$' -and
+        (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash -eq $expectedHash) "Installer SHA-256 mismatch for '$resolved'."
+    Assert-X64Pe $resolved
+    Assert-Test ((Get-Item -LiteralPath $resolved).VersionInfo.FileVersion.Trim() -eq $FileVersion) "Expected installer version $FileVersion at '$resolved'."
+    return $resolved
+}
+
 function Invoke-QuietProcess([string]$Path, [string[]]$Arguments, [int]$TimeoutMs) {
     $process = Start-Process -FilePath $Path -ArgumentList $Arguments -WindowStyle Hidden -PassThru
     try {
@@ -183,14 +197,8 @@ Assert-Test ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) 'Run t
 Assert-Test ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [Runtime.InteropServices.Architecture]::X64) (
     'Run the release smoke on a native Windows x64 host.'
 )
-$installerPath = (Resolve-Path -LiteralPath $InstallerPath).ProviderPath
-$hashPath = "$installerPath.sha256"
-Assert-Test (Test-Path -LiteralPath $hashPath -PathType Leaf) 'The matching installer SHA-256 file is required.'
-$expectedHash = ((Get-Content -LiteralPath $hashPath -Raw).Trim() -split '\s+')[0]
-Assert-Test ($expectedHash -match '^[0-9A-Fa-f]{64}$' -and
-    (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash -eq $expectedHash) 'Installer SHA-256 mismatch.'
-Assert-X64Pe $installerPath
-Assert-Test ((Get-Item -LiteralPath $installerPath).VersionInfo.FileVersion.Trim() -eq '4.13.2.0') 'Installer version metadata did not match 4.13.2.0.'
+$installerPath = Confirm-Installer $InstallerPath $expectedFileVersion
+$previousInstaller = if ($PreviousInstallerPath) { Confirm-Installer $PreviousInstallerPath '4.13.2.0' }
 
 $normalInstall = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'Programs\GaoSeries\GaoCiYuan'
 $shortcutPaths = @(
@@ -225,6 +233,7 @@ Assert-Test ((Split-Path -Parent $runRoot) -eq $buildRoot -and -not (Test-Path -
 $installDir = Join-Path $runRoot 'Fresh Install'
 $dataDir = Join-Path $runRoot 'Synthetic Data'
 $installLog = Join-Path $runRoot 'install.log'
+$previousInstallLog = Join-Path $runRoot 'install-previous.log'
 $uninstallLog = Join-Path $runRoot 'uninstall.log'
 $appExe = Join-Path $installDir 'GaoCiYuan.exe'
 $cliExe = Join-Path $installDir 'GaoCiYuan-cli.exe'
@@ -232,6 +241,7 @@ $launchExe = if ($HeadlessServerOnly) { $cliExe } else { $appExe }
 $credentialDir = Join-Path $dataDir 'credentials'
 $libraryFile = Join-Path $dataDir 'library.json'
 $alertsFile = Join-Path $dataDir 'alerts.json'
+$settingsFile = Join-Path $dataDir 'settings.json'
 $grokFile = Join-Path $dataDir 'grokbot-usage.json'
 $agentID, $grokID, $llmID = 1..3 | ForEach-Object { [Guid]::NewGuid().ToString('N') }
 $keptSecret = 'isolated-agent-' + [Guid]::NewGuid().ToString('N')
@@ -267,6 +277,7 @@ try {
         )
     }
     Write-Json $alertsFile @{ failures = @{ $agentID = 2 } }
+    Write-Json $settingsFile @{ appearance = 'dark'; panelDock = 'left'; panelTwoColumns = $true }
     $report = @{
         schema = 1; source = 'grok-bot-usage-report'; plan = 'Fixture'
         weeklyPercentUsed = 19.3; sharedWithOtherApps = $true
@@ -275,8 +286,22 @@ try {
     }
     Write-Json $grokFile $report
 
-    Invoke-QuietProcess $installerPath @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/DIR="{0}"' -f $installDir),
-        ('/LOG="{0}"' -f $installLog)) 55000
+    $installerArguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/DIR="{0}"' -f $installDir))
+    $upgradeHashes = @{}
+    if ($previousInstaller) {
+        Invoke-QuietProcess $previousInstaller ($installerArguments + ('/LOG="{0}"' -f $previousInstallLog)) 55000
+        Assert-Test ((Get-RegistrationPath) -eq $installDir) 'The previous installer registered the wrong location.'
+        $previousState = & $cliExe --data-dir $dataDir --inspect
+        Assert-Test ($LASTEXITCODE -eq 0 -and $previousState -ccontains 'version=4.13+2' -and
+            $previousState -ccontains 'status=ready' -and $previousState -ccontains 'accounts=2') 'The previous build did not open the isolated library.'
+        foreach ($file in @($libraryFile, $alertsFile, $settingsFile, $keptCredential, $grokFile)) {
+            $upgradeHashes[$file] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+        }
+    }
+    Invoke-QuietProcess $installerPath ($installerArguments + ('/LOG="{0}"' -f $installLog)) 55000
+    foreach ($file in $upgradeHashes.Keys) {
+        Assert-Test ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -eq $upgradeHashes[$file]) 'Upgrade changed the isolated user data.'
+    }
     Assert-LocalDirectory $installDir
     Assert-Test ([string]::Equals((Get-RegistrationPath), $installDir, [StringComparison]::OrdinalIgnoreCase)) 'The installer registered the wrong location.'
     $view = [Microsoft.Win32.RegistryView]::Registry64
@@ -288,7 +313,7 @@ try {
     Write-Verbose "Installed AMD64 executable at '$appExe'."
     Assert-InstalledShortcut -ShortcutFile $shortcutPaths[0] -ExpectedTarget $appExe
     foreach ($path in @($appExe, $cliExe)) {
-        Assert-Test ((Get-Item -LiteralPath $path).VersionInfo.FileVersion -eq '4.13.2.0') "Wrong file version for $path."
+        Assert-Test ((Get-Item -LiteralPath $path).VersionInfo.FileVersion.Trim() -eq $expectedFileVersion) "Wrong file version for $path."
     }
     $cliVersion = & $cliExe --version
     Assert-Test ($LASTEXITCODE -eq 0 -and "$cliVersion".Trim() -ceq $expectedVersion) 'The installed CLI version is incorrect.'
@@ -323,6 +348,8 @@ try {
     $state = Invoke-AppApi '/api/state'
     Assert-Test ($state.version -eq $expectedVersion -and $state.dataDir -eq $dataDir -and
         $state.credentialBackend -eq 'windows' -and $state.status -eq 'ready') 'The app did not open the isolated Windows library.'
+    Assert-Test ($state.settings.appearance -eq 'dark' -and $state.settings.panelDock -eq 'left' -and
+        $state.settings.panelTwoColumns) 'Existing appearance and panel settings were lost.'
     $discovery = Invoke-AppApi '/api/discovery'
     Assert-Test (-not $discovery.completed -and @($discovery.observations).Count -eq 0) 'Host discovery ran against the isolated profile.'
 
@@ -367,7 +394,7 @@ try {
         $light.state.settings.appearance -eq 'light' -and -not $light.state.settings.panelFloating) 'Theme and floating-window options did not persist.'
 
     $dataHashes = @{}
-    foreach ($file in @($libraryFile, $alertsFile, $keptCredential, $newProtected, $grokFile, (Join-Path $dataDir 'settings.json'))) {
+    foreach ($file in @($libraryFile, $alertsFile, $keptCredential, $newProtected, $grokFile, $settingsFile)) {
         $dataHashes[$file] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
     }
     Stop-SmokeApp
@@ -385,6 +412,7 @@ try {
     $completed = $true
     $surface = if ($HeadlessServerOnly) { 'loopback server' } else { 'hidden main and floating WebView2' }
     Write-Output "Installed smoke passed for $expectedVersion ($surface). Installer, native and CLI PE files are AMD64."
+    if ($previousInstaller) { Write-Output 'In-place upgrade from 4.13+2 and unchanged user data verified.' }
 } finally {
     if (-not $completed) {
         try { Stop-SmokeApp } catch { Write-Warning $_.Exception.Message }

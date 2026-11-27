@@ -90,6 +90,21 @@ Object.assign(supplementalTranslations, {
   "缓存输入占比": "Cached share of input",
   "输入": "Input",
   "1 小时缓存写入": "1-hour cache write",
+  "按日期显示": "By day",
+  "按周汇总": "By week",
+  "按月汇总": "By month",
+  "暂无采集时间": "No collection yet",
+  "没有采集记录": "No collected records",
+  "正在更新报告…": "Updating report…",
+  "记录详情": "Usage details",
+  "所有采集工具": "All collection tools",
+  "查看未支持的工具": "Show unsupported tools",
+  "没有匹配的采集工具": "No matching collection tools",
+  "添加模型价格": "Add model price",
+  "本地来源与路径": "Sources and paths",
+  "统计 · 全历史": "All-time analysis",
+  "阶段": "Period",
+  "按采集日期排列；空白表示无记录。": "Ordered by collection date. Blank columns have no records.",
 });
 
 const usageRanges = [["today", "今天"], ["7d", "近 7 天"], ["30d", "近 30 天"], ["month", "本月"], ["all", "全部"]];
@@ -103,6 +118,7 @@ let usageRequest = 0;
 let dailyGrouping = "client";
 let sessionGrouping = "project";
 let usageDraft = null;
+let selectedChartPeriod = null;
 
 function tokenCount(value) {
   if (value === null || value === undefined) return "—";
@@ -140,7 +156,18 @@ function renderUsage() {
 
 function displayUsage() {
   const content = document.querySelector("#usage-view");
-  if (page === "analytics" && content) content.innerHTML = usageContent();
+  if (page !== "analytics" || !content) return;
+  const open = new Set([...content.querySelectorAll("details[open][data-usage-details]")].map((item) => item.dataset.usageDetails));
+  const focus = document.activeElement.closest("#usage-view button[data-action]");
+  content.innerHTML = usageContent();
+  for (const detail of content.querySelectorAll("details[data-usage-details]")) {
+    if (open.has(detail.dataset.usageDetails)) detail.open = true;
+  }
+  if (focus) {
+    const replacement = [...content.querySelectorAll("button[data-action]")].find((item) =>
+      item.dataset.action === focus.dataset.action && item.dataset.value === focus.dataset.value);
+    replacement?.focus({ preventScroll: true });
+  }
 }
 
 function usageContent() {
@@ -149,10 +176,11 @@ function usageContent() {
   const sessions = dashboard.sessions || { rows: [], totalCount: 0 };
   const warnings = dashboard.warnings || [];
   const deviceCount = dashboard.devices?.length ?? dashboard.sessionSummary?.byDevice?.length;
-  return `<div class="usage-layout">
-    <section class="usage-controls">
-      <div class="spread usage-main-controls"><div class="stacked"><h2>${t("本地用量")}</h2><p class="muted">${t("按工具日志统计，部分来源含估算值；保留已采集的历史。")}</p></div>
-        <div class="cluster">
+  const collecting = usageBusy || dashboard.scanning;
+  return `<div class="usage-layout usage-report" aria-busy="${collecting || usageLoading}">
+    <section class="panel usage-controls report-toolbar" aria-label="${t("本地用量")}">
+      <div class="report-filter">${icon("time")}${segments("统计时间", usageRanges, usageRange, "usage-range")}</div>
+      <div class="cluster report-actions">
           ${button("采集设置", "usage-settings", { glyph: "settings" })}
           ${menu("导入与导出", "upload", [
             button("导出 CSV · 当前日期范围", "usage-export-csv"),
@@ -160,23 +188,22 @@ function usageContent() {
             "<hr>",
             button("合并其他设备 JSON…", "usage-import-open"),
           ].join(""))}
-          ${button(usageBusy ? "采集中" : "采集用量", "usage-scan", { glyph: "refresh", classes: "primary", disabled: usageBusy })}
-        </div>
-      </div>
-      <div class="spread"><div>${segments("统计时间", usageRanges, usageRange, "usage-range")}</div>
-        ${dashboard.lastScanAt ? `<span class="caption muted">${t("上次采集")} ${text(displayDate(dashboard.lastScanAt))}</span>` : ""}
+          ${button(collecting ? "采集中" : "采集用量", "usage-scan", { glyph: "refresh", classes: `primary${collecting ? " report-collecting" : ""}`, disabled: collecting })}
       </div>
       <input type="file" id="usage-import" accept=".json,application/json" class="hidden">
     </section>
-    ${usageMessage ? `<p class="panel info-row amber" role="status">${icon("info")}${t(usageMessage)}</p>` : ""}
-    ${warnings.length ? `<details class="panel disclosure"><summary>${icon("info")}${t("采集说明")} · ${warningCount(warnings.length)}</summary><ul class="scan-warnings">${warnings.map((warning) => `<li>${t(warning)}</li>`).join("")}</ul></details>` : ""}
+    <div class="report-status-line">
+      <span class="report-captured caption muted">${icon(collecting ? "refresh" : "time")}${collecting ? t("正在读取本机用量记录") : usageLoading ? t("正在更新报告…") : dashboard.lastScanAt ? `${t("上次采集")} ${text(displayDate(dashboard.lastScanAt))}` : t("暂无采集时间")}</span>
+      ${warnings.length ? `<details class="disclosure report-warnings" data-usage-details="warnings"><summary>${icon("info")}${t("采集说明")} · ${warningCount(warnings.length)}</summary><ul class="scan-warnings">${warnings.map((warning) => `<li>${t(warning)}</li>`).join("")}</ul></details>` : ""}
+    </div>
+    ${usageMessage ? `<p class="panel info-row report-message" role="status">${icon("info")}${t(usageMessage)}</p>` : ""}
     ${usageMetrics(dashboard.total, days.length > 0)}
-    ${days.length ? dailyTrend(days) + activityCalendar(days) + usageBreakdown(dashboard) : emptyPanel(
-      usageBusy || usageLoading ? "正在读取本机用量记录" : "这个时间段还没有用量记录",
+    ${days.length ? `<div class="report-charts">${dailyTrend(days)}${usageBreakdown(dashboard)}${activityCalendar(days)}</div>` : emptyPanel(
+      collecting || usageLoading ? "正在读取本机用量记录" : "这个时间段还没有用量记录",
       "chart", "使用支持的 AI 工具后采集用量。自定义数据目录可在采集设置中配置。",
-      usageBusy || usageLoading ? "" : button("立即采集", "usage-scan", { classes: "primary" }),
+      collecting || usageLoading ? "" : button("立即采集", "usage-scan", { glyph: "refresh" }),
     )}
-    ${sessions.totalCount ? sessionBreakdown(dashboard.sessionSummary || {}) + sessionDetails(sessions) : ""}
+    ${sessions.totalCount ? `<div class="report-session-region"><header><h2>${t("记录详情")}</h2><p class="caption muted">${t("会话全历史 · 不受上方日期筛选影响")}</p></header><div class="report-session-grid">${sessionBreakdown(dashboard.sessionSummary || {})}${sessionDetails(sessions)}</div></div>` : ""}
     ${dashboard.rows?.length ? snapshotUsage(dashboard.rows) : ""}
     <footer class="spread muted caption usage-footer">
       <p class="info-row">${icon("database")}${t("本地保存用量汇总，不收集对话正文。日志删除后，已采集的用量仍会保留；重复采集与同一设备重复导入不会累加。费用不可定价时显示“未定价”。")}</p>
@@ -196,14 +223,21 @@ function usageMetrics(amounts = {}, present) {
   const reasoning = value("reasoning");
   const totalOutput = output === null && reasoning === null ? null : (output || 0) + (reasoning || 0);
   const cache = value("cacheRead");
-  const ratio = input !== null && cache !== null && input + cache > 0 ? cache / (input + cache) * 100 : null;
-  return `<section class="metric-grid usage-metrics">
-    ${metric("Token 总量", tokenCount(value("totalTokens")), "输入、输出、推理与缓存汇总", "chart")}
-    ${metric("输入", tokenCount(input), "本期输入 Token", "left", "indigo")}
-    ${metric("输出与推理", tokenCount(totalOutput), reasoning === null ? "—" : `${tr("其中推理")} ${tokenCount(reasoning)}`, "right", "teal")}
-    ${metric("缓存读取", tokenCount(cache), ratio === null ? "未提供可计算的缓存比例" : `${tr("缓存输入占比")} ${ratio.toFixed(1)}%`, "cache", "amber")}
-    ${metric("缓存写入", tokenCount(value("cacheWrite")), "以工具实际记录为准", "download", "purple")}
-    ${metric("参考费用 · USD", estimatedCost(value("costUSD")), "模型价估算，不等于实际账单", "cost", "teal")}
+  const writes = value("cacheWrite");
+  const denominator = (input || 0) + (cache || 0) + (writes || 0);
+  const ratio = denominator > 0 ? cache / denominator * 100 : null;
+  const card = (label, numeric, description, glyph, className) => `<div class="report-metric ${className}">
+    <div class="report-metric-title">${icon(glyph)}<span>${t(label)}</span></div><strong>${text(numeric)}</strong>
+    ${description ? `<small>${t(description)}</small>` : ""}</div>`;
+  return `<section class="panel report-metrics" aria-label="${t("本地用量")}">
+    ${card("Token 总量", tokenCount(value("totalTokens")), "输入、输出、推理与缓存汇总", "chart", "report-total")}
+    <div class="report-metric-grid">
+      ${card("输入", tokenCount(input), "", "left", "report-input")}
+      ${card("输出与推理", tokenCount(totalOutput), reasoning === null ? "" : `${tr("其中推理")} ${tokenCount(reasoning)}`, "right", "report-output")}
+      ${card("缓存读取", tokenCount(cache), ratio === null ? "" : `${tr("缓存输入占比")} ${ratio.toFixed(1)}%`, "cache", "report-cache")}
+      ${card("缓存写入", tokenCount(writes), "", "download", "report-cache")}
+    </div>
+    ${card("参考费用 · USD", present ? estimatedCost(value("costUSD")) : "—", "模型价估算，不等于实际账单", "cost", "report-cost")}
   </section>`;
 }
 
@@ -222,23 +256,86 @@ function dailyTotals(rows) {
   return [...days.values()].sort((left, right) => left.day.localeCompare(right.day));
 }
 
+const reportDayMillis = 86_400_000;
+const reportSeries = [["input", "输入", "input-segment"], ["output", "输出与推理", "output-segment"],
+  ["cached", "缓存", "cached-segment"]];
+
+function currentReportDay() {
+  const options = { year: "numeric", month: "2-digit", day: "2-digit", timeZone: state?.settings?.timeZone || "UTC" };
+  let formatter;
+  try { formatter = new Intl.DateTimeFormat("en-CA", options); }
+  catch { formatter = new Intl.DateTimeFormat("en-CA", { ...options, timeZone: "UTC" }); }
+  const parts = formatter.formatToParts();
+  const value = Object.fromEntries(parts.map(({type, value}) => [type, value]));
+  return `${value.year}-${value.month}-${value.day}`;
+}
+
+function reportDateRange(points) {
+  const last = Date.parse(usageRange === "all" ? points.at(-1).day : currentReportDay());
+  if (usageRange === "all") return [Date.parse(points[0].day), last];
+  if (usageRange === "month") return [Date.parse(currentReportDay().slice(0, 7) + "-01"), last];
+  const days = { today: 0, "7d": 6, "30d": 29 }[usageRange];
+  return [last - days * reportDayMillis, last];
+}
+
+function trendBuckets(points) {
+  const [start, end] = reportDateRange(points);
+  const span = 1 + (end - start) / reportDayMillis;
+  const block = span > 364 ? Math.ceil(span / 48) : span > 42 ? 7 : 1;
+  const bins = [];
+  const key = (time) => new Date(time).toISOString().slice(0, 10);
+  for (let day = start; day <= end; day += block * reportDayMillis) {
+    const first = key(day);
+    const last = key(Math.min(end, day + (block - 1) * reportDayMillis));
+    bins.push({ first, last, input: 0, output: 0, cached: 0, total: 0, records: 0 });
+  }
+  for (const point of points) {
+    const bin = bins[Math.floor((Date.parse(point.day) - start) / (block * reportDayMillis))];
+    if (!bin) continue;
+    for (const [key] of reportSeries) bin[key] += point[key];
+    bin.total += point.total;
+    bin.records += 1;
+  }
+  return { bins, block };
+}
+
+function chartPeriodLabel(first, last) {
+  return first === last ? first : `${first} – ${last}`;
+}
+
+function axisMax(value) {
+  if (value <= 4) return 4;
+  const scale = 10 ** Math.floor(Math.log10(value));
+  return Math.ceil(value / scale * 2) * scale / 2;
+}
+
 function dailyTrend(days) {
   const points = dailyTotals(days);
-  const max = Math.max(1, ...points.map((point) => point.input + point.output + point.cached));
-  const step = Math.ceil(points.length / 7);
-  const bar = (value, tone) => `<span class="${tone}" style="--height:${value / max * 100}%"></span>`;
-  const labels = points.map((point, index) => index % step === 0 ? point.day.slice(5) : "");
-  return `<section class="panel usage-section">
-    <div class="spread"><h3>${t("每日用量")}</h3><span class="caption muted">${text(countText(points.length, "个有记录的日期", "days with records"))}</span></div>
-    <div class="trend">
+  const { bins, block } = trendBuckets(points);
+  const max = axisMax(Math.max(0, ...bins.map((point) => point.total)));
+  const step = Math.max(1, Math.ceil(bins.length / 6));
+  const bar = (value, tone) => `<i class="${tone}" style="--report-segment:${value / max * 100}%"></i>`;
+  const initial = bins.find((point) => point.first === selectedChartPeriod) || bins.findLast((point) => point.records) || bins[0];
+  selectedChartPeriod = initial?.first || null;
+  const reportMode = block === 1 ? tr("按日期显示") : block === 7 ? tr("按周汇总") : inEnglish() ? `Grouped into ${block}-day periods` : `每 ${block} 天汇总`;
+  return `<section class="panel usage-section report-trend" aria-label="${t("每日用量")}">
+    <div class="report-section-heading"><div><h3>${t("每日用量")}</h3><p class="caption muted">${text(reportMode)}</p></div>
+      <div class="cluster legend" aria-label="${t("用量分布")}">${reportSeries.map(([, label, tone]) => `<span><i class="${tone}"></i>${t(label)}</span>`).join("")}</div>
+    </div>
+    <div class="trend report-trend-grid" aria-label="${t("按采集日期排列；空白表示无记录。")}">
       <div class="trend-y" aria-hidden="true">${[1, 0.75, 0.5, 0.25, 0].map((rate) => `<span>${text(tokenCount(Math.round(max * rate)))}</span>`).join("")}</div>
-      <div class="trend-scroll"><div class="trend-grid" style="--point-count:${points.length}">
-        ${points.map((point, index) => `<div class="trend-day" title="${text(`${point.day} · ${tokenCount(point.total)} Token`)}">
-          <div class="trend-stack">${bar(point.input, "input-segment")}${bar(point.output, "output-segment")}${bar(point.cached, "cached-segment")}</div><span>${text(labels[index])}</span>
-        </div>`).join("")}
+      <div class="trend-scroll"><div class="trend-grid" style="--point-count:${bins.length}">
+        ${bins.map((point, index) => {
+          const label = index % step === 0 ? point.first.slice(5) : "";
+          const detail = `${chartPeriodLabel(point.first, point.last)} · ${point.records ? `${tokenCount(point.total)} Token` : tr("没有采集记录")}`;
+          return `<div class="trend-day"><button type="button" class="trend-column" title="${text(detail)}" aria-label="${text(detail)}"
+            data-action="usage-chart-focus" data-value="${text(point.first)}" data-last="${text(point.last)}" data-total="${point.total}" data-records="${point.records}"
+            tabindex="${point === initial ? 0 : -1}" aria-pressed="${point === initial}">
+            <span class="trend-stack" aria-hidden="true">${reportSeries.map(([key, ,tone]) => bar(point[key], tone)).join("")}</span></button><span aria-hidden="true">${text(label)}</span></div>`;
+        }).join("")}
       </div></div>
     </div>
-    <div class="cluster legend"><span><i class="input-segment"></i>${t("输入")}</span><span><i class="output-segment"></i>${t("输出与推理")}</span><span><i class="cached-segment"></i>${t("缓存")}</span></div>
+    <p class="report-chart-focus caption muted" role="status"><time id="usage-chart-date">${text(initial ? chartPeriodLabel(initial.first, initial.last) : "")}</time><strong id="usage-chart-value">${text(initial?.records ? `${tokenCount(initial.total)} Token` : tr("没有采集记录"))}</strong></p>
   </section>`;
 }
 
@@ -246,56 +343,63 @@ function activityCalendar(rows) {
   const points = dailyTotals(rows);
   if (!points.length) return "";
   const byDay = new Map(points.map((point) => [point.day, point.total]));
-  const dayMs = 86_400_000;
-  const last = new Date(points.at(-1).day).valueOf();
-  const earliest = Math.max(new Date(points[0].day).valueOf(), last - dayMs * 363);
-  const start = earliest - ((new Date(earliest).getUTCDay() + 6) % 7) * dayMs;
+  const [rangeStart, last] = reportDateRange(points);
+  const earliest = Math.max(rangeStart, last - reportDayMillis * 363);
+  const start = earliest - ((new Date(earliest).getUTCDay() + 6) % 7) * reportDayMillis;
   if (!Number.isFinite(start) || !Number.isFinite(last)) return "";
-  const max = Math.max(1, ...points.map((point) => point.total));
+  const max = points.reduce((value, point) => Math.max(value, point.total), 1);
   const cells = [];
-  for (let time = start; time <= last; time += dayMs) {
+  const months = [];
+  let shownMonth = "";
+  for (let time = start; time <= last; time += reportDayMillis) {
     const day = new Date(time).toISOString().slice(0, 10);
-    const value = byDay.get(day) || 0;
-    const intensity = value > 0 ? Math.max(0.2, Math.log1p(value) / Math.log1p(max)) : 0.07;
-    cells.push(`<span class="heat-cell" style="--intensity:${time < earliest ? 0 : intensity}" title="${text(`${day} · ${tokenCount(value)} Token`)}"></span>`);
+    const value = byDay.get(day);
+    const intensity = value > 0 ? Math.max(0.27, Math.log1p(value) / Math.log1p(max)) : 0;
+    const month = day.slice(0, 7);
+    if (time >= earliest && month !== shownMonth) {
+      shownMonth = month;
+      months.push(`<span style="--column:${1 + Math.floor((time - start) / (reportDayMillis * 7))}">${text(new Intl.DateTimeFormat(inEnglish() ? "en" : "zh-CN", { month: "short", timeZone: "UTC" }).format(time))}</span>`);
+    }
+    cells.push(`<span class="heat-cell${time < earliest ? " heat-outside" : ""}" style="--intensity:${intensity}" title="${text(`${day} · ${value === undefined ? tr("没有采集记录") : `${tokenCount(value)} Token`}`)}"></span>`);
   }
   const daysWithService = points.filter((item) => item.total > 0).length;
-  return `<section class="panel usage-section">
-    <div class="spread"><h3>${t("活跃日历")}</h3><span class="caption muted">${t("按所选时间显示，最长 52 周")}</span></div>
-    <div class="heat-scroll"><div class="heat-grid">${cells.join("")}</div></div>
-    <div class="spread caption-small muted"><div class="cluster heat-key">${t("少")}${[0.09, 0.22, 0.44, 0.66, 0.88].map((number) => `<span class="heat-cell" style="--intensity:${number}"></span>`).join("")}${t("多")}</div><span>${text(countText(daysWithService, "天有用量", "active days"))}</span></div>
+  return `<section class="panel usage-section report-heatmap">
+    <div class="report-section-heading"><div><h3>${t("活跃日历")}</h3><p class="caption muted">${t("按所选时间显示，最长 52 周")}</p></div><span class="caption muted">${text(countText(daysWithService, "天有用量", "active days"))}</span></div>
+    <div class="heat-scroll"><div class="heat-months" aria-hidden="true">${months.join("")}</div><div class="heat-grid">${cells.join("")}</div></div>
+    <div class="cluster heat-key caption muted">${t("少")}${[0, 0.25, 0.5, 0.75, 1].map((value) => `<span class="heat-cell" style="--intensity:${value}"></span>`).join("")}${t("多")}</div>
   </section>`;
 }
 
-function breakdownRows(rows, formatter = (value) => value) {
+function breakdownRows(rows, formatter = (value) => value, detailKey = "groups") {
   if (!rows?.length) return `<p class="muted">${t("尚无可归类的记录")}</p>`;
-  const max = Math.max(1, ...rows.map((row) => row.amounts?.totalTokens || 0));
+  const total = rows.reduce((sum, row) => sum + (row.amounts?.totalTokens || 0), 0);
   function renderRows(group) {
     return group.map((row) => {
       const amount = row.amounts || {};
       const label = formatter(row.name || row.label);
+      const share = total > 0 ? (amount.totalTokens || 0) / total * 100 : 0;
       return `<div class="breakdown-row"><div class="breakdown-totals">
-        <span title="${text(label)}">${text(label)}</span><strong>${text(tokenCount(amount.totalTokens))}</strong><span class="muted caption">${text(estimatedCost(amount.costUSD))}</span>
-        </div><progress value="${amount.totalTokens || 0}" max="${max}" aria-label="${text(label)}"></progress></div>`;
+        <span title="${text(label)}">${text(label)}</span><strong>${text(tokenCount(amount.totalTokens))}</strong>
+        </div><progress value="${share}" max="100" aria-label="${text(label)}"></progress><div class="breakdown-note caption muted"><span>${share.toFixed(1)}%</span><span>${text(estimatedCost(amount.costUSD))}</span></div></div>`;
     }).join("");
   }
   return renderRows(rows.slice(0, 8)) + (rows.length > 8
-    ? `<details class="disclosure stacked"><summary class="caption">${t("显示全部")} ${warningCount(rows.length)}</summary>${renderRows(rows.slice(8))}</details>` : "");
+    ? `<details class="disclosure stacked" data-usage-details="${text(detailKey)}"><summary class="caption">${t("显示全部")} ${warningCount(rows.length)}</summary>${renderRows(rows.slice(8))}</details>` : "");
 }
 
 function usageBreakdown(dashboard) {
   const groupByClient = dailyGrouping === "client";
-  return `<section class="panel usage-section"><div class="spread">
-    <div class="cluster"><h3>${t("用量分布")}</h3><span class="caption muted">${t(usageRanges.find(([id]) => id === usageRange)[1])}</span></div>
+  return `<section class="panel usage-section report-breakdown"><div class="report-section-heading">
+    <div><h3>${t("用量分布")}</h3><p class="caption muted">${t(usageRanges.find(([id]) => id === usageRange)[1])}</p></div>
     ${segments("分组", [["client", "工具"], ["model", "模型"]], dailyGrouping, "daily-group")}
-  </div>${breakdownRows(groupByClient ? dashboard.byClient : dashboard.byModel, groupByClient ? nameForClient : undefined)}</section>`;
+  </div>${breakdownRows(groupByClient ? dashboard.byClient : dashboard.byModel, groupByClient ? nameForClient : undefined, `breakdown-${dailyGrouping}`)}</section>`;
 }
 
 function sessionBreakdown(summary) {
-  return `<section class="panel usage-section"><div class="spread">
-    <div class="stacked"><h3>${t("项目与设备")}</h3><p class="caption muted">${t("会话全历史 · 不受上方日期筛选影响")}</p></div>
+  return `<section class="panel usage-section report-projects"><div class="report-section-heading">
+    <h3>${t("项目与设备")}</h3>
     ${segments("会话分组", [["project", "项目"], ["device", "设备"]], sessionGrouping, "session-group")}
-  </div>${breakdownRows(sessionGrouping === "project" ? summary.byProject : summary.byDevice)}</section>`;
+  </div>${breakdownRows(sessionGrouping === "project" ? summary.byProject : summary.byDevice, undefined, `sessions-${sessionGrouping}`)}</section>`;
 }
 
 function sessionDetail(item) {
@@ -303,7 +407,7 @@ function sessionDetail(item) {
   const definition = (label, value) => value ? `<div class="spread"><dt>${t(label)}</dt><dd>${text(value)}</dd></div>` : "";
   const measuredRate = item.timedTokens > 0 && item.timedDurationMS > 0
     ? (item.timedTokens / (item.timedDurationMS / 1000)).toFixed(1) + " Token/s" : null;
-  return `<details class="session">
+  return `<details class="session" data-usage-details="${text(item.id || item.sessionID)}">
     <summary><span class="stacked"><strong>${t(item.projectLabel || "未识别项目")}</strong><span class="muted caption">${text(nameForClient(item.client))} · ${text(item.model)}</span></span>
       <span class="stacked"><strong>${text(tokenCount(amount.totalTokens))}</strong><span class="muted caption">${text(estimatedCost(amount.costUSD))}</span></span></summary>
     <dl class="session-detail muted caption">${definition("设备", item.deviceLabel || item.deviceID)}${definition("项目标识", item.projectKey)}${definition("会话", item.sessionID)}
@@ -317,8 +421,8 @@ function sessionDetails(sessions) {
   const { rows, totalCount, offset = 0, pageSize = 50 } = sessions;
   const first = rows.length ? offset + 1 : 0;
   const last = offset + rows.length;
-  return `<section class="panel usage-section">
-    <div class="spread"><div class="cluster"><h3>${t("会话明细")}</h3><span class="caption muted">${t("全历史 · 按需加载")}</span></div><span class="caption muted">${first}–${last} / ${totalCount}</span></div>
+  return `<section class="panel usage-section report-sessions">
+    <div class="report-section-heading"><h3>${t("会话明细")}</h3><span class="caption muted">${first}–${last} / ${totalCount}</span></div>
     <p class="caption muted">${t("同一会话按模型分别统计；展开查看项目、设备和生成速度。")}</p>
     <div>${rows.map(sessionDetail).join("")}</div>
     <div class="spread"><span class="caption muted">${t("每页最多 50 条，会话历史完整保留。")}</span><div class="cluster">
@@ -329,7 +433,7 @@ function sessionDetails(sessions) {
 }
 
 function snapshotUsage(rows) {
-  return `<details class="panel disclosure"><summary>${icon("time")}${t("已采集快照")}</summary><div class="table-scroll">
+  return `<details class="panel disclosure report-snapshots" data-usage-details="snapshots"><summary>${icon("time")}${t("已采集快照")}</summary><div class="table-scroll">
     <table><thead><tr>${["时间", "平台", "来源", "输入", "输出", "费用"].map((title) => `<th scope="col">${t(title)}</th>`).join("")}</tr></thead>
     <tbody>${rows.map((row) => `<tr><td>${text(displayDate(row.observedAt))}</td><td>${text(providerFor(row.provider)?.agent || row.provider)}</td>
       <td>${text(row.source)}</td><td>${text(number(row.inputTokens))}</td><td>${text(number(row.outputTokens))}</td><td>${text(row.cost == null ? "—" : money(row.cost, row.currency))}</td></tr>`).join("")}</tbody></table></div>
@@ -369,8 +473,33 @@ setInterval(() => {
 action("usage-range", (button) => {
   if (usageRange === button.dataset.value) return;
   usageRange = button.dataset.value;
+  selectedChartPeriod = null;
   usageDashboard = null;
   return loadUsage();
+});
+action("usage-chart-focus", (button) => {
+  const chart = button.closest(".report-trend");
+  const active = chart.querySelector('.trend-column[aria-pressed="true"]');
+  if (active && active !== button) {
+    active.setAttribute("aria-pressed", "false");
+    active.tabIndex = -1;
+  }
+  button.setAttribute("aria-pressed", "true");
+  button.tabIndex = 0;
+  selectedChartPeriod = button.dataset.value;
+  chart.querySelector("#usage-chart-date").textContent = chartPeriodLabel(selectedChartPeriod, button.dataset.last);
+  chart.querySelector("#usage-chart-value").textContent = Number(button.dataset.records) ? `${tokenCount(Number(button.dataset.total))} Token` : tr("没有采集记录");
+});
+document.addEventListener("keydown", (event) => {
+  const button = event.target.closest(".trend-column");
+  if (!button || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const columns = [...button.closest(".trend-grid").querySelectorAll(".trend-column")];
+  const index = columns.indexOf(button);
+  const target = { ArrowLeft: index - 1, ArrowRight: index + 1, Home: 0, End: columns.length - 1 }[event.key];
+  event.preventDefault();
+  const chosen = columns[Math.max(0, Math.min(columns.length - 1, target))];
+  chosen.focus();
+  chosen.click();
 });
 action("usage-offset", (button) => {
   usageOffset = Number(button.dataset.value);
@@ -419,42 +548,42 @@ document.addEventListener("change", async (event) => {
   await loadUsage();
 });
 
-function usageSettingsSection(title, controls, body) {
-  return `<section class="panel settings-panel"><div class="spread"><h3>${t(title)}</h3>${controls || ""}</div>${body}</section>`;
+function usageSettingsSection(title, glyph, controls, body) {
+  return `<section class="panel settings-panel"><header class="preferences-card-heading collector-card-heading"><span>${icon(glyph)}</span><h3>${t(title)}</h3>${controls || ""}</header><div class="preferences-rows">${body}</div></section>`;
 }
 
 function drawUsageSettings() {
-  const { draft, search, clientID } = usageDraft;
+  const { draft, search, clientID, showUnsupported } = usageDraft;
   const paths = draft.engine.customPaths[clientID] || [];
   const clients = draft.sources.filter((entry) => entry.supported !== false && entry.supportsCustomPaths);
   const scroll = dialog.querySelector(".dialog-body")?.scrollTop || 0;
   openDialog(`${editorHeading("用量采集设置", "配置本机工具、数据目录和费用估算。")}
     <form id="usage-settings-form">
-      <div class="dialog-body settings-body settings-sections">
-        ${usageSettingsSection("采集频率", "", `
+      <div class="dialog-body settings-body settings-sections preferences-card-list collector-sections">
+        ${usageSettingsSection("采集频率", "time", "", `
           ${switchInput("automaticallyScan", "应用运行时自动采集", draft.automaticallyScan)}
           ${settingsField("间隔（分钟）", `<input type="number" min="2" max="60" required name="refreshMinutes" value="${text(draft.refreshMinutes)}">`)}
           ${settingsDescription("初次读取完整历史可能需要几分钟。")}`)}
-        ${usageSettingsSection("采集工具", `<div class="cluster"><span id="usage-source-count" class="caption muted">${sourceCount()}</span>${button("恢复默认选择", "sources-default")}</div>`, `
-          <input id="source-search" type="search" value="${text(search)}" aria-label="${t("查找工具")}" placeholder="${t("查找工具")}">
+        ${usageSettingsSection("采集工具", "computer", `<div class="cluster collector-header-actions"><span id="usage-source-count" class="caption muted">${sourceCount()}</span>${button("恢复默认选择", "sources-default")}</div>`, `
+          <div class="collector-search"><input id="source-search" type="search" value="${text(search)}" aria-label="${t("查找工具")}" placeholder="${t("查找工具")}">${switchInput("showUnsupported", "查看未支持的工具", showUnsupported)}</div>
           <div id="source-options" class="source-options">${sourceOptions()}</div>
           ${settingsDescription("发现路径只表示文件或目录存在。实际读取取决于日志格式和权限，缺少记录时不显示用量。")}`)}
-        ${clients.length ? usageSettingsSection("自定义数据目录", `<select name="selectedClient" aria-label="${t("工具")}">${selectOptions(clients.map((item) => [item.id, item.name]), clientID)}</select>`, `
+        ${clients.length ? usageSettingsSection("自定义数据目录", "folder", `<select name="selectedClient" aria-label="${t("工具")}">${selectOptions(clients.map((item) => [item.id, item.name]), clientID)}</select>`, `
           ${settingsDescription("在工具默认目录之外，读取你指定的日志目录。")}
           <details class="disclosure"><summary class="muted">${t("默认数据位置")}</summary>
           ${(draft.sources.find((source) => source.id === clientID)?.paths || []).map((path) => `<code>${text(path)}</code>`).join("")}</details>
-          ${paths.length ? paths.map((path, index) => `<div class="spread"><code>${text(path)}</code>${button("移除", "remove-source-path", { value: index })}</div>`).join("")
+          ${paths.length ? paths.map((path, index) => `<div class="collector-path"><code>${text(path)}</code>${button("移除", "remove-source-path", { value: index })}</div>`).join("")
             : `<p class="muted">${t("尚未添加额外目录")}</p>`}
-          <div class="cluster"><input name="sourcePath" aria-label="${t("日志目录路径")}" placeholder="C:\\…\\logs">${button("添加", "add-source-path")}${button("添加目录", "pick-source-path", { glyph: "folder" })}</div>`): ""}
-        ${usageSettingsSection("自定义模型价格", button("添加模型", "add-price", { glyph: "plus" }), `
+          <div class="collector-path-entry"><input name="sourcePath" aria-label="${t("日志目录路径")}" placeholder="C:\\…\\logs">${button("添加", "add-source-path")}${button("添加目录", "pick-source-path", { glyph: "folder" })}</div>`): ""}
+        ${usageSettingsSection("自定义模型价格", "cost", button("添加模型", "add-price", { glyph: "plus" }), `
           ${settingsDescription("单位为美元 / 百万 Token。模型名需与明细中的名称完全一致；留空不设定此项，填写 0 表示该项免费。")}
           <div class="cluster">${button("更新公开价格（联网）", "update-prices", { glyph: "download" })}<p id="price-status" class="caption muted" role="status"></p></div>
           ${(draft.engine.modelPrices || []).map(priceEditor).join("")}
           ${!draft.engine.modelPrices?.length ? `<p class="muted">${t("没有可核验价格的模型显示未定价。")}</p>` : ""}`)}
-        ${usageSettingsSection("自动导出", "", `
+        ${usageSettingsSection("自动导出", "download", "", `
           ${settingsDescription("启用后每次采集会更新 JSON 导出。选择你有权写入的目录。")}
-          <div class="cluster"><input name="automaticExportPath" value="${text(draft.automaticExportPath)}" aria-label="${t("导出文件夹")}" placeholder="C:\\…\\exports">${button("选择…", "pick-export-path", { glyph: "folder" })}${button("停用", "disable-autoexport")}</div>`)}
-        ${usageSettingsSection("本地统计与开源来源", "", settingsDescription("本地采集仅保存 Token、模型与会话统计。导出内容包含项目名称、设备标识与用量元数据。"))}
+          <div class="collector-path-entry"><input name="automaticExportPath" value="${text(draft.automaticExportPath)}" aria-label="${t("导出文件夹")}" placeholder="C:\\…\\exports">${button("选择…", "pick-export-path", { glyph: "folder" })}${button("停用", "disable-autoexport")}</div>`)}
+        ${usageSettingsSection("本地统计与开源来源", "info", "", settingsDescription("本地采集仅保存 Token、模型与会话统计。导出内容包含项目名称、设备标识与用量元数据。"))}
       </div>
         <footer class="dialog-foot">${button("取消", "close-dialog")}<p id="sources-error" class="red caption" role="alert">${t(draft.error || "")}</p><button type="submit" class="primary"${draft.error ? " disabled" : ""}>${t("保存设置")}</button></footer>
     </form>`, "source-dialog");
@@ -467,13 +596,16 @@ function sourceCount() {
 }
 
 function sourceOptions() {
-  const { draft, search } = usageDraft;
+  const { draft, search, showUnsupported } = usageDraft;
   const selected = new Set(draft.engine.enabledClientIDs);
   const needle = search.trim().toLocaleLowerCase();
-  return draft.sources.filter((item) => `${item.name} ${item.id}`.toLocaleLowerCase().includes(needle)).map((item) => {
+  const candidates = draft.sources.filter((item) => (showUnsupported || needle || item.supported !== false)
+    && `${item.name} ${item.id}`.toLocaleLowerCase().includes(needle));
+  if (!candidates.length) return `<p class="caption muted">${t("没有匹配的采集工具")}</p>`;
+  return candidates.map((item) => {
     const supported = item.supported !== false;
     const status = !supported ? "该采集源暂不支持 Windows" : item.detected ? "发现本机数据路径" : "暂未发现默认路径";
-    return `<div class="source-option">
+    return `<div class="source-option ${supported ? "" : "source-unsupported"}">
       <label><input type="checkbox" name="source" value="${text(item.id)}"${selected.has(item.id) && supported ? " checked" : ""}${supported ? "" : " disabled"}>${t(item.name)}</label>
       <p class="caption-small ${item.detected ? "teal" : "muted"}">${icon("folder")}${t(status)}</p>
     </div>`;
@@ -501,7 +633,7 @@ async function saveUsageSettings(event) {
     });
     usageSources = result.result?.sources ? result.result : await api("/api/usage/settings");
     closeDialog();
-    if (page === "catalog") document.querySelector("#source-cards").innerHTML = sourceCards();
+    if (page === "catalog" && catalogTab === "sources") refreshCatalogContent();
   } catch (error) {
     showSourceError(error);
   } finally {
@@ -532,7 +664,7 @@ action("usage-settings", async (button) => {
     usageSources = draft;
     const client = draft.sources.find((item) => item.id === "codex" && item.supportsCustomPaths)
       || draft.sources.find((item) => item.supportsCustomPaths && item.supported !== false);
-    usageDraft = { draft: structuredClone(draft), clientID: client?.id, search: "" };
+    usageDraft = { draft: structuredClone(draft), clientID: client?.id, search: "", showUnsupported: false };
     drawUsageSettings();
   } finally {
     button.disabled = false;
@@ -631,5 +763,8 @@ document.addEventListener("change", (event) => {
     drawUsageSettings();
   } else if (input.name === "automaticallyScan") {
     draft.automaticallyScan = input.checked;
+  } else if (input.name === "showUnsupported") {
+    usageDraft.showUnsupported = input.checked;
+    dialog.querySelector("#source-options").innerHTML = sourceOptions();
   }
 });

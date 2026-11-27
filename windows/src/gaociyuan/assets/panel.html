@@ -11,17 +11,28 @@
 <body>
   <div id="shell" data-dock="right">
     <aside id="rail" aria-label="Agent 额度">
-      <button id="grip" type="button" aria-label="拖动悬浮窗" title="拖动悬浮窗"><span></span></button>
-      <div id="rings"></div>
+      <div class="rail-controls">
+        <button id="grip" type="button" tabindex="-1" aria-label="拖动悬浮窗" title="拖动悬浮窗"><span aria-hidden="true"></span></button>
+        <button id="panel-options" type="button" aria-label="悬浮窗选项" title="悬浮窗选项" aria-expanded="false" aria-controls="menu">
+          <span aria-hidden="true">···</span>
+        </button>
+      </div>
+      <div id="rail-content">
+        <div id="rings"></div>
+        <button id="empty-rail" type="button" hidden>
+          <img src="/brand/GaoCiYuanIcon.png" alt="">
+          <span>接入 Agent</span>
+        </button>
+      </div>
       <button id="overflow" type="button" hidden></button>
     </aside>
-    <section id="detail" hidden></section>
-    <div id="menu" hidden>
+    <section id="detail" aria-labelledby="detail-title" hidden></section>
+    <nav id="menu" aria-label="悬浮窗选项" hidden>
       <button type="button" data-action="open">打开搞词元</button>
-      <button type="button" data-action="columns">切换单列 / 双列</button>
+      <button type="button" data-action="columns">切换为双列</button>
       <button type="button" data-action="settings">设置</button>
       <button type="button" data-action="hide">隐藏悬浮窗</button>
-    </div>
+    </nav>
   </div>
 </body>
 </html>

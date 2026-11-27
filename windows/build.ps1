@@ -65,7 +65,7 @@ Check-Exit 'CLI package'
 
 & $compiler "/DAppVersion=$version" "/DAppBuild=$build" "/DStageDir=$stage" "/DOutputDir=$distDir" "/DAppIcon=$icon" "/DBootstrapper=$bootstrapper" 'installer.iss'
 Check-Exit 'Installer'
-$name = "GaoCiYuan-Windows-$version-x64-Setup.exe"
+$name = "GaoCiYuan-Windows-$version-build$build-x64-Setup.exe"
 $package = Join-Path $distDir $name
 $hash = (Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -LiteralPath "$package.sha256" -Value "$hash  $name" -Encoding ascii

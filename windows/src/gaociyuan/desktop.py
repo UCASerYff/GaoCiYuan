@@ -57,8 +57,9 @@ class Desktop:
         self.tray_ready = False
         self.panel_visible = False
         self.notification_route = '#overview'
-        self._requested_size = (64, 120, 0, 0)
+        self._requested_size = (74, 106, 0, 0)
         self._panel_state = None
+        self._floating_detail_side = None
         self._previous_dark = None
         self._last_monitor = None
         self._tray_warning = None
@@ -85,14 +86,14 @@ class Desktop:
         kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
         self.mutex = kernel32.CreateMutexW(None, False, APP_MUTEX) if not hidden else None
 
-        background = '#22242b' if self.dark else '#f4f4f9'
+        background = '#171c1a' if self.dark else '#f5f5f0'
         webview.settings['ALLOW_DOWNLOADS'] = True
         webview.settings['OPEN_EXTERNAL_LINKS_IN_BROWSER'] = True
         self.main = webview.create_window(f'{APP_NAME} V{MARKETING_VERSION}', server.url + initial_route,
-                                          width=1120, height=720, min_size=(880, 560),
+                                          width=1160, height=760, min_size=(760, 560),
                                           hidden=hidden, text_select=True, background_color=background)
         self.panel = webview.create_window(f'{APP_NAME} · 悬浮窗', server.url + 'panel',
-                                           width=64, height=120, min_size=(1, 1),
+                                           width=74, height=106, min_size=(1, 1),
                                            hidden=True, frameless=True, focus=False, easy_drag=False,
                                            on_top=True, transparent=True, js_api=PanelBridge(self),
                                            background_color=background)
@@ -171,6 +172,7 @@ class Desktop:
 
     def _panel_loaded(self) -> None:
         self.panel_ready = True
+        self._floating_detail_side = None
         user32 = self.user32
         user32.GetWindowLongW.argtypes = (HWND, ctypes.c_int)
         user32.SetWindowLongW.argtypes = (HWND, ctypes.c_int, ctypes.c_long)
@@ -311,14 +313,22 @@ class Desktop:
         y = work.top + (work.bottom - work.top - height) // 2
         position = settings.get('panelPosition')
         if dock == 'top':
-            x = work.left + (work.right - work.left - width) // 2
             y = work.top
             width = max(width, detail_width)
+            x = work.left + (work.right - work.left - width) // 2
             height += detail_height
         else:
             if dock == 'floating' and isinstance(position, list) and len(position) == 2 and all(type(value) is int for value in position):
                 x, y = position
-            if dock == 'right':
+            detail_before_rail = dock == 'right'
+            if dock == 'floating':
+                x = max(work.left, min(x, work.right - width))
+                detail_before_rail = x - work.left > work.right - x - width
+                side = 'before' if detail_before_rail else 'after'
+                if side != self._floating_detail_side:
+                    self._floating_detail_side = side
+                    self.panel.run_js(f'document.querySelector("#shell").dataset.detailSide = "{side}"')
+            if detail_before_rail:
                 x -= detail_width
             width += detail_width
             height = max(height, detail_height)
