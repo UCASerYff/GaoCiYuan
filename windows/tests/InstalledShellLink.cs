@@ -43,7 +43,7 @@ namespace GaoCiYuan.Smoke
             public int Id;
         }
 
-        // PROPVARIANT is 24 bytes on the x64 test runner; read only VT_LPWSTR.
+        // PROPVARIANT is 24 bytes on the x64 test runner.
         [StructLayout(LayoutKind.Explicit, Size = 24)]
         private struct PropertyValue
         {
@@ -139,7 +139,19 @@ namespace GaoCiYuan.Smoke
                 ((IPropertyStore)instance).GetValue(ref key, out PropertyValue modelId);
                 try
                 {
-                    var appId = modelId.Type == 31 ? Marshal.PtrToStringUni(modelId.String) : string.Empty;
+                    string appId;
+                    switch ((VarEnum)modelId.Type)
+                    {
+                        case VarEnum.VT_BSTR: // Inno Setup persists AppUserModelID as a BSTR.
+                            appId = Marshal.PtrToStringBSTR(modelId.String);
+                            break;
+                        case VarEnum.VT_LPWSTR:
+                            appId = Marshal.PtrToStringUni(modelId.String);
+                            break;
+                        default:
+                            appId = string.Empty;
+                            break;
+                    }
                     return new Link(ReadPath(link, 0), ReadPath(link, RawPath), ReadItemPath(link), arguments.ToString(),
                                     icon.ToString(), index, appId);
                 }
