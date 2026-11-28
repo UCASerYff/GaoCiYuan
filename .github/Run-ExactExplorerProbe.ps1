@@ -41,7 +41,7 @@ if (-not $Executable) {
     $original = Join-Path $windows 'smoke-installed.ps1'
     $generated = Join-Path $windows 'smoke-installed-explorer.generated.ps1'
     $smoke = Get-Content -LiteralPath $original -Encoding utf8 -Raw
-    $hook = '    $app = $null\r?\n(?=    Invoke-OwnedUninstaller)'
+    $hook = '    \$app = \$null\r?\n(?=    Invoke-OwnedUninstaller)'
     $matchesFound = [regex]::Matches($smoke, $hook)
     Assert-Probe ($matchesFound.Count -eq 1) 'Could not find the unique installation smoke cleanup boundary.'
     $marker = $matchesFound[0]
