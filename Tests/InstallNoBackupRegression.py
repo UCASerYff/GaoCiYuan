@@ -127,7 +127,7 @@ elif name=='pluginkit':
         ('old-framework', '15', '14'),
         ('matched', '15', '15'),
     ]:
-        project, _, source, _, _ = case('package-' + name)
+        project, target, source, _, _ = case('package-' + name)
         (project / 'scripts/package.sh').write_text(package)
         app_info = source / 'Contents/Info.plist'
         app = plistlib.loads(app_info.read_bytes())
@@ -143,7 +143,8 @@ elif name=='pluginkit':
         rm = stop / 'rm'
         rm.write_text('#!/bin/sh\nexit 42\n')
         rm.chmod(0o700)
-        env = dict(os.environ, PATH=os.pathsep.join([str(stop), str(stub), os.environ['PATH']]), GAO_PACKAGE_APP=str(source))
+        env = dict(os.environ, PATH=os.pathsep.join([str(stop), str(stub), os.environ['PATH']]),
+                   GAO_PACKAGE_APP=str(source), FIXTURE_TARGET=str(target))
         result = subprocess.run(['zsh', str(project / 'scripts/package.sh')], env=env, text=True, capture_output=True)
         if name == 'matched':
             check(result.returncode == 42, 'matching package did not reach the first staging action: ' + result.stderr)
