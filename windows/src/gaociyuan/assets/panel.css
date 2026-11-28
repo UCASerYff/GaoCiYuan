@@ -95,7 +95,7 @@ button:disabled { cursor: wait; opacity: .67; }
 .ring { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
 .face img, .provider-mark img { width: 23px; height: 23px; object-fit: contain; border-radius: 5px; z-index: 1; }
 .provider-icon--claude { background: #ae5939; padding: 2px; border-radius: 6px; }
-:root[data-theme="dark"] :is(.provider-icon--openai, .provider-icon--grok) { filter: invert(1); }
+:root[data-theme="dark"] :is(.provider-icon--openai, .provider-icon--grok, .provider-icon--copilot) { filter: invert(1); }
 .face b, .provider-mark b { z-index: 1; font-size: 16px; }
 .track { fill: none; stroke: var(--track); stroke-width: 2.7; }
 .progress { fill: none; stroke: var(--arc, var(--teal)); stroke-linecap: round; stroke-width: 2.7; }

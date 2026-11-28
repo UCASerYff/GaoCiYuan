@@ -314,8 +314,9 @@ function providerFor(id) {
 
 function providerMark(item, size = 34) {
   const id = item?.id || "";
-  const html = `<span class="provider-mark" style="--mark-size:${size}px" aria-hidden="true">${text(item?.mark || id.slice(0, 1).toUpperCase())}`;
-  return html + (/^[a-z0-9]+$/.test(id) ? `<img src="/brand/${id}.png" alt="">` : "") + "</span>";
+  const image = /^[a-z0-9]+$/.test(id) ? `<img class="provider-icon--${id}" src="/brand/${id}.png" alt="">` : "";
+  const fallback = text(item?.mark || id.slice(0, 1).toUpperCase());
+  return `<span class="provider-mark" style="--mark-size:${size}px" aria-hidden="true">${image}<span class="provider-initial">${fallback}</span></span>`;
 }
 
 document.addEventListener("error", (event) => {

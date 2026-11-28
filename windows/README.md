@@ -1,6 +1,8 @@
 # 搞词元 Windows 4.15
 
-Windows 10（2004 及更新版本）和 Windows 11 的 x64 当前用户安装包。营销版本为 **4.15**，Windows 构建号为 **1**。发行文件为 `GaoCiYuan-Windows-4.15-build1-x64-Setup.exe` 和同名 `.sha256`，核对 SHA-256 后运行安装程序。已有 Windows 版时，从通知区域退出应用，再沿用原安装目录升级。安装程序创建开始菜单入口，注册 `gaociyuan://analytics`，并在缺少 WebView2 时调用 Microsoft 签名的引导程序。卸载移除程序、快捷方式和协议注册，保留用户资料和凭据。此 Windows 发布包目前没有 Authenticode 签名。
+Windows 10（2004 及更新版本）和 Windows 11 的 x64 当前用户安装包。营销版本为 **4.15**，Windows 构建号为 **3**。发行文件为 `GaoCiYuan-Windows-4.15-build3-x64-Setup.exe` 和同名 `.sha256`，核对 SHA-256 后运行安装程序。已有 Windows 版时，从通知区域退出应用，再沿用原安装目录升级。安装程序创建开始菜单入口，注册 `gaociyuan://analytics`，并在缺少 WebView2 时调用 Microsoft 签名的引导程序。卸载移除程序、快捷方式和协议注册，保留用户资料和凭据。此 Windows 发布包目前没有 Authenticode 签名。
+
+构建 2 从原始书法图生成透明圆角、多尺寸 Windows 图标。开始菜单和固定任务栏继续使用同一个程序身份与主程序图标。运行中窗口和通知区域依据系统 DPI 选择图标，保留原托盘操作。应用内 Agent 软件标记在浅深色均保留原形，只有图片缺失时显示文字占位。
 
 ## 使用
 
@@ -58,6 +60,8 @@ Windows 自动发现仅识别独立版 Antigravity。旧的 Gemini 内置账户�
 
 设置中可配置团队发布的 Windows appcast（HTTPS 或本机 `file:` 地址）及 Base64 编码的 32 字节 Ed25519 公钥。建议在 enclosure 标注 `sparkle:os="windows"` 和 `sparkle:arch="x64"`，并提供版本、文件长度和 `sparkle:edSignature`。点击下载后，软件先验证签名和长度，再把包保存至资料目录下的 `updates`。安装由用户启动。Windows 发布尚未配置公共 appcast 和发布公钥，首次检查会显示未配置。
 
+同一发行版本有多个 Windows 构建时，请在明确标注为 Windows 的条目同时声明营销版本及 PE 文件版本。例如 `sparkle:shortVersionString="4.15"` 和 `sparkle:version="4.15.3"`（或 `4.15.3.0`）代表 4.15 的第 3 个 Windows 构建。只有文件版本以完全相同的营销版本数字段开头时，才比较构建号。旧条目只声明营销版本也可继续使用。
+
 ## 构建与验证
 
 使用独立的 Windows x64 CPython 3.12 环境和 Inno Setup 7 x64。build.ps1 会检查版本和 Microsoft 引导程序的 Authenticode 签名，执行回归，再生成安装包和 SHA-256。已有已验证的引导程序时可以用 `-WebViewBootstrapper` 指定文件。 [Inno Setup](https://jrsoftware.org/inno-setup/downloads) [WebView2 Runtime 分发](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution)
@@ -70,8 +74,8 @@ py -3.12 -m venv .build-venv
 ./smoke-installed.ps1
 ```
 
-安装冒烟使用单独资料目录与合成凭据。已有正式 Windows 安装时，冒烟脚本会停止。在干净的 Windows 测试环境可通过 `-PreviousInstallerPath` 提供 4.13+5、4.14+6 或 4.14+7 安装包路径，按顺序安装两个构建并验证资料。直接运行 `GaoCiYuan-cli.exe` 会显示命令帮助，标准输出和错误输出使用 UTF-8。可用 `python launch.py --serve --no-browser --data-dir <隔离目录> --no-refresh` 运行只监听本机的测试入口。已构建 CLI 与 Edge 可通过 `node tests/visual-smoke.mjs <CLI 路径> 4.15+1 <截图目录>` 验证代表性页面与高 DPI 布局。
+安装冒烟使用单独资料目录与合成凭据，核对快捷方式身份、图标索引和安装后主程序的多尺寸图标组。已有正式 Windows 安装时，冒烟脚本会停止。在干净的 Windows 测试环境可通过 `-PreviousInstallerPath` 提供 4.13+5、4.14+6、4.14+7、4.15+1 或 4.15+2 安装包路径，按顺序安装两个构建并验证资料。直接运行 `GaoCiYuan-cli.exe` 会显示命令帮助，标准输出和错误输出使用 UTF-8。可用 `python launch.py --serve --no-browser --data-dir <隔离目录> --no-refresh` 运行只监听本机的测试入口。已构建 CLI 与 Edge 可通过 `node tests/visual-smoke.mjs <CLI 路径> 4.15+3 <截图目录>` 验证代表性页面与高 DPI 布局。
 
-可用 PowerShell 7 运行 `./tests/smoke-tray.ps1 -Executable <已安装程序路径> -ExpectedFileVersion 4.15.1.0`，在独立 Windows 桌面与合成资料中验证托盘和退出行为。加 `-ProbeExplorer` 可在当前桌面用隐藏测试窗口核验 Windows Shell 的图标注册和删除。
+可用 PowerShell 7 运行 `./tests/smoke-tray.ps1 -Executable <已安装程序路径> -ExpectedFileVersion 4.15.3.0`，在独立 Windows 桌面与合成资料中验证托盘和退出行为。加 `-ProbeExplorer` 可在当前桌面用隐藏测试窗口核验 Windows Shell 的图标注册和删除。
 
 v4.13 Windows 的附带差异包括原生窗口边框、字体与部分图标、部分平台提示的英文译文，以及悬浮窗视觉效果。Mac 专属的 WidgetKit、Dock/菜单栏集成、CLI 活跃指示点和网络诊断导出未迁移。安装、卸载、更新签名和核心交互在隔离资料下验收；未使用实际 Agent 订阅账户或 macOS 真机。

@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$InstallerPath = (Join-Path $PSScriptRoot 'dist\GaoCiYuan-Windows-4.15-build1-x64-Setup.exe'),
+    [string]$InstallerPath = (Join-Path $PSScriptRoot 'dist\GaoCiYuan-Windows-4.15-build3-x64-Setup.exe'),
     [string]$PreviousInstallerPath,
     [switch]$HeadlessServerOnly,
     [switch]$KeepArtifacts
@@ -9,12 +9,14 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$expectedVersion = '4.15+1'
-$expectedFileVersion = '4.15.1.0'
+$expectedVersion = '4.15+3'
+$expectedFileVersion = '4.15.3.0'
 $previousVersions = @{
     '4.13.5.0' = '4.13+5'
     '4.14.6.0' = '4.14+6'
     '4.14.7.0' = '4.14+7'
+    '4.15.1.0' = '4.15+1'
+    '4.15.2.0' = '4.15+2'
 }
 $productName = ConvertFrom-Json '"\u641e\u8bcd\u5143"'
 $fileConnection = ConvertFrom-Json '"\u81ea\u52a8\u8bfb\u53d6\u5feb\u7167\u6587\u4ef6"'
@@ -132,6 +134,22 @@ function Assert-InstalledShortcut([string]$ShortcutFile, [string]$ExpectedTarget
             "The Start menu shortcut targets a different file. $diagnostic Resolved to '$actualPath' and '$expectedPath'."
         )
     }
+    Assert-Test ($link.AppUserModelId -ceq 'com.gaoseries.GaoCiYuan') "The Start menu AppUserModelID differs from the running window. $diagnostic"
+    Assert-Test ($link.IconIndex -eq 0) "The Start menu shortcut does not select the application's first icon. $diagnostic"
+    if ($link.IconPath) {
+        $iconPath = [Environment]::ExpandEnvironmentVariables($link.IconPath)
+        Assert-Test ([IO.Path]::IsPathFullyQualified($iconPath)) "The shortcut has a non-absolute icon resource. $diagnostic"
+        $iconTarget = [GaoCiYuan.Smoke.InstalledShellLink]::ResolveFile($iconPath)
+        Assert-Test ([string]::Equals($iconTarget, $expectedPath, [StringComparison]::Ordinal)) "The shortcut uses a different icon resource. $diagnostic"
+    }
+    # A Shell link with no explicit icon path uses its validated target executable.
+    $sizes = [GaoCiYuan.Smoke.InstalledShellLink]::ReadExecutableIconSizes($ExpectedTarget)
+    $required = @(16, 20, 24, 28, 30, 32, 36, 40, 42, 48, 56, 60, 64, 72, 84, 96, 128, 256)
+    $missing = @($required | Where-Object { $_ -notin $sizes })
+    Assert-Test ($missing.Count -eq 0) "The installed icon group is missing sizes: $($missing -join ', ')."
+    $runtimeIcon = Join-Path (Split-Path -Parent $ExpectedTarget) '_internal\gaociyuan_brand\GaoCiYuan.ico'
+    Assert-Test (Test-Path -LiteralPath $runtimeIcon -PathType Leaf) "The native runtime icon file is missing at '$runtimeIcon'."
+    Write-Verbose "Installed shortcut and executable icon sizes verified: $($sizes -join ', ')."
 }
 
 function Assert-X64Pe([string]$Path) {

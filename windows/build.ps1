@@ -40,7 +40,7 @@ $versionLines = & $Python -c 'import sys; sys.path.insert(0, "src"); from gaociy
 Check-Exit 'Version check'
 $version, $build = $versionLines
 $resources = Join-Path (Split-Path $PSScriptRoot) 'Resources'
-$icon = Join-Path $buildDir 'gaociyuan.ico'
+$icon = Join-Path $buildDir 'GaoCiYuan.ico'
 $versionInfo = Join-Path $buildDir 'version.info'
 & $Python -X utf8 'package_assets.py' $resources $icon $versionInfo
 Check-Exit 'Windows resources'
@@ -51,6 +51,7 @@ $pyInstallerArgs = @(
     '--distpath', $stage, '--workpath', (Join-Path $buildDir 'obj'), '--specpath', $buildDir,
     '--icon', $icon, '--version-file', $versionInfo,
     '--add-data', "$(Join-Path $PSScriptRoot 'src\gaociyuan\assets');gaociyuan_assets",
+    '--add-data', "$icon;gaociyuan_brand",
     '--add-data', "$(Join-Path $resources 'GaoCiYuanIcon.png');gaociyuan_brand",
     '--add-data', "$(Join-Path $resources 'Translations.tsv');gaociyuan_brand",
     '--add-data', "$(Join-Path $resources 'ProviderIcons');gaociyuan_brand\ProviderIcons",

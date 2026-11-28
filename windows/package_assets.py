@@ -3,17 +3,38 @@
 import sys
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'src'))
 
 from gaociyuan.version import APP_NAME, MARKETING_VERSION, WINDOWS_BUILD
 
 
+ICON_SIZES = (16, 20, 24, 28, 30, 32, 36, 40, 42, 48, 56, 60, 64, 72, 84, 96, 128, 256)
+CORNER_RADIUS_RATIO = 0.20
+
+
+def write_icon(source: Path, target: Path) -> None:
+    with Image.open(source) as png:
+        master = png.convert('RGBA')
+    width, height = master.size
+    if width != height or width < ICON_SIZES[-1]:
+        raise ValueError('The Windows icon source must be square and at least 256 pixels wide.')
+
+    mask = Image.new('L', master.size)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, width - 1, height - 1), round(width * CORNER_RADIUS_RATIO), fill=255)
+    master.putalpha(ImageChops.multiply(master.getchannel('A'), mask))
+
+    # Match native shell/tray sizes at 100%, 125%, 150%, 175%, and 200% without rescaling a smaller frame.
+    sizes = [(edge, edge) for edge in ICON_SIZES]
+    premultiplied = master.convert('RGBa')
+    frames = [premultiplied.resize(size, Image.Resampling.LANCZOS).convert('RGBA') for size in sizes]
+    frames[-1].save(target, sizes=sizes, append_images=frames[:-1])
+
+
 def main() -> None:
     resources, ico, version_info = map(Path, sys.argv[1:])
-    with Image.open(resources / 'GaoCiYuanIcon.png') as source:
-        source.convert('RGBA').save(ico, sizes=[(size, size) for size in (16, 24, 32, 48, 64, 128, 256)])
+    write_icon(resources / 'GaoCiYuanIcon.png', ico)
     tuple_version = (*map(int, MARKETING_VERSION.split('.')), int(WINDOWS_BUILD), 0)
     file_version = f'{MARKETING_VERSION}.{WINDOWS_BUILD}.0'
     version_info.write_text(f'''# UTF-8

@@ -1,3 +1,4 @@
+import ctypes
 import json
 import sys
 import threading
@@ -143,26 +144,138 @@ def test_registered_tray_hides_and_reopens_without_exiting():
 @pytest.mark.skipif(sys.platform != 'win32', reason='Windows notification area')
 def test_failed_tray_registration_is_retried_after_taskbar_recreation():
     from gaociyuan.desktop import DesktopTray, tray_win32
+    from PIL import Image
 
-    tray = object.__new__(DesktopTray)
-    tray._running = False
+    metrics, frames, releases = [(16, 16)], [], []
+
+    def create(size, warning):
+        frames.append((size, warning))
+        return len(frames) * 100
+
+    def release():
+        if tray._icon_handle:
+            releases.append(tray._icon_handle)
+            tray._icon_handle = None
+
+    icons = SimpleNamespace(tray_size=lambda: metrics[-1], create=create, pixels=lambda size: Image.new('RGBA', size))
+    tray = DesktopTray(SimpleNamespace(), icons, None)
     tray._visible = True
-    tray._title = 'GaoCiYuan'
-    tray._icon_handle = None
-    tray.registered = False
-    tray._assert_icon_handle = lambda: None
+    tray._release_icon = release
     calls = []
-    answers = iter([False, False, True, True])
+    answers = iter([False, False, True, True, True])
 
     def message(code, flags, **fields):
-        calls.append(code)
+        calls.append((code, fields.get('hIcon')))
         return next(answers)
 
     tray._message = message
     tray._show()
     assert not tray.registered
+    metrics.append((24, 24))
     tray._on_taskbarcreated(0, 0)
     assert tray.registered
+    tray.update_status(True)
+    tray.update_status(True)
     tray._hide()
     assert not tray.registered
-    assert calls == [tray_win32.NIM_ADD, tray_win32.NIM_MODIFY, tray_win32.NIM_ADD, tray_win32.NIM_DELETE]
+    tray._stop_requested.set()
+    tray._on_taskbarcreated(0, 0)
+    assert not tray.registered
+    tray._visible = False
+    tray._release_icon()
+    assert frames == [((16, 16), False), ((24, 24), False), ((24, 24), True)]
+    assert releases == [100, 200, 300]
+    assert calls == [
+        (tray_win32.NIM_ADD, 100), (tray_win32.NIM_MODIFY, 100), (tray_win32.NIM_ADD, 200),
+        (tray_win32.NIM_MODIFY, 300), (tray_win32.NIM_DELETE, None),
+    ]
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Windows native HWND icon messages')
+def test_main_icon_uses_both_dpi_sizes_and_retries_a_timed_out_message():
+    from gaociyuan.desktop import Desktop, ICON_BIG, ICON_SMALL, WM_SETICON, SMTO_ABORTIFHUNG, SMTO_ERRORONEXIT
+
+    desk = object.__new__(Desktop)
+    desk.hidden = False
+    desk.main = object()
+    desk._main_icon_state = None
+    desk._main_icons = {}
+    sizes, messages = [], []
+    hwnd, dpi, timeout_once = 100, 96, False
+
+    def create(size):
+        sizes.append(size)
+        return size[0] + 1000
+
+    def send(window, message, icon_type, icon, flags, timeout, result):
+        nonlocal timeout_once
+        messages.append((window.value, message, icon_type, icon))
+        assert timeout == 100 and flags == SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT
+        if timeout_once:
+            timeout_once = False
+            return 0
+        return 1
+
+    def size(dpi, *, small):
+        edge = (16 if small else 32) * dpi // 96
+        return edge, edge
+
+    desk.handle = lambda _: hwnd
+    desk._icon_assets = SimpleNamespace(create=create, size=size)
+    desk.user32 = SimpleNamespace(GetDpiForWindow=lambda _: dpi, SendMessageTimeoutW=send)
+    desk._update_main_icons()
+    desk._update_main_icons()
+    dpi, timeout_once = 144, True
+    desk._update_main_icons()
+    assert desk._main_icon_state == (100, 96)
+    desk._update_main_icons()
+    hwnd = 200
+    desk._update_main_icons()
+    assert sizes == [(16, 16), (32, 32), (24, 24), (48, 48)]
+    assert messages == [
+        (100, WM_SETICON, ICON_SMALL, 1016), (100, WM_SETICON, ICON_BIG, 1032),
+        (100, WM_SETICON, ICON_SMALL, 1024),
+        (100, WM_SETICON, ICON_SMALL, 1024), (100, WM_SETICON, ICON_BIG, 1048),
+        (200, WM_SETICON, ICON_SMALL, 1024), (200, WM_SETICON, ICON_BIG, 1048),
+    ]
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Windows native PNG-to-HICON')
+def test_native_icon_uses_real_ico_frame_and_warning_preserves_cached_pixels(tmp_path):
+    from ctypes import wintypes
+    from io import BytesIO
+    from PIL import Image
+    from gaociyuan.desktop import WindowsIconAssets
+
+    main = Image.new('RGBA', (32, 32), '#ff9032')
+    exact = Image.new('RGBA', (24, 24), '#3d805e')
+    exact.putpixel((0, 0), (0, 0, 0, 0))
+    main.save(tmp_path / 'GaoCiYuan.ico', sizes=[exact.size, main.size], append_images=[exact])
+    icons = WindowsIconAssets(ctypes.WinDLL('user32'), tmp_path)
+    assert icons.pixels(exact.size).tobytes() == exact.tobytes()
+    handle = icons.create(exact.size)
+    assert handle
+    assert icons.user32.DestroyIcon(handle)
+
+    def create(data, length, is_icon, version, width, height, flags):
+        assert is_icon and version == 0x00030000 and (width, height) == exact.size and flags == 0
+        with Image.open(BytesIO(ctypes.string_at(data, length))) as preview:
+            assert preview.size == exact.size
+            assert preview.getpixel((0, 0))[3] == 0
+            assert preview.getpixel((width - 4, 4)) != exact.getpixel((width - 4, 4))
+        return 123
+
+    dpi = [144]
+    taskbar = [456]
+    icons.user32 = SimpleNamespace(
+        CreateIconFromResourceEx=create, FindWindowW=lambda *_: taskbar[0],
+        GetDpiForWindow=lambda _: dpi[0], GetDpiForSystem=lambda: 120,
+        GetSystemMetricsForDpi=lambda _, value: int(value) // 6,
+    )
+    assert icons.tray_size() == exact.size
+    assert icons.create(exact.size, warning=True) == 123
+    assert icons.pixels(exact.size).tobytes() == exact.tobytes()
+    taskbar[0] = None
+    assert icons.tray_size() == (20, 20)
+    taskbar[0], dpi[0] = 456, 0
+    assert icons.tray_size() == (20, 20)
