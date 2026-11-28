@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
+from gaociyuan.catalog import FILE, MIMO
 from gaociyuan.credentials import MemoryCredentialStore
+from gaociyuan.errors import AppError
 from gaociyuan.rings import adaptive_interval, compact_balance, compact_credits
 from gaociyuan.store import TokenStore
 
@@ -237,3 +243,102 @@ def test_adaptive_interval_and_usage_rows(tmp_path: Path):
     assert rows[0]["outputTokens"] == 300
     assert rows[0]["cost"] == 1.5
     assert rows[0]["inputTokens"] != 0 or rows[0]["cost"] == 1.5
+
+
+@pytest.mark.parametrize("invalid_field", [
+    {"quotas": 42}, {"quotas": ""},
+    {"quotas": [{"id": "five", "title": "5 小时", "usedPercent": 10**400}]},
+    {"inputTokens": {"not": "a count"}}, {"deadlines": 42},
+])
+def test_invalid_snapshot_keeps_last_reading_and_does_not_starve_other_accounts(tmp_path, invalid_field):
+    now = [NOW]
+    library = TokenStore(tmp_path, credentials=MemoryCredentialStore(), now=lambda: now[0])
+    first, second = tmp_path / "first.json", tmp_path / "second.json"
+    account_x = library.save_account({"provider": "openai", "connection": FILE, "filePath": str(first)})
+    account_y = library.save_account({"provider": "openai", "connection": FILE, "filePath": str(second)})
+    first.write_text(json.dumps(snapshot(23)), encoding="utf-8")
+    library.refresh(account_x["id"], user_initiated=True)
+    previous = account_x["snapshot"]
+    now[0] += timedelta(minutes=45)
+    first.write_text(json.dumps({**snapshot(85), **invalid_field}), encoding="utf-8")
+    second.write_text(json.dumps(snapshot(55)), encoding="utf-8")
+
+    assert library.refresh_due() == [account_x["id"], account_y["id"]]
+    assert account_x["snapshot"] == previous and account_x["history"] == [previous]
+    assert account_x["error"] and library.failures[account_x["id"]] == 1
+    assert account_y["snapshot"]["quotas"][0]["usedPercent"] == 55 and account_y["error"] is None
+
+
+def test_account_save_reports_failed_disk_replace_without_publishing_a_draft(tmp_path, monkeypatch):
+    library = store(tmp_path)
+    account = library.save_account({"provider": "gemini", "name": "Saved fixture"})
+    prior_bytes = library.library_path.read_bytes()
+    real_replace = os.replace
+
+    def deny_library_replace(source, destination):
+        if destination == library.library_path:
+            raise PermissionError("fixture destination denies replacement")
+        return real_replace(source, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", deny_library_replace)
+        with pytest.raises(PermissionError):
+            library.save_account({"provider": "gemini", "id": account["id"], "name": "Unsaved edit"})
+        assert library._find(account["id"]) is account
+        assert library.library_path.read_bytes() == prior_bytes
+        assert not list(tmp_path.glob(".library.json-*.tmp"))
+
+    renamed = library.save_account({"provider": "gemini", "id": account["id"], "name": "Saved retry"})
+    assert renamed["name"] == "Saved retry" and store(tmp_path)._find(account["id"])["name"] == "Saved retry"
+
+
+def test_account_save_holds_credentials_after_partial_replace_failure(tmp_path, monkeypatch):
+    library = store(tmp_path)
+    original = {"provider": "mimo", "connection": MIMO, "name": "Original", "region": "cn"}
+    account = library.save_account({**original, "secret": "synthetic-old"})
+    fixture_calls = []
+
+    def fake_connector(current, secret, _now, *, data_dir):
+        fixture_calls.append((current["region"], secret))
+        return snapshot(30)
+
+    library.connector_reader = fake_connector
+    library.refresh(account["id"], user_initiated=True)
+    before = library.library_path.read_bytes()
+    draft = {**original, "id": account["id"], "name": "Draft", "region": "ams"}
+    assert fixture_calls == [("cn", "synthetic-old")]
+
+    def deny_stage(*_args, **_kwargs):
+        raise PermissionError("fixture cannot create the stage")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(tempfile, "NamedTemporaryFile", deny_stage)
+        with pytest.raises(PermissionError):
+            library.save_account({**draft, "secret": "synthetic-new"})
+        assert library._find(account["id"]) is account
+        assert library.library_path.read_bytes() == before
+        assert library.credentials.get(account["id"]) == "synthetic-old"
+
+    def deny_rename(_source, destination):
+        assert destination == library.library_path
+        raise PermissionError("fixture destination denies replacement")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", deny_rename)
+        with pytest.raises(AppError, match="凭据可能已更新"):
+            library.save_account({**draft, "secret": "synthetic-new"})
+        assert library.library_path.read_bytes() == before
+        current = library._find(account["id"])
+        assert current["region"] == "cn" and current["snapshot"] == account["snapshot"]
+        assert "quotaForecastHistory" not in current
+        library.refresh(account["id"], user_initiated=True)
+        assert fixture_calls == [("cn", "synthetic-old")]
+        with pytest.raises(AppError, match="重新填写"):
+            library.test_account({**original, "id": account["id"]})
+        with pytest.raises(AppError, match="重新填写"):
+            library.save_account(draft)
+        assert not list(tmp_path.glob(".library.json-*.tmp"))
+
+    revised = library.save_account({**draft, "secret": "synthetic-new"})
+    library.refresh(revised["id"], user_initiated=True)
+    assert fixture_calls == [("cn", "synthetic-old"), ("ams", "synthetic-new")]

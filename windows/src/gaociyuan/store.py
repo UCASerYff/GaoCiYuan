@@ -6,8 +6,10 @@ import hashlib
 import json
 import math
 import os
+import tempfile
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -33,6 +35,7 @@ from gaociyuan.catalog import (
     agent_software,
     is_legacy_gemini_connection,
     known_provider,
+    needs_key,
     normalize_connection,
     normalize_kind,
     windows_read_mode,
@@ -151,6 +154,7 @@ class TokenStore:
         self.connector_reader = None
         self.lock = threading.RLock()
         self._refreshing: set[str] = set()
+        self._incomplete_credential_saves: set[str] = set()
         self.unknown_connections: list[str] = []
         self.grok_reads = 0
         self._changes: dict[str, datetime] = {}
@@ -200,6 +204,8 @@ class TokenStore:
             self.unknown_connections.append(str(payload.get("connection")))
         if connection not in available_connections(provider, "Agent"):
             raise AppError("这个 Agent 没有该连接方式。")
+        if account_id in self._incomplete_credential_saves and needs_key(connection) and not new_credential:
+            raise AppError("上次保存未完成，请重新填写该连接的凭据后保存。", "credential")
         current_route = (existing["provider"], existing["connection"]) if existing else None
         new_route = (provider, connection)
         routes = [route for route in (current_route, new_route) if route is not None]
@@ -274,19 +280,26 @@ class TokenStore:
             for key, value in existing.items():
                 if key not in ACCOUNT_KEYS and key not in SECRET_FIELDS:
                     account[key] = value
-        try:
-            if new_credential:
-                self.credentials.put(account_id, secret.strip())
-            elif existing and existing.get("connection") != connection:
-                self.credentials.delete(account_id)
-        except (AppError, OSError):
-            # DPAPI and Credential Manager writes can succeed independently.
-            if existing:
-                self._discard_forecast_evidence(existing)
-            raise
-        self._replace(account)
-        self._validate()
-        self._write_library()
+        accounts = self._accounts_with(account)
+        self._validate({**self.library, "accounts": accounts})
+        credential_changed = new_credential or existing is not None and existing["connection"] != connection
+        with _staged_json(self.library_path, self._library_payload(accounts)) as staged:
+            try:
+                if new_credential:
+                    self.credentials.put(account_id, secret.strip())
+                elif credential_changed:
+                    self.credentials.delete(account_id)
+                os.replace(staged, self.library_path)
+            except (AppError, OSError) as exc:
+                if not credential_changed or existing is None:
+                    raise
+                # The two credential stores may succeed independently. Never use a new key with the old route.
+                self._incomplete_credential_saves.add(account_id)
+                self._discard_forecast_evidence(existing, persist=False)
+                raise AppError("账户未能保存，凭据可能已更新。请在退出应用前重试保存。", "credential") from exc
+        self._incomplete_credential_saves.discard(account_id)
+        self.library["accounts"] = accounts
+        self.persisted = True
         return account
 
     def add_discovered(self, suggested: list[dict]) -> list[str]:
@@ -314,6 +327,7 @@ class TokenStore:
         if len(self.library["accounts"]) == before:
             raise AppError("没有这个账户。", "missing")
         self.credentials.delete(account_id)
+        self._incomplete_credential_saves.discard(account_id)
         self.failures.pop(account_id, None)
         self.alert_memory.pop(account_id, None)
         self._write_library()
@@ -345,12 +359,12 @@ class TokenStore:
             finally:
                 self._discard_forecast_evidence(account)
 
-    def _discard_forecast_evidence(self, account: dict) -> None:
+    def _discard_forecast_evidence(self, account: dict, *, persist: bool = True) -> None:
         updated = dict(account)
         updated.pop(FORECAST_HISTORY, None)
         # An in-flight connector holds the original object and must not publish after a key change.
         self._replace(updated)
-        if FORECAST_HISTORY in account:
+        if persist and FORECAST_HISTORY in account:
             self._write_library()
 
     def credential_present(self, account_id: str) -> bool:
@@ -414,6 +428,8 @@ class TokenStore:
     def refresh(self, account_id: str, user_initiated: bool = False) -> None:
         with self.lock:
             if self.load_failed or not user_initiated and not self.library.get("autoRefresh", True):
+                return
+            if account_id in self._incomplete_credential_saves:
                 return
             account = self._find(account_id)
             if account is None or not account.get("enabled", True) or account.get("kind") != "Agent":
@@ -485,6 +501,8 @@ class TokenStore:
             secret = payload.get("secret")
             if not secret and payload.get("id"):
                 with self.lock:
+                    if payload["id"] in self._incomplete_credential_saves:
+                        raise AppError("请重新填写该连接的凭据后测试。", "credential")
                     existing = self._find(payload["id"])
                     secret = self.credentials.get(payload["id"]) if existing and _same_source(existing, draft) else None
             snapshot = self.connector_reader(draft, secret, now, data_dir=self.directory)
@@ -712,7 +730,7 @@ class TokenStore:
             source_key = _quota_source_key(account, snapshot["source"])
             snapshot["source"] = "快照文件"
             validate_snapshot(snapshot, now)
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, TypeError, OverflowError, RecursionError) as exc:
             raise AppError("快照文件无法读取，已保留上次数据。") from exc
         return snapshot, source_key
 
@@ -926,8 +944,9 @@ class TokenStore:
                 account[key] = value
         return account, dirty
 
-    def _validate(self) -> None:
-        library = self.library
+    def _validate(self, library: dict | None = None) -> None:
+        if library is None:
+            library = self.library
         if library.get("schema") != 1 or not isinstance(library.get("refreshMinutes"), int) or not 1 <= library["refreshMinutes"] <= 60:
             raise AppError("不兼容或无效的存档。")
         threshold = library.get("warningThreshold")
@@ -958,6 +977,10 @@ class TokenStore:
             accounts = self.library["accounts"]
         for account in accounts:
             account["history"] = (account.get("history") or [])[-300:]
+        _atomic_json(self.library_path, self._library_payload(accounts))
+        self.persisted = True
+
+    def _library_payload(self, accounts: list[dict]) -> dict:
         payload = {
             "schema": self.library["schema"],
             "accounts": accounts,
@@ -966,8 +989,7 @@ class TokenStore:
             "autoRefresh": self.library["autoRefresh"],
         }
         payload.update(self.extras)
-        _atomic_json(self.library_path, payload)
-        self.persisted = True
+        return payload
 
     def _write_settings(self) -> None:
         _atomic_json(self.settings_path, self.settings)
@@ -1023,11 +1045,17 @@ class TokenStore:
         return next((item for item in self.library["accounts"] if item["id"] == account_id), None)
 
     def _replace(self, account: dict) -> None:
-        for index, item in enumerate(self.library["accounts"]):
+        self.library["accounts"] = self._accounts_with(account)
+
+    def _accounts_with(self, account: dict) -> list[dict]:
+        accounts = list(self.library["accounts"])
+        for index, item in enumerate(accounts):
             if item["id"] == account["id"]:
-                self.library["accounts"][index] = account
-                return
-        self.library["accounts"].append(account)
+                accounts[index] = account
+                break
+        else:
+            accounts.append(account)
+        return accounts
 
 
 def _same_source(left: dict, right: dict) -> bool:
@@ -1050,21 +1078,21 @@ def _source_digest(value: object) -> str:
 
 
 def _atomic_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
-    temporary = path.with_name(path.name + ".tmp")
-    try:
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            os.write(fd, data)
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+    with _staged_json(path, payload) as temporary:
         os.replace(temporary, path)
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
+
+
+@contextmanager
+def _staged_json(path: Path, payload: dict):
+    data = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    output = tempfile.NamedTemporaryFile(prefix="." + path.name + "-", suffix=".tmp", dir=path.parent, delete=False)
+    temporary = Path(output.name)
+    try:
+        with output:
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        yield temporary
     finally:
-        if temporary.exists():
-            temporary.unlink()
+        temporary.unlink(missing_ok=True)

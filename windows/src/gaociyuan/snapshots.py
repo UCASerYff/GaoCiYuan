@@ -68,8 +68,11 @@ def normalize_snapshot(raw: object, now: datetime) -> dict:
     observed = parse_instant(raw.get("observedAt")) if isinstance(raw.get("observedAt"), str) else None
     if observed is None:
         raise AppError("快照缺少 observedAt。")
+    windows = raw.get("quotas")
+    if windows is not None and not isinstance(windows, list):
+        raise AppError("快照包含无效额度窗口。")
     quotas = []
-    for item in raw.get("quotas") or []:
+    for item in windows or []:
         if not isinstance(item, dict):
             raise AppError("快照包含无效额度窗口。")
         used = _number(item.get("usedPercent"))
