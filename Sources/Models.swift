@@ -206,7 +206,7 @@ enum Provider: String, Codable, CaseIterable, Identifiable {
         case .deepseek: return "DeepSeek Harness 是独立 Agent 入口；此处不再提供大模型 API 账户。"
         case .kimi: return "Kimi Work / Kimi Code 支持专用额度 Key 或本机桌面订阅页只读采集，未运行时保留上次真实状态。"
         case .grok: return "Grok Bot 只读读取头像栏目的套餐与已用百分比；支持手动立即读取、非前台自动同步和 5 分钟导航节流。"
-        case .gemini: return "Antigravity 按模型组共享 5 小时与每周额度。Gemini 内置版与独立版分别导入本机报告，作为历史参考。"
+        case .gemini: return "Antigravity 按模型组共享 5 小时与每周额度。Gemini 桌面端和独立版是不同连接。"
         case .qwen: return "Qoder 和 Alibaba Coding Plan 使用各自独立 Agent 入口；此处不再提供大模型 API 账户。"
         case .doubao: return "豆包桌面端经辅助功能只读采集当前时段、近 7 天额度和重置信息，前台使用中不打扰。"
         case .glm: return "Zcode 自动读取 Coding Plan 的真实额度窗口。"
