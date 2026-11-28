@@ -173,17 +173,24 @@ struct QuotaRow: View {
     /// 3.31：Antigravity 失败兜底模式——窗口已过期也显示最后一次成功读数的百分比，
     /// 不再换成「待刷新」；陈旧观感仍由 stale 灰与「历史数据」标签表达。
     var showExpiredValue = false
+    var historicalReport = false
     private var maskExpired: Bool { quota.expired() && !showExpiredValue }
+    private var remainingText: String {
+        let remaining = historicalReport ? quota.remaining.formatted(.number.precision(.fractionLength(0...4))) : String(Int(quota.remaining))
+        return L(maskExpired ? "待刷新" : "\(remaining)% 剩余")
+    }
     var body: some View {
         VStack(alignment:.leading,spacing:7) {
             HStack {
                 Text(L(quota.title)).font(.callout).lineLimit(1).help(L(quota.title))
                 Spacer()
-                Text(L(maskExpired ? "待刷新" : "\(Int(quota.remaining))% 剩余")).font(.callout.weight(.semibold)).monospacedDigit().foregroundStyle(quota.expired() || stale ? Color.secondary : quota.remaining <= threshold ? .orange : Theme.teal)
+                Text(remainingText).font(.callout.weight(.semibold)).monospacedDigit().foregroundStyle(quota.expired() || stale ? Color.secondary : quota.remaining <= threshold ? .orange : Theme.teal)
             }
             ProgressView(value:quota.remaining,total:100).tint(quota.remaining <= threshold ? .orange : Theme.teal).opacity(quota.expired() || stale ? 0.3 : 1)
             HStack {
-                if let reset = quota.resetsAt {
+                if let reset = quota.resetsAt, historicalReport {
+                    Text(L("报告中的重置时间") + " " + displayDate(reset))
+                } else if let reset = quota.resetsAt {
                     Text(L(maskExpired ? "重置时间已到，等待新数据" : "重置：\(displayDate(reset))"))
                 } else { Text(L("平台未提供重置时间")) }
                 Spacer()

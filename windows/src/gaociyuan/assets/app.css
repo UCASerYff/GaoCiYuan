@@ -440,9 +440,10 @@ select { padding-inline-end: 20px; }
 .antigravity-links { column-gap: 14px; font-size: 12px; }
 .antigravity-report-quotas { margin: 0; padding: 0; list-style: none; }
 .antigravity-report-quotas > li {
-  flex-wrap: wrap; gap: 3px 10px; padding-block: 6px;
+  display: grid; gap: 4px; padding-block: 6px;
   border-top: 1px solid var(--border); font-size: 12px;
 }
+.antigravity-quota-values { flex-wrap: wrap; gap: 3px 10px; }
 .antigravity-report-quotas > li strong { font-variant-numeric: tabular-nums; }
 .account-foot { padding-top: 11px; border-top: 1px solid var(--border); flex-wrap: wrap; }
 .marked { justify-content: flex-start; }

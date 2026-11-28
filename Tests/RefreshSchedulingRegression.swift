@@ -193,6 +193,17 @@ actor UsageLedger {
     }
 
     @MainActor static func checkAntigravityHistoricalImport(in directory: URL) async throws {
+        try check(Connection.creationOptions(.gemini, .agent) == [.geminiApp, .agentLocal]
+                  && Connection.creationOptions(.openai, .agent) == Connection.available(.openai, .agent),
+                  "Only new Gemini Agent accounts should omit the file connection")
+        var legacy = Library()
+        legacy.accounts = [Account(provider: .gemini, kind: .agent, name: "Legacy file fixture", connection: .file)]
+        let legacyData = try JSONCoding.encoder.encode(legacy)
+        let legacyRoundTrip = try JSONCoding.decoder.decode(Library.self, from: legacyData)
+        try MonitorStore.validate(legacyRoundTrip)
+        try check(legacyRoundTrip.accounts.first?.connection == .file,
+                  "Existing Gemini file connections must still decode and validate")
+
         var fetchCalls = 0
         let store = MonitorStore(directory: directory, fetch: { _, _ in
             fetchCalls += 1
@@ -213,7 +224,7 @@ actor UsageLedger {
         let before = store.library.accounts[0]
         let beforeForecast = QuotaForecast.evaluate(account: before, now: now)
         try check(beforeForecast.windows.first?.status == .risk, "Fixture must begin with a verified trend")
-        var report = UsageSnapshot.empty(source: UsageSnapshot.embeddedAntigravityManualSource)
+        var report = UsageSnapshot.empty(source: UsageSnapshot.embeddedAntigravityEntrySource)
         report.observedAt = now.addingTimeInterval(86_400)
         report.quotas = [.init(id: "report", title: "Historical window", usedPercent: 100, resetsAt: nil)]
         try store.importAntigravityReport(report, for: account.id)
@@ -236,13 +247,15 @@ actor UsageLedger {
         try check(duplicate == saved && store.library.accounts[0].historicalAntigravityReport == historical,
                   "Duplicate report rewrote the first import")
         var wrongMode = report
-        wrongMode.source = UsageSnapshot.standaloneAntigravityManualSource
-        var mismatch: String? = nil
-        do { try store.importAntigravityReport(wrongMode, for: account.id) } catch { mismatch = error.localizedDescription }
-        let afterWrongMode = try Data(contentsOf: store.dataURL)
-        try check(mismatch?.contains("报告来源与账户连接方式不符") == true && afterWrongMode == saved
-                  && store.library.accounts[0].historicalAntigravityReport == historical,
-                  "A standalone source was accepted or changed the saved embedded account")
+        for source in [UsageSnapshot.standaloneAntigravityManualSource, UsageSnapshot.standaloneAntigravityJSONSource] {
+            wrongMode.source = source
+            var mismatch: String?
+            do { try store.importAntigravityReport(wrongMode, for: account.id) } catch { mismatch = error.localizedDescription }
+            let afterWrongMode = try Data(contentsOf: store.dataURL)
+            try check(mismatch?.contains("报告类型与账户连接方式不符") == true && afterWrongMode == saved
+                      && store.library.accounts[0].historicalAntigravityReport == historical,
+                      "A standalone source was accepted or changed the saved embedded account")
+        }
         let reopened = MonitorStore(directory: directory, fetch: { _, _ in throw MonitorError.message("Unexpected fixture fetch") })
         let persisted = reopened.library.accounts[0]
         try check(persisted.snapshot == before.snapshot && persisted.history == before.history
@@ -262,21 +275,43 @@ actor UsageLedger {
         account.connection = .agentLocal
         try store.upsert(account)
         try check(store.library.accounts[0].historicalAntigravityReport == nil, "The two report routes shared a reference")
-        mismatch = nil
+        var mismatch: String?
         let beforeEmbeddedMismatch = try Data(contentsOf: store.dataURL)
         do { try store.importAntigravityReport(report, for: account.id) } catch { mismatch = error.localizedDescription }
         let afterEmbeddedMismatch = try Data(contentsOf: store.dataURL)
-        try check(mismatch?.contains("报告来源与账户连接方式不符") == true && beforeEmbeddedMismatch == afterEmbeddedMismatch
+        try check(mismatch?.contains("报告类型与账户连接方式不符") == true && beforeEmbeddedMismatch == afterEmbeddedMismatch
                   && store.library.accounts[0].historicalAntigravityReport == nil,
                   "An embedded source was accepted or changed the saved standalone account")
         report.source = UsageSnapshot.standaloneAntigravityManualSource
         report.quotas[0].usedPercent = 50
         try store.importAntigravityReport(report, for: account.id)
+        try check(store.library.accounts[0].historicalAntigravityReport?.quotas.first?.remaining == 50,
+                  "Existing standalone text report was unavailable")
+
+        report.source = UsageSnapshot.standaloneAntigravityJSONSource
+        report.quotas[0].usedPercent = 55
+        var rejectedLive = false
+        do { try store.updateSnapshot(report, for: account.id) } catch { rejectedLive = true }
+        try store.importAntigravityReport(report, for: account.id)
         let standalone = store.library.accounts[0]
-        try check(standalone.snapshot == nil && standalone.history == before.history
-                  && standalone.historicalAntigravityReport?.quotas.first?.remaining == 50
+        let latestReport = standalone.historicalAntigravityReport
+        try check(rejectedLive && standalone.snapshot == nil && standalone.history == before.history
+                  && standalone.quotaForecastHistory == nil && standalone.unassignedLegacyAntigravityReport == nil
+                  && latestReport?.source == UsageSnapshot.standaloneAntigravityJSONSource
+                  && latestReport?.isUnverifiedAntigravityReport == true && latestReport?.quotas.first?.remaining == 45
                   && standalone.stale() && store.health(of: standalone) == .historical,
-                  "Standalone report escaped historical display or ordinary history")
+                  "The standalone JSON report was not stored solely as the current historical reference for that route")
+        let standaloneReopened = MonitorStore(directory: directory, fetch: { _, _ in throw MonitorError.message("Unexpected fixture fetch") })
+        try check(standaloneReopened.library.accounts[0].historicalAntigravityReport?.source == latestReport?.source,
+                  "Standalone JSON report source was lost on reopening")
+        account.connection = .geminiApp
+        try store.upsert(account)
+        try check(store.library.accounts[0].historicalAntigravityReport == historical,
+                  "Standalone JSON import altered the separately saved embedded report")
+        account.connection = .agentLocal
+        try store.upsert(account)
+        try check(store.library.accounts[0].historicalAntigravityReport == latestReport,
+                  "Standalone JSON reference was lost when switching between routes")
 
         try FileManager.default.removeItem(at: store.dataURL)
         try FileManager.default.createDirectory(at: store.dataURL, withIntermediateDirectories: false)
@@ -284,7 +319,7 @@ actor UsageLedger {
         var rejected = false
         do { try store.importAntigravityReport(report, for: account.id) } catch { rejected = true }
         let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
-        try check(rejected && store.library.accounts[0].historicalAntigravityReport == standalone.historicalAntigravityReport
+        try check(rejected && store.library.accounts[0].historicalAntigravityReport == latestReport
                   && !files.contains(where: { $0.hasPrefix(".library-") }),
                   "Failed report replacement published an uncommitted reading or left its stage")
         store.stop()

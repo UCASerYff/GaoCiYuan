@@ -16,12 +16,10 @@ from gaociyuan.alerts import failure_alert, reading_alerts
 from gaociyuan.antigravity_report import (
     HISTORICAL_SOURCES,
     IMPORT_HELP,
-    MAX_FINGERPRINTS,
     REPORT_FIELD,
     decode_report,
     parse_report,
     public_report,
-    report_fingerprint,
 )
 from gaociyuan.catalog import (
     AGENT_LOCAL,
@@ -491,17 +489,14 @@ class TokenStore:
                 raise AppError("请选择已保存的 Antigravity 独立版报告账户。", "wrong_account")
             if payload.get("confirmed") is not True:
                 raise AppError("请确认所选账户和报告来源。", "confirmation_required")
-            quotas = parse_report(payload.get("report"))
-            fingerprint = report_fingerprint(quotas)
+            source, quotas = parse_report(payload.get("report"))
             previous = account.get(REPORT_FIELD)
-            fingerprints = previous["fingerprints"] if previous else []
-            if fingerprint in fingerprints:
+            if previous and (previous["source"], previous["quotas"]) == (source, quotas):
                 return {"report": public_report(previous), "duplicate": True}
 
             # An editable transcript has no trustworthy provider observation time or identity.
             # Its values are displayed separately from snapshots, alerts, history and forecasts.
-            report = {"importedAt": format_iso(self.now()), "quotas": quotas,
-                      "fingerprints": (fingerprints + [fingerprint])[-MAX_FINGERPRINTS:]}
+            report = {"source": source, "importedAt": format_iso(self.now()), "quotas": quotas}
             updated = {**account, REPORT_FIELD: report}
             accounts = [updated if item is account else item for item in self.library["accounts"]]
             self._write_library(accounts=accounts)

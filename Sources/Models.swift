@@ -353,6 +353,12 @@ enum Connection: String, Codable, CaseIterable {
 
     var needsKey: Bool { (integration != nil && self != .kiroQuota) || [.openai,.anthropic,.deepseek,.moonshot,.minimax,.glm,.kimiCoding,.xai,.aliyun,.volc,.copilot,.volcArk,.mimoCoding,.devinApi,.ollamaCloud,.commandCode].contains(self) }
 
+    static func creationOptions(_ provider: Provider, _ kind: AccountKind) -> [Connection] {
+        let options = available(provider, kind)
+        guard provider == .gemini, kind == .agent else { return options }
+        return options.filter { $0 != .file }
+    }
+
     static func available(_ p: Provider, _ k: AccountKind) -> [Connection] {
         if let extra = p.integration { return [extra.connection, .file] }
         if k == .agent {
@@ -481,9 +487,11 @@ struct UsageSnapshot: Codable, Equatable {
     // For manual Antigravity reports, observedAt is the import date. Actual observation time is unknown.
     var isUnverifiedAntigravityReport: Bool? = nil
     static let embeddedAntigravityManualSource = "Gemini 内置 Antigravity · 手动报告"
+    static let embeddedAntigravityEntrySource = "Gemini 内置 Antigravity · 手工记录"
     static let standaloneAntigravityManualSource = "Antigravity 独立版 · /usage 手动报告"
+    static let standaloneAntigravityJSONSource = "Antigravity 独立 CLI · /usage JSON（手动导入）"
     private static let historicalAntigravitySources: Set<String> = [
-        embeddedAntigravityManualSource, standaloneAntigravityManualSource,
+        embeddedAntigravityManualSource, embeddedAntigravityEntrySource, standaloneAntigravityManualSource, standaloneAntigravityJSONSource,
         "Gemini App 中的 Antigravity", "Gemini App 中的 Antigravity · /usage",
         "Antigravity /usage 手动报告", "Antigravity 本机服务", "Antigravity 独立版 /usage 手动报告",
     ]
@@ -687,18 +695,27 @@ struct Account: Codable, Identifiable {
         default: return nil
         }
     }
+    func acceptsAntigravityReport(source: String) -> Bool {
+        guard let manualSource = antigravityManualSource else { return false }
+        if source == manualSource { return true }
+        if connection == .geminiApp { return source == UsageSnapshot.embeddedAntigravityEntrySource }
+        return connection == .agentLocal && source == UsageSnapshot.standaloneAntigravityJSONSource
+    }
     var historicalAntigravityReport: UsageSnapshot? {
-        guard let source = antigravityManualSource else { return nil }
-        if let report = antigravityReports?[connection.rawValue], report.source == source { return report }
+        guard usesAntigravityReport else { return nil }
+        if let report = antigravityReports?[connection.rawValue], acceptsAntigravityReport(source: report.source) {
+            return report
+        }
         return snapshot.flatMap { $0.legacyAntigravityConnection == connection ? $0 : nil }
     }
     // Archived data has no verified observation or import date, even if a legacy timestamp exists.
     var unassignedLegacyAntigravityReport: UsageSnapshot? {
-        guard let source = antigravityManualSource else { return nil }
+        guard usesAntigravityReport else { return nil }
         if let snapshot, snapshot.isHistoricalAntigravityReading, snapshot.legacyAntigravityConnection != connection {
             return snapshot
         }
-        if let report = antigravityReports?[connection.rawValue], report.isHistoricalAntigravityReading, report.source != source {
+        if let report = antigravityReports?[connection.rawValue], report.isHistoricalAntigravityReading,
+           !acceptsAntigravityReport(source: report.source) {
             return report
         }
         return nil

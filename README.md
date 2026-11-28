@@ -60,8 +60,9 @@
 
 ## V4.14 / build 16
 
-- Gemini 内置 Antigravity 和独立版使用各自的报告入口。请在 Gemini 内置额度界面或官方独立 CLI 交互窗口的 `/usage` 面板核对登录账号，把报告保存为 UTF-8 文本，再在对应账户设置选择「导入 Antigravity 额度报告」。导入前会列出目标账户和来源，由你确认归属。应用只读取本次选中的文本，不启动 CLI 或读取登录凭据。 [Gemini 内置 Antigravity](https://support.google.com/gemini/answer/18755601) · [独立 CLI 额度说明](https://antigravity.google/docs/cli/commands/usage)
-- 识别 Gemini Models 和 Claude and GPT models 两个共享组中明确标注的 5 小时与每周剩余百分比，未知项保持空缺。导入时间只表示本机导入时间，报告始终作为历史参考，不影响现有实测快照、实时提醒或趋势预测。旧来源读数会保留并标记为历史，导入或保存失败时保留已保存资料。
+- Gemini 内置版在账户设置提供手工录入。请先在 Gemini 核对 Google 账号，按本机界面实际显示的额度名称、剩余百分比和时段填入。Google 的 Gemini Mac 帮助目前没有记载可供第三方读取的额度导出格式。 [Gemini 内置 Antigravity](https://support.google.com/gemini/answer/18755601)
+- 独立版可导入用户自己从官方 CLI 保存的 UTF-8 JSON 或 `/usage` 面板文本。CLI v1.1.11 及以上支持在用户自己的终端以 `agy -p "/usage" --output-format json` 导出，使用前请确认 `disableSlashCommands` 为关闭。无法确认版本或设置时，可从交互 `/usage` 面板复制文本。搞词元读取所选文件并要求确认本地目标账户，文件内容和 Google 账号归属由导入者核对。Google 说明消费账号不支持第三方应用代调用该命令。 [独立 CLI 额度说明](https://antigravity.google/docs/cli/commands/usage) · [CLI v1.1.11 发布记录](https://antigravity.google/docs/changelog?tab=cli#v1111) · [配置说明](https://antigravity.google/docs/cli-settings) · [Google 论坛答复](https://discuss.ai.google.dev/t/tos-clarification-read-only-agy-p-usage-credits-from-acp-clients-or-native-quota-surface/203283/2)
+- JSON 导入保留报告明确列出的独立额度 ID、5 小时或每周时段、剩余比例及报告中的重置时间。禁用和缺少比例的窗口留空。报告和手工记录始终作为历史参考，只记录本机导入时间，实时快照、提醒、预测与原资料沿用现有数据。 [去标识的实测 JSON 结构](https://github.com/steipete/CodexBar/issues/3586)
 - 本机检测分别显示 Gemini 内置版与独立 App 或 CLI。安装状态不会决定报告归属，已有连接和报告按原账户保留。旧版无法归属到所选连接的数据单列为未归属历史。
 - 隐藏悬浮窗时停止透明区域的指针轮询，恢复显示后重新开始。
 

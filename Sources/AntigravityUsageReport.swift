@@ -2,19 +2,59 @@ import Foundation
 
 enum AntigravityUsageReport {
     static let maxBytes = 65_536
-    static let manualHint = "请在账户设置导入 Antigravity 额度报告。"
+    static let manualHint = "请在账户设置手工记录或导入额度。"
     static let standaloneGuide = "https://antigravity.google/docs/cli/commands/usage"
     static let embeddedGuide = "https://support.google.com/gemini/answer/18755601"
 
-    enum Source {
-        case embedded, standalone
+    enum ManualWindow: String, CaseIterable {
+        case unspecified = "未注明"
+        case fiveHour = "5 小时"
+        case weekly = "每周"
 
-        var title: String {
+        var seconds: Double? {
             switch self {
-            case .embedded: return UsageSnapshot.embeddedAntigravityManualSource
-            case .standalone: return UsageSnapshot.standaloneAntigravityManualSource
+            case .unspecified: return nil
+            case .fiveHour: return 18_000
+            case .weekly: return 604_800
             }
         }
+    }
+
+    struct ManualQuota: Identifiable {
+        let id = UUID()
+        var title = ""
+        var remaining = ""
+        var window: ManualWindow = .unspecified
+    }
+
+    static let manualQuotaLimit = 4
+    private static let maxCLIBuckets = 64
+
+    // This is the CLI's print-mode command envelope, separate from TUI statusline JSON.
+    private struct CLIReport: Decodable {
+        struct Command: Decodable {
+            struct ReportData: Decodable { let groups: [Group] }
+            let name: String
+            let data: ReportData
+        }
+        struct Group: Decodable {
+            let name: String
+            let buckets: [Bucket]
+        }
+        struct Bucket: Decodable {
+            let id: String
+            let window: String?
+            let remaining_fraction: Double?
+            let reset_time: String?
+            let disabled: Bool?
+        }
+        let conversation_id: String
+        let status: String
+        let num_turns: Int
+        let usage: [String: Int]
+        let command: Command
+        let error: String?
+        let finished_reason: String?
     }
 
     private enum Pool: String, CaseIterable {
@@ -42,9 +82,91 @@ enum AntigravityUsageReport {
     private static let ansiColor = try! NSRegularExpression(pattern: "\u{001B}\\[[0-9;:]*m")
     private static let cellEdges = CharacterSet(charactersIn: "│┃|\u{FEFF}").union(.whitespaces)
     private static let border = CharacterSet(charactersIn: "╭╮╰╯┌┐└┘├┤┬┴┼┏┓┗┛━─═+ -")
+    private static let bucketID = try! NSRegularExpression(pattern: #"\A[A-Za-z0-9][A-Za-z0-9._-]{0,79}\z"#)
+    private static let tokenKeys: Set<String> = ["input_tokens", "output_tokens", "thinking_tokens", "cache_read_tokens", "total_tokens"]
+    private static let standardGroups = ["gemini-5h": "Gemini Models", "gemini-weekly": "Gemini Models",
+                                         "3p-5h": "Claude and GPT models", "3p-weekly": "Claude and GPT models"]
 
-    static func parse(_ data: Data, source: Source, importedAt: Date = Date()) throws -> UsageSnapshot {
-        guard let plain = decoded(data) else { throw invalidReport }
+    static func parseStandalone(_ data: Data, importedAt: Date = Date()) throws -> UsageSnapshot {
+        guard data.count <= maxBytes, let text = String(data: data, encoding: .utf8) else { throw invalidReport }
+        let plain = text.trimmingCharacters(in: CharacterSet(charactersIn: "\u{FEFF}").union(.whitespacesAndNewlines))
+        if plain.first == "{" { return try parseCLIReport(Data(plain.utf8), importedAt: importedAt) }
+        return try parseText(plain, importedAt: importedAt)
+    }
+
+    static func recordEmbedded(_ entries: [ManualQuota], importedAt: Date = Date()) throws -> UsageSnapshot {
+        guard !entries.isEmpty, entries.count <= manualQuotaLimit else { throw invalidReport }
+        var quotas: [Quota] = []
+        for (index, entry) in entries.enumerated() {
+            let title = entry.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = entry.remaining.trimmingCharacters(in: .whitespacesAndNewlines)
+            if title.isEmpty && value.isEmpty { continue }
+            guard validTitle(title), let remaining = Double(value), (0...100).contains(remaining) else {
+                throw MonitorError.message("请填写额度名称和 0 到 100 的剩余百分比。")
+            }
+            let caption = entry.window == .unspecified ? title : "\(title) · \(entry.window.rawValue)"
+            quotas.append(Quota(id: "gemini-manual-\(index)", title: caption, usedPercent: 100 - remaining,
+                                resetsAt: nil, windowSeconds: entry.window.seconds))
+        }
+        return try historical(quotas, source: UsageSnapshot.embeddedAntigravityEntrySource, importedAt: importedAt)
+    }
+
+    private static func parseCLIReport(_ data: Data, importedAt: Date) throws -> UsageSnapshot {
+        guard let report = try? JSONDecoder().decode(CLIReport.self, from: data),
+              report.status == "SUCCESS", report.conversation_id.isEmpty, report.num_turns == 0,
+              report.error == nil, report.finished_reason == nil, report.command.name == "usage",
+              tokenKeys.isSubset(of: report.usage.keys), report.usage.values.allSatisfy({ $0 == 0 }),
+              report.command.data.groups.count <= maxCLIBuckets else {
+            throw MonitorError.message("请选择独立 Antigravity CLI 的 /usage JSON 输出。")
+        }
+        var quotas: [Quota] = []
+        var seen: Set<String> = []
+        for group in report.command.data.groups {
+            let groupName = group.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard validTitle(groupName) else { throw invalidReport }
+            for bucket in group.buckets {
+                let idRange = NSRange(bucket.id.startIndex..., in: bucket.id)
+                guard seen.count < maxCLIBuckets, bucketID.firstMatch(in: bucket.id, range: idRange) != nil,
+                      seen.insert(bucket.id).inserted else {
+                    throw invalidReport
+                }
+                if bucket.disabled == true || bucket.remaining_fraction == nil { continue }
+                let window: Window
+                switch bucket.window ?? "" {
+                case "5h": window = .fiveHour
+                case "weekly": window = .weekly
+                default: continue
+                }
+                if let expected = standardGroups[bucket.id] {
+                    guard expected.caseInsensitiveCompare(groupName) == .orderedSame,
+                          (bucket.id.hasSuffix("-5h") && window == .fiveHour) || (bucket.id.hasSuffix("-weekly") && window == .weekly) else {
+                        throw invalidReport
+                    }
+                }
+                guard let remaining = bucket.remaining_fraction, (0...1).contains(remaining) else { throw invalidReport }
+                let reset = try bucket.reset_time.map(parseReset)
+                quotas.append(Quota(id: bucket.id, title: "\(groupName) · \(window.title)", usedPercent: (1 - remaining) * 100,
+                                    resetsAt: reset, windowSeconds: window.seconds))
+            }
+        }
+        return try historical(quotas, source: UsageSnapshot.standaloneAntigravityJSONSource, importedAt: importedAt)
+    }
+
+    private static func parseReset(_ text: String) throws -> Date {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let reset = formatter.date(from: text) { return reset }
+        formatter.formatOptions = [.withInternetDateTime]
+        guard let reset = formatter.date(from: text) else { throw invalidReport }
+        return reset
+    }
+
+    private static func validTitle(_ title: String) -> Bool {
+        !title.isEmpty && title.count <= 80 && !title.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+    }
+
+    private static func parseText(_ text: String, importedAt: Date) throws -> UsageSnapshot {
+        let plain = ansiColor.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
         var pool: Pool?
         var pendingWindow: Window?
         var quotas: [String: Quota] = [:]
@@ -80,12 +202,18 @@ enum AntigravityUsageReport {
                 pool = nil
             }
         }
-        guard pendingWindow == nil, !quotas.isEmpty else { throw invalidReport }
-        var snapshot = UsageSnapshot.empty(source: source.title)
+        guard pendingWindow == nil else { throw invalidReport }
+        let ordered = Pool.allCases.flatMap { pool in Window.allCases.compactMap { quotas[id(pool, $0)] } }
+        return try historical(ordered, source: UsageSnapshot.standaloneAntigravityManualSource, importedAt: importedAt)
+    }
+
+    private static func historical(_ quotas: [Quota], source: String, importedAt: Date) throws -> UsageSnapshot {
+        guard !quotas.isEmpty else { throw invalidReport }
+        var snapshot = UsageSnapshot.empty(source: source)
         snapshot.observedAt = importedAt
-        snapshot.quotas = Pool.allCases.flatMap { pool in Window.allCases.compactMap { quotas[id(pool, $0)] } }
+        snapshot.quotas = quotas
         snapshot.isUnverifiedAntigravityReport = true
-        snapshot.note = "账号、观测时间与重置时刻未经核实。仅供历史参考。"
+        snapshot.note = "来源、账号与观测时间未经核实。仅供历史参考。"
         try snapshot.validate()
         return snapshot
     }
@@ -102,11 +230,6 @@ enum AntigravityUsageReport {
     }
 
     private static func id(_ pool: Pool, _ window: Window) -> String { "antigravity-\(pool.rawValue)-\(window.rawValue)" }
-
-    private static func decoded(_ data: Data) -> String? {
-        guard data.count <= maxBytes, let text = String(data: data, encoding: .utf8) else { return nil }
-        return ansiColor.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
-    }
 
     private static var invalidReport: MonitorError {
         .message("未读到可确认的 Antigravity 模型组和剩余额度。上次读数已保留。")

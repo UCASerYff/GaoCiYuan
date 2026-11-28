@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
 
-from gaociyuan.antigravity_report import MAX_BYTES, REPORT_FIELD, REPORT_SOURCE, parse_report
+from gaociyuan.antigravity_report import JSON_REPORT_SOURCE, MAX_BYTES, REPORT_FIELD, REPORT_SOURCE, parse_report
 from gaociyuan.catalog import AGENT_LOCAL, ANTIGRAVITY_REPORT, FILE, GEMINI_APP
 from gaociyuan.credentials import MemoryCredentialStore
 from gaociyuan.errors import AppError
@@ -15,6 +16,7 @@ from gaociyuan.store import TokenStore, empty_library
 from gaociyuan.web import serve
 
 NOW = datetime(2026, 11, 28, tzinfo=timezone.utc)
+CLI_FIXTURE = Path(__file__).resolve().parents[2] / "Tests" / "Fixtures" / "AntigravityCLIUsage.json"
 REPORT = """Models & Quota
 CapturedAt: 2099-01-01T12:00:00Z
 Fixture account: fixture@example.invalid
@@ -31,15 +33,16 @@ Fixture account: fixture@example.invalid
 
 
 def test_explicit_pools_and_windows_only():
-    quotas = parse_report("\ufeff" + REPORT.replace("\n", "\r\n"))
+    source, quotas = parse_report("\ufeff" + REPORT.replace("\n", "\r\n"))
+    assert source == REPORT_SOURCE
     assert [item["usedPercent"] for item in quotas] == [24.5, 40, 24.5, 100]
     assert [item["windowSeconds"] for item in quotas] == [18_000, 604_800, 18_000, 604_800]
     assert len({item["id"] for item in quotas}) == 4
     assert all(item["resetsAt"] is None and not item["exhausted"] for item in quotas)
-    partial = parse_report("Gemini Models\nWeekly Limit Remaining: 10%\nUnrelated models\nFive Hour Limit Remaining: 90%")
+    _, partial = parse_report("Gemini Models\nWeekly Limit Remaining: 10%\nUnrelated models\nFive Hour Limit Remaining: 90%")
     assert [item["usedPercent"] for item in partial] == [90]
     for unavailable in ("N/A", "unknown", "Unavailable", "—"):
-        partial = parse_report(f"Gemini Models\nFive Hour Limit Remaining: 22%\nWeekly Limit Remaining: {unavailable}")
+        _, partial = parse_report(f"Gemini Models\nFive Hour Limit Remaining: 22%\nWeekly Limit Remaining: {unavailable}")
         assert [item["usedPercent"] for item in partial] == [78]
 
 
@@ -87,7 +90,7 @@ def test_historical_import_is_account_scoped_non_live_persistent_and_replay_safe
     imported = store.import_antigravity_report(payload)
     assert imported["duplicate"] is False
     assert imported["report"] == {"source": REPORT_SOURCE, "importedAt": verified["observedAt"], "observedAt": None,
-                                  "verified": False, "quotas": parse_report(REPORT)}
+                                  "verified": False, "quotas": parse_report(REPORT)[1]}
     view = store.view_account(store._find(account["id"]))
     for key in ("snapshot", "history", "lastAttempt", "ring", "quotaForecast", "warnings", "health"):
         assert before[key] == view[key]
@@ -104,15 +107,101 @@ def test_historical_import_is_account_scoped_non_live_persistent_and_replay_safe
     assert newer_import["report"]["importedAt"] == "2026-11-30T00:00:00Z"
     reloaded = TokenStore(tmp_path, credentials=vault, now=lambda: clock[0])
     clock[0] += timedelta(days=2)
-    old_replay = reloaded.import_antigravity_report({**payload, "report": REPORT.replace("60%", "60.000%")})
-    assert old_replay == {"report": newer_import["report"], "duplicate": True}
+    historical_return = reloaded.import_antigravity_report({**payload, "report": REPORT.replace("60%", "60.000%")})
+    assert historical_return["duplicate"] is False
+    assert historical_return["report"] == {**imported["report"], "importedAt": "2026-12-02T00:00:00Z"}
     assert reloaded._find(account["id"])["snapshot"] == verified
     reloaded.save_account({"id": account["id"], "provider": "gemini", "name": "Renamed", "enabled": False})
-    assert reloaded.view_account(reloaded._find(account["id"]))[REPORT_FIELD] == newer_import["report"]
-    assert reloaded.import_antigravity_report(payload)["duplicate"]
+    assert reloaded.view_account(reloaded._find(account["id"]))[REPORT_FIELD] == historical_return["report"]
+    clock[0] += timedelta(days=2)
+    assert reloaded.import_antigravity_report(payload) == {"report": historical_return["report"], "duplicate": True}
     encoded = reloaded.library_path.read_text(encoding="utf-8")
     assert "2099" not in encoded and "fixture@example.invalid" not in encoded
     assert not vault.has(account["id"])
+
+
+def test_official_json_retains_reported_windows_and_distinct_argon(tmp_path):
+    document = CLI_FIXTURE.read_text(encoding="utf-8")
+    payload = json.loads(document)
+    groups = payload["command"]["data"]["groups"]
+    payload.update(account="fixture@example.invalid", observedAt="2099-01-01T00:00:00Z", verified=True)
+    groups.append({"name": "Another Model Group", "buckets": [
+        {"id": "other-5h", "window": "5h", "remaining_fraction": 0.875, "reset_time": "2026-10-22T11:20:00"},
+        {"id": "future-shape", "window": "monthly", "remaining_fraction": 1},
+        {"id": "no-reading", "window": "weekly", "remaining_fraction": None},
+        {"id": "also-unreported", "window": "5h"},
+    ]})
+    groups[0]["buckets"].append({"id": "../unsafe", "window": "weekly", "remaining_fraction": 1})
+    store = TokenStore(tmp_path, now=lambda: NOW)
+    account = store.save_account({"provider": "gemini"})
+    store.notify = lambda *_: pytest.fail("Historical JSON triggered an alert")
+    imported = store.import_antigravity_report({"id": account["id"], "confirmed": True, "report": "\ufeff" + json.dumps(payload)})
+    report = imported["report"]
+    assert report["source"] == JSON_REPORT_SOURCE and report["observedAt"] is None and not report["verified"]
+    rows = {quota["id"]: quota for quota in report["quotas"]}
+    assert set(rows) == {"gemini-5h", "gemini-weekly", "3p-weekly", "gemini-argon-wtu-weekly", "other-5h"}
+    assert rows["gemini-5h"]["usedPercent"] == 37.5 and rows["gemini-5h"]["resetsAt"] == "2026-10-20T17:20:45.125Z"
+    assert rows["3p-weekly"]["usedPercent"] == 100 and rows["3p-weekly"]["resetsAt"] == "2026-10-22T09:10:15Z"
+    assert rows["other-5h"]["resetsAt"] is None
+    assert rows["gemini-argon-wtu-weekly"]["title"] == "Gemini 4 Argon · 每周"
+    assert rows["gemini-argon-wtu-weekly"]["usedPercent"] == 50 and rows["gemini-argon-wtu-weekly"]["windowSeconds"] == 604_800
+    assert all(not row["exhausted"] for row in rows.values())
+    assert not store.alerts_path.exists()
+    encoded = store.library_path.read_text(encoding="utf-8")
+    assert "2099" not in encoded and "fixture@example.invalid" not in encoded
+    reloaded = TokenStore(tmp_path, now=lambda: NOW + timedelta(days=1))
+    view = reloaded.view_account(reloaded._find(account["id"]))
+    assert view[REPORT_FIELD] == report and view["snapshot"] is None and not view["history"]
+    assert view["ring"]["showsDash"] and not view["warnings"] and view["quotaForecast"]["reason"] == "noReadings"
+    groups.reverse()
+    for group in groups:
+        group["buckets"].reverse()
+    same = reloaded.import_antigravity_report({"id": account["id"], "confirmed": True, "report": json.dumps(payload)})
+    assert same == {"report": report, "duplicate": True}
+
+
+def test_json_rejects_agent_statusline_and_inconsistent_quota_fields():
+    document = CLI_FIXTURE.read_text(encoding="utf-8")
+    valid = json.loads(document)
+    for malformed in (
+        {"rate_limits": {"five_hour": {"used_percentage": 42}}},
+        {**valid, "status": "ERROR"},
+        {**valid, "conversation_id": "other-conversation"},
+        {**valid, "num_turns": 1},
+        {**valid, "num_turns": False},
+        {**valid, "usage": {**valid["usage"], "cache_read_tokens": 1}},
+        {**valid, "usage": {"total_tokens": 0}},
+        {**valid, "command": {**valid["command"], "name": "statusline"}},
+        {**valid, "command": {**valid["command"], "data": {"groups": []}}},
+    ):
+        with pytest.raises(AppError):
+            parse_report(json.dumps(malformed))
+    for malformed in (
+        document.replace('"status": "SUCCESS"', '"status": "ERROR", "status": "SUCCESS"'),
+        document.replace('"remaining_fraction": 0.75', '"remaining_fraction": NaN'),
+        document.replace('"remaining_fraction": 0.75', '"remaining_fraction": 1e999999999999999999999999'),
+        document.replace('"remaining_fraction": 0.75', '"remaining_fraction": "0.75"'),
+        document.replace('"id": "gemini-weekly", "window": "weekly"', '"id": "gemini-weekly", "window": "5h"'),
+        document.replace('"name": "Gemini Models"', '"name": "Claude and GPT models"'),
+        document.replace('"id": "gemini-5h"', '"id": "gemini-weekly"'),
+        document.replace('"Gemini 4 Argon"', '"Gemini Models"'),
+    ):
+        with pytest.raises(AppError):
+            parse_report(malformed)
+
+
+def test_existing_text_report_without_source_or_with_old_fingerprints_reopens(tmp_path):
+    store = TokenStore(tmp_path, now=lambda: NOW)
+    account = store.save_account({"provider": "gemini"})
+    payload = {"id": account["id"], "confirmed": True, "report": REPORT}
+    first = store.import_antigravity_report(payload)
+    persisted = json.loads(store.library_path.read_text(encoding="utf-8"))
+    previous = persisted["accounts"][0][REPORT_FIELD]
+    del previous["source"]
+    previous["fingerprints"] = ["a" * 64]
+    store.library_path.write_text(json.dumps(persisted), encoding="utf-8")
+    reloaded = TokenStore(tmp_path, now=lambda: NOW + timedelta(days=1))
+    assert reloaded.import_antigravity_report(payload) == {"report": first["report"], "duplicate": True}
 
 
 def test_legacy_mac_rows_are_not_relabelled_or_reused_on_windows(tmp_path):

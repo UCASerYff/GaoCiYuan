@@ -12,6 +12,8 @@ const localConnection = "本机软件自动读取";
 const antigravityReportConnection = "Antigravity 独立版 /usage 报告";
 const antigravityCLIURL = "https://antigravity.google/docs/getting-started?tab=cli";
 const antigravityUsageURL = "https://antigravity.google/docs/cli/commands/usage";
+const antigravityJSONReleaseURL = "https://antigravity.google/changelog?tab=cli#v1111";
+const antigravityFAQURL = "https://antigravity.google/docs/faq";
 const antigravityReportMaxBytes = 64 * 1024;
 const routeDefinitions = {
   overview: ["总览", "Agent 额度与状态，一眼看清", "overview"],
@@ -138,9 +140,11 @@ const supplementalTranslations = {
   "Antigravity 独立版 /usage 报告": "Standalone Antigravity /usage report",
   "安装官方独立 CLI ↗": "Install the official standalone CLI ↗",
   "官方 /usage 说明 ↗": "Official /usage guide ↗",
+  "CLI 1.1.11 发布说明 ↗": "CLI 1.1.11 release notes ↗",
+  "Google Antigravity 常见问题 ↗": "Google Antigravity FAQ ↗",
   "导入额度报告": "Import quota report",
   "导入 Antigravity 额度报告": "Import Antigravity quota report",
-  "在已登录的官方独立 Antigravity CLI 中运行 /usage，将额度输出保存为 UTF-8 文本文件。": "Run /usage in the signed-in official standalone Antigravity CLI and save the quota output as a UTF-8 text file.",
+  "从已登录的官方独立 Antigravity CLI 导出 /usage JSON，也可将交互界面的额度内容保存为 UTF-8 文本。": "Export /usage JSON from your signed-in standalone Antigravity CLI, or save the quota panel contents as UTF-8 text.",
   "先保存账户，再从账户明细导入报告。": "Save the account, then import the report from its details.",
   "Antigravity 历史额度": "Antigravity quota history",
   "历史报告 · 采集时间未验证": "Historical report · observation time unverified",
@@ -152,31 +156,35 @@ const supplementalTranslations = {
   "待导入报告": "Report needed",
   "可从账户明细手动导入官方 CLI 的 /usage 报告。": "Open account details to import a report from the official CLI.",
   "暂无历史额度报告。": "No historical quota report yet.",
-  "历史报告不用于实时额度、重置时间、预测或提醒。": "Historical reports do not feed live quotas, reset times, forecasts or alerts.",
+  "历史报告仅供参考，单独保存。": "Historical reports are saved separately for reference.",
   "报告记录剩余": "Remaining in report",
   "Gemini Models · 5 小时": "Gemini Models · 5 hours",
   "Gemini Models · 每周": "Gemini Models · weekly",
   "Claude and GPT models · 5 小时": "Claude and GPT models · 5 hours",
   "Claude and GPT models · 每周": "Claude and GPT models · weekly",
+  "Gemini 4 Argon · 每周": "Gemini 4 Argon · weekly",
   "报告导入时间": "Report import time",
+  "导入方式": "Import method",
+  "报告所列重置时间": "Reset time listed in report",
+  "Antigravity 独立 CLI · /usage JSON（手动导入）": "Standalone Antigravity CLI · /usage JSON (manual import)",
+  "Antigravity 独立版 /usage 手动报告": "Standalone Antigravity · /usage text (manual import)",
   "导入到账户": "Import into account",
   "搞词元账户 ID": "GaoCiYuan account ID",
-  "报告文本文件（UTF-8 .txt，最多 64 KiB）": "Report text file (UTF-8 .txt, up to 64 KiB)",
-  "报告的签发者、所属账号与额度采集时间均无法验证。": "The report issuer, account and observation time cannot be verified.",
+  "报告文件（UTF-8 .json 或 .txt，最多 64 KiB）": "Report file (UTF-8 .json or .txt, up to 64 KiB)",
+  "两种格式均只保存为历史。文件来源、所属账号与额度采集时间均未经验证。": "Both formats are saved as history. The file's origin, account and observation time are unverified.",
   "我确认将此报告作为历史记录导入上方账户。": "I confirm that this report belongs in the account above as a historical record.",
   "确认导入": "Confirm import",
   "导入中…": "Importing…",
-  "请选择不超过 64 KiB 的 .txt 报告。": "Choose a .txt report no larger than 64 KiB.",
+  "请选择不超过 64 KiB 的 .json 或 .txt 报告。": "Choose a .json or .txt report no larger than 64 KiB.",
   "无法将所选文件读取为 UTF-8 文本。": "The selected file could not be read as UTF-8 text.",
   "账户已变更，请重新选择账户后导入。": "The account changed. Select the account again before importing.",
   "报告已导入为历史记录。": "The report was imported as historical data.",
   "此报告已导入，无需重复保存。": "This report has already been imported.",
-  "未读到明确的 Antigravity 模型组与剩余额度。请选择 /usage 的 UTF-8 文本报告。": "No supported Antigravity model group and remaining quota were found. Choose a UTF-8 /usage transcript.",
+  "未读到明确的 Antigravity 模型组与剩余额度。请选择 /usage 的 UTF-8 JSON 或文本报告。": "No supported Antigravity model group and remaining quota were found. Choose a UTF-8 /usage JSON or text report.",
   "请选择已保存的 Antigravity 独立版报告账户。": "Choose a saved standalone Antigravity report account.",
   "请确认所选账户和报告来源。": "Confirm the selected account and source of the report.",
-  "导入文本报告": "Via text report import",
-  "在官方 Antigravity CLI 中登录目标账户并运行 /usage，将输出另存为 UTF-8 文本后导入。报告账户及采集时间未经验证，仅作历史参考。": "Sign in to the intended account in the official Antigravity CLI and run /usage. Save the output as UTF-8 text and import it as history. The account and observation time are unverified.",
-  "此连接在 Windows 无法读取。可选择「Antigravity 独立版 /usage 报告」手动导入，或使用本地 JSON 快照。": "Windows cannot read this connection. Choose Standalone Antigravity /usage report for manual import or use a local JSON snapshot.",
+  "导入报告文件": "Via report file import",
+  "在官方 Antigravity CLI 中导出目标账户的 /usage JSON 或 UTF-8 文本。报告账户及采集时间未经验证，仅作历史参考。": "Export /usage JSON or UTF-8 text for the intended account in the official Antigravity CLI. The account and observation time are unverified. Saved as historical reference.",
   "搜索 Agent 平台": "Search Agent platforms",
   "搜索本机软件": "Search installed apps",
   "搜索采集来源": "Search collection sources",
@@ -729,22 +737,36 @@ function antigravityLegacyAccount(account) {
 }
 
 function antigravityReportGuide() {
-  return `<p class="caption muted">${t("在已登录的官方独立 Antigravity CLI 中运行 /usage，将额度输出保存为 UTF-8 文本文件。")}</p>
-    <div class="cluster antigravity-links">${externalLink(antigravityCLIURL, "安装官方独立 CLI ↗")}${externalLink(antigravityUsageURL, "官方 /usage 说明 ↗")}</div>`;
+  return `<p class="caption muted">${t("从已登录的官方独立 Antigravity CLI 导出 /usage JSON，也可将交互界面的额度内容保存为 UTF-8 文本。")}</p>
+    <div class="cluster antigravity-links">
+      ${externalLink(antigravityCLIURL, "安装官方独立 CLI ↗")}
+      ${externalLink(antigravityUsageURL, "官方 /usage 说明 ↗")}
+      ${externalLink(antigravityJSONReleaseURL, "CLI 1.1.11 发布说明 ↗")}
+      ${externalLink(antigravityFAQURL, "Google Antigravity 常见问题 ↗")}
+    </div>`;
 }
 
 function renderAntigravityReport(account, inspector) {
   const report = account.antigravityReport;
   if (!report && !inspector) return `<p class="caption muted">${t("可从账户明细手动导入官方 CLI 的 /usage 报告。")}</p>`;
   const percentage = new Intl.NumberFormat(inEnglish() ? "en" : "zh-CN", { maximumFractionDigits: 6 });
+  const time = (date) => {
+    if (typeof date !== "string" || !Number.isFinite(Date.parse(date))) return "";
+    return `<time datetime="${text(date)}">${text(displayDate(date, { year: "numeric", second: "2-digit", timeZoneName: "short" }))}</time>`;
+  };
   return `<section class="antigravity-history" aria-label="${t("Antigravity 历史额度")}">
     <div class="cluster antigravity-history-heading"><h3>${t("Antigravity 历史额度")}</h3>
       ${report ? tag("历史报告 · 采集时间未验证", "secondary") : ""}</div>
-    ${report ? `<p class="caption muted">${t("报告导入时间")} <time datetime="${text(report.importedAt)}">${text(displayDate(report.importedAt, { year: "numeric" }))}</time></p>
-    <ul class="antigravity-report-quotas">${(report.quotas || []).filter((quota) => Number.isFinite(quota.usedPercent)).map((quota) =>
-      `<li class="spread"><span>${t(quota.title)}</span><strong>${t("报告记录剩余")} ${text(percentage.format(100 - quota.usedPercent))}%</strong></li>`
-    ).join("")}</ul>` : `<p class="caption muted">${t("暂无历史额度报告。")}</p>`}
-    <p class="caption muted">${t("历史报告不用于实时额度、重置时间、预测或提醒。")}</p>
+    ${report ? `<p class="caption muted">${t("导入方式")} · ${t(report.source)}</p>
+    <p class="caption muted">${t("报告导入时间")} ${time(report.importedAt)}</p>
+    <ul class="antigravity-report-quotas">${(report.quotas || []).filter((quota) => Number.isFinite(quota.usedPercent)).map((quota) => {
+      const reset = time(quota.resetsAt);
+      return `<li><div class="spread antigravity-quota-values"><span>${t(quota.title)}</span>
+        <strong>${t("报告记录剩余")} ${text(percentage.format(100 - quota.usedPercent))}%</strong></div>
+        ${reset ? `<p class="caption muted">${t("报告所列重置时间")} ${reset}</p>` : ""}
+      </li>`;
+    }).join("")}</ul>` : `<p class="caption muted">${t("暂无历史额度报告。")}</p>`}
+    <p class="caption muted">${t("历史报告仅供参考，单独保存。")}</p>
     ${inspector ? antigravityReportGuide() : ""}
   </section>`;
 }
@@ -897,7 +919,7 @@ function renderCatalog() {
       <div class="cluster">
         <label class="search-field">${icon("search")}<input class="search catalog-search" id="catalog-search" type="search" aria-label="${t(currentTab[3])}" placeholder="${t(currentTab[3])}" value="${text(catalogQuery)}"></label>
         ${catalogTab === "platforms" ? `<label class="filter-field">${icon("filter")}<select id="catalog-filter" aria-label="${t("接入范围")}">${selectOptions([
-          ["all", "全部平台"], ["direct", "可直接读额度"], ["report", "导入文本报告"], ["snapshot", "通过快照文件"],
+          ["all", "全部平台"], ["direct", "可直接读额度"], ["report", "导入报告文件"], ["snapshot", "通过快照文件"],
         ], catalogFilter)}</select></label>` : ""}
       </div>
       ${catalogTab === "sources" ? button("采集设置", "usage-settings", { glyph: "settings", classes: "primary" }) : ""}
@@ -1161,8 +1183,8 @@ function setEditorError(error) {
 }
 
 async function readAntigravityReportFile(file) {
-  if (!file || !/\.txt$/i.test(file.name) || !file.size || file.size > antigravityReportMaxBytes) {
-    throw new Error(tr("请选择不超过 64 KiB 的 .txt 报告。"));
+  if (!file || !/\.(json|txt)$/i.test(file.name) || !file.size || file.size > antigravityReportMaxBytes) {
+    throw new Error(tr("请选择不超过 64 KiB 的 .json 或 .txt 报告。"));
   }
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
@@ -1183,8 +1205,8 @@ function openAntigravityImport(account) {
           ${showID ? `<p class="caption muted">${t("搞词元账户 ID")} <code>${text(account.id)}</code></p>` : ""}
         </div>
         ${antigravityReportGuide()}
-        ${editorField("报告文本文件（UTF-8 .txt，最多 64 KiB）", '<input type="file" name="report" accept=".txt,text/plain" required>')}
-        <p id="antigravity-import-warning" class="caption muted">${t("报告的签发者、所属账号与额度采集时间均无法验证。")}</p>
+        ${editorField("报告文件（UTF-8 .json 或 .txt，最多 64 KiB）", '<input type="file" name="report" accept=".json,.txt,application/json,text/plain" required>')}
+        <p id="antigravity-import-warning" class="caption muted">${t("两种格式均只保存为历史。文件来源、所属账号与额度采集时间均未经验证。")}</p>
         <label class="antigravity-confirm"><input type="checkbox" name="confirmed" required aria-describedby="antigravity-import-warning"><span>${t("我确认将此报告作为历史记录导入上方账户。")}</span></label>
         <p id="antigravity-import-error" class="red caption" role="alert"></p>
       </div>

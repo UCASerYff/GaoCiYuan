@@ -140,6 +140,16 @@ func displayDate(_ date: Date, time: Bool = true) -> String { "" }
         mixed.antigravityReports = [Connection.geminiApp.rawValue: misfiled]
         try require(mixed.historicalAntigravityReport == nil && mixed.unassignedLegacyAntigravityReport == misfiled,
                     "A previously misfiled report must stay archived")
+        var standaloneJSON = sample(-2, 100)
+        standaloneJSON.source = UsageSnapshot.standaloneAntigravityJSONSource
+        mixed.antigravityReports = [Connection.geminiApp.rawValue: standaloneJSON]
+        try require(mixed.historicalAntigravityReport == nil && mixed.unassignedLegacyAntigravityReport == standaloneJSON,
+                    "A standalone JSON label must not appear as an embedded report")
+        record(standaloneJSON, into: &mixed)
+        try require(standaloneJSON.isHistoricalAntigravityReading && !standaloneJSON.isFreshObservation(at: clock)
+                    && mixed.quotaForecastHistory == nil && QuotaForecast.evaluate(account: mixed, now: clock).windows.isEmpty,
+                    "The standalone JSON source must not become a live sample even without the optional historical flag")
+        try checkHistoricalNotifications(standaloneJSON)
         var flaggedReport = sample(-2, 100)
         flaggedReport.isUnverifiedAntigravityReport = true
         let reportData = try JSONCoding.encoder.encode(flaggedReport)

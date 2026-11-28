@@ -24,9 +24,18 @@ Windows 10（2004 及更新版本）和 Windows 11 的 x64 当前用户安装包
 | OpenCode Go | 使用 Go 计划的独立密钥读取官方用量。 [OpenCode Go](https://opencode.ai/docs/console/go/#usage) |
 | 阿里云百炼 | 使用用户授权登录的官方 `bl` CLI 读取个人 Token Plan 或 Coding Plan。 [百炼 CLI](https://help.aliyun.com/zh/model-studio/cli/usage-quota) |
 
-Antigravity 独立版支持手动导入官方 CLI 的历史额度。在已登录目标账户的 CLI 中运行 `/usage`，将 Gemini Models 和 Claude and GPT models 的额度输出保存为 UTF-8 `.txt` 文件（最多 64 KiB）。在「平台接入」添加 Antigravity，选「Antigravity 独立版 /usage 报告」并保存。随后从「Agent 软件」选择接收报告的搞词元账户，在账户明细点击「导入额度报告」，选文件、核对账户并确认。 [官方 CLI 安装指南](https://antigravity.google/docs/getting-started?tab=cli) [官方额度说明](https://antigravity.google/docs/cli/commands/usage)
+Antigravity 独立版支持手动导入官方 CLI 的历史额度。在「平台接入」添加 Antigravity，选「Antigravity 独立版 /usage 报告」并保存。随后从「Agent 软件」选中接收报告的搞词元账户，在账户明细点击「导入额度报告」，选择 UTF-8 `.json` 或 `.txt` 文件（最多 64 KiB），核对目标账户并确认。 [官方 CLI 安装指南](https://antigravity.google/docs/getting-started?tab=cli) [官方额度说明](https://antigravity.google/docs/cli/commands/usage)
 
-总览和该账户的明细会标明历史报告、报告记录的剩余百分比及导入时间。报告的来源账号和采集时间无法验证，导入时间仅表示搞词元保存报告的时间。报告不参与实时额度、重置时间、预测或提醒。现有本地 JSON 快照仍可用。
+在自己的终端中确认已登录目标账户、`agy --version` 为 1.1.11 或较新版本，并且当前生效的 `disableSlashCommands` 为 `false`，再使用下列 PowerShell 命令导出。无法确认条件时，在交互界面直接运行 `/usage`，将额度面板内容保存为 UTF-8 `.txt` 文件。搞词元仅读取你选中的报告文件。 [CLI 1.1.11 发布说明](https://antigravity.google/changelog?tab=cli#v1111) [Google Antigravity 常见问题](https://antigravity.google/docs/faq)
+
+```powershell
+$antigravityUsage = agy -p '/usage' --output-format json
+if ($LASTEXITCODE -eq 0) {
+    $antigravityUsage | Set-Content -LiteralPath 'antigravity-usage.json' -Encoding utf8
+}
+```
+
+总览和账户明细会标明历史报告、导入方式、导入时间和报告记录的剩余百分比。JSON 文件中如有可读的重置时间，会标在相应额度旁。两种格式均无法验证文件来源、所属账号或采集时间。报告单独留作历史参考，不参与实时额度、重置倒计时、预测或提醒。现有通用 JSON 快照连接仍可用。
 
 Windows 自动发现仅识别独立版 Antigravity，旧的 Gemini 内置连接保留为 macOS 旧版连接。旧账户与历史资料仍可查看。如需导入 Windows CLI 报告，请另建独立版账户。Windows 不会将旧连接改标为独立版。
 

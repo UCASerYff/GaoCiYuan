@@ -337,7 +337,9 @@ struct ContentView: View {
             }
             HStack {
                 if a.usesAntigravityReport {
-                    Button { edit = a } label: { Label(L("导入额度报告…"), systemImage: "doc.badge.plus") }.controlSize(.small)
+                    Button { edit = a } label: {
+                        Label(L(a.connection == .geminiApp ? "手工记录额度…" : "导入额度报告…"), systemImage: "doc.badge.plus")
+                    }.controlSize(.small)
                 } else {
                     Button { Task { await store.refresh(a.id, userInitiated: true) } } label: {
                         Label(L(GrokBotBridge.isUsageRoute(a) ? GrokBotUsageReport.manualButtonTitle(refreshing: store.refreshing.contains(a.id)) : (store.refreshing.contains(a.id) ? "同步中…" : "立即同步")), systemImage: "arrow.clockwise")
@@ -373,7 +375,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             AntigravityReportCaption(report: report, archived: archived)
             ForEach(report.historicalChartQuotas) { quota in
-                QuotaRow(quota: quota, stale: true, threshold: store.library.warningThreshold, showExpiredValue: true)
+                QuotaRow(quota: quota, stale: true, threshold: store.library.warningThreshold, showExpiredValue: true, historicalReport: true)
             }
         }
     }
@@ -394,7 +396,7 @@ struct AntigravityReportCaption: View {
             if !archived && report.isUnverifiedAntigravityReport == true {
                 Text(L("导入时间") + " " + displayDate(report.observedAt))
             }
-            Text(L("账号和观测时间未经核实"))
+            Text(L("来源、账号与观测时间未经核实"))
         }
         .font(.caption2).foregroundStyle(.secondary)
     }

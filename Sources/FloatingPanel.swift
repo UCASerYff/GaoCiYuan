@@ -750,7 +750,7 @@ struct PanelDetailCard: View {
                 Task { await store.refresh(account.id, userInitiated: true) }
             }
         } label: {
-            Label(L(manual ? "在主窗口导入" : syncTitle(account)), systemImage: manual ? "doc.badge.plus" : "arrow.clockwise")
+            Label(L(manual ? (account.connection == .geminiApp ? "在主窗口记录" : "在主窗口导入") : syncTitle(account)), systemImage: manual ? "doc.badge.plus" : "arrow.clockwise")
                 .font(.caption.weight(.medium))
                 .padding(.horizontal, 10).padding(.vertical, 3)
                 .foregroundStyle(PanelTheme.iris)
@@ -782,11 +782,12 @@ struct PanelDetailCard: View {
     private func quotaRow(_ q: Quota, historical: Bool = false) -> some View {
         let fresh = !historical && !account.stale()
         let color: Color = fresh ? (q.remaining <= store.library.warningThreshold ? .orange : Theme.teal) : .secondary
+        let remaining = historical ? q.remaining.formatted(.number.precision(.fractionLength(0...4))) : String(Int(q.remaining))
         return VStack(alignment: .leading, spacing: 3) {
             HStack {
                 Text(L(q.title)).font(.caption.weight(.medium)).lineLimit(1)
                 Spacer()
-                Text("\(Int(q.remaining))%")
+                Text("\(remaining)%")
                     .font(.system(size: 12, weight: .semibold, design: .rounded)).monospacedDigit()
                     .foregroundStyle(color)
             }
@@ -803,7 +804,7 @@ struct PanelDetailCard: View {
                 if let reset = q.resetsAt, !historical {
                     Text(L("重置：\(displayDate(reset)) · \(Countdown.text(to: reset))"))
                 } else if let reset = q.resetsAt {
-                    Text(L("重置：\(displayDate(reset))"))
+                    Text(L("报告中的重置时间") + " " + displayDate(reset))
                 } else { Text(L("平台未提供重置时间")) }
                 Spacer()
             }.font(.system(size: 9)).foregroundStyle(.tertiary)

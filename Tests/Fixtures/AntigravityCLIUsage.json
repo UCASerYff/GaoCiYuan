@@ -1,0 +1,41 @@
+{
+  "conversation_id": "",
+  "status": "SUCCESS",
+  "response": "Sanitized fixture. Use the structured command data.",
+  "duration_seconds": 0,
+  "num_turns": 0,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "thinking_tokens": 0,
+    "cache_read_tokens": 0,
+    "total_tokens": 0
+  },
+  "command": {
+    "name": "usage",
+    "data": {
+      "groups": [
+        {
+          "name": "Gemini Models",
+          "buckets": [
+            {"id": "gemini-weekly", "window": "weekly", "remaining_fraction": 0.75, "reset_time": "2026-10-21T15:42:30Z"},
+            {"id": "gemini-5h", "window": "5h", "remaining_fraction": 0.625, "reset_time": "2026-10-20T17:20:45.125Z"}
+          ]
+        },
+        {
+          "name": "Claude and GPT models",
+          "buckets": [
+            {"id": "3p-weekly", "window": "weekly", "remaining_fraction": 0, "reset_time": "2026-10-22T11:10:15+02:00"},
+            {"id": "3p-5h", "window": "5h", "remaining_fraction": 1, "disabled": true}
+          ]
+        },
+        {
+          "name": "Gemini 4 Argon",
+          "buckets": [
+            {"id": "gemini-argon-wtu-weekly", "window": "weekly", "remaining_fraction": 0.5, "reset_time": "2026-10-25T20:25:10Z"}
+          ]
+        }
+      ]
+    }
+  }
+}

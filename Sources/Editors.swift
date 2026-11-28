@@ -16,6 +16,7 @@ struct AccountEditor: View {
     @State private var copilotCode: String?
     @State private var copilotTask: Task<Void, Never>?
     @State private var draftID = UUID()
+    @State private var embeddedQuotaRows = [AntigravityUsageReport.ManualQuota()]
     private var isExisting: Bool { store.library.accounts.contains { $0.id == account.id } }
     private var selectableProviders: [Provider] {
         Provider.allCases.filter { isExisting || $0.creationKinds.contains(account.kind) }
@@ -30,7 +31,7 @@ struct AccountEditor: View {
                 }
                 TextField(L("账户名称"),text:$account.name)
                 TextField(L("套餐 / 组织备注"),text:$account.plan,prompt:Text(account.kind == .agent ? L("如 Plus、Pro、Max、Coding Plan") : L("如组织名称或项目名")))
-                Picker(L("连接方式"),selection:$account.connection) { ForEach(Connection.available(account.provider,account.kind),id:\.self) { Text(L($0 == .kimiDesktop ? "Kimi 桌面订阅页（推荐 · 免 Key）" : ($0 == .agentLocal && account.provider == .gemini ? "Antigravity 独立版" : $0.rawValue))).tag($0) } }
+                Picker(L("连接方式"),selection:$account.connection) { ForEach(connectionOptions,id:\.self) { Text(L($0 == .kimiDesktop ? "Kimi 桌面订阅页（推荐 · 免 Key）" : ($0 == .agentLocal && account.provider == .gemini ? "Antigravity 独立版" : $0.rawValue))).tag($0) } }
                 integrationSettings
                 if account.connection.needsKey {
                     if [.aliyun,.volc,.xai,.volcArk].contains(account.connection) {
@@ -148,11 +149,11 @@ struct AccountEditor: View {
             .onChange(of:account.provider) { _, p in
                 key = ""; testResult = nil; account.scopeID = nil; account.region = nil; account.filePath = ""
                 account.name = account.kind == .agent ? p.defaultAgentName : p.defaultLLMName
-                account.connection = Connection.available(p,account.kind)[0]
+                account.connection = Connection.creationOptions(p,account.kind)[0]
             }
             .onChange(of:account.kind) { _, k in
                 account.name = k == .agent ? account.provider.defaultAgentName : account.provider.defaultLLMName
-                account.connection = Connection.available(account.provider,k)[0]
+                account.connection = Connection.creationOptions(account.provider,k)[0]
             }
     }
 
@@ -162,10 +163,20 @@ struct AccountEditor: View {
         let liveAccount = $account
         let liveBudget = $budget
         let liveKey = $key
+        let liveRows = $embeddedQuotaRows
         TokenLifecycleWork.shared.observeDraft(draftID) {
             AccountEditorFields(liveAccount.wrappedValue, budget: liveBudget.wrappedValue) != original
                 || !liveKey.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || liveRows.wrappedValue.contains { !$0.title.isEmpty || !$0.remaining.isEmpty }
         }
+    }
+
+    private var connectionOptions: [Connection] {
+        var options = Connection.creationOptions(account.provider, account.kind)
+        if let existing = store.library.accounts.first(where: { $0.id == account.id }), !options.contains(existing.connection) {
+            options.append(existing.connection)
+        }
+        return options
     }
 
     @ViewBuilder private var integrationSettings: some View {
@@ -205,37 +216,77 @@ struct AccountEditor: View {
     @ViewBuilder private var antigravityImportSettings: some View {
         let embedded = account.connection == .geminiApp
         Text(L(embedded
-            ? "从 Gemini 内置 Antigravity 的官方额度界面复制报告并保存为文本。独立 CLI 的 /usage 报告请导入独立版账户。"
-            : "在官方 Antigravity CLI 的交互窗口运行 /usage，将额度面板内容保存为文本后导入。"))
+            ? "请在 Gemini 内置界面核对账户，按实际显示的名称和剩余百分比手工记录。"
+            : "选择自己从官方独立 CLI 保存的 /usage JSON 或文本。文件和 Google 账户来源由你核对。"))
             .font(.callout).foregroundStyle(.secondary)
         if let guide = URL(string: embedded ? AntigravityUsageReport.embeddedGuide : AntigravityUsageReport.standaloneGuide) {
             Link(L("查看 Google 官方说明 ↗"), destination: guide)
         }
-        if savedAntigravityAccount != nil {
+        if savedAntigravityAccount == nil {
+            Text(L("保存账户及连接方式后可记录额度。")).font(.caption).foregroundStyle(.secondary)
+        } else if embedded {
+            embeddedQuotaFields
+        } else {
             Button(L("导入 Antigravity 额度报告…"), action: importAntigravityReport)
                 .disabled(store.refreshing.contains(account.id))
-        } else {
-            Text(L("保存账户及连接方式后可导入报告。")).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var embeddedQuotaFields: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach($embeddedQuotaRows) { $row in
+                HStack {
+                    TextField(L("额度名称"), text: $row.title)
+                    TextField(L("剩余百分比"), text: $row.remaining).frame(width: 95)
+                    Picker(L("时段"), selection: $row.window) {
+                        ForEach(AntigravityUsageReport.ManualWindow.allCases, id: \.self) { window in
+                            Text(L(window.rawValue)).tag(window)
+                        }
+                    }.labelsHidden().frame(width: 95)
+                    if embeddedQuotaRows.count > 1 {
+                        Button {
+                            let id = row.id
+                            embeddedQuotaRows.removeAll { $0.id == id }
+                        } label: { Image(systemName: "minus.circle") }
+                            .accessibilityLabel(Text(L("移除额度行")))
+                    }
+                }
+            }
+            HStack {
+                Button(L("添加额度行")) { embeddedQuotaRows.append(.init()) }
+                    .disabled(embeddedQuotaRows.count >= AntigravityUsageReport.manualQuotaLimit)
+                Button(L("保存手工记录"), action: saveEmbeddedAntigravityReading)
+            }
+        }
+    }
+
+    private func saveEmbeddedAntigravityReading() {
+        guard let saved = savedAntigravityAccount, saved.connection == .geminiApp else { return }
+        performAntigravityImport(for: saved, makeReport: { try AntigravityUsageReport.recordEmbedded(embeddedQuotaRows) }) {
+            embeddedQuotaRows = [.init()]
         }
     }
 
     private func importAntigravityReport() {
-        guard let saved = savedAntigravityAccount, !store.refreshing.contains(saved.id) else { return }
+        guard let saved = savedAntigravityAccount, saved.connection == .agentLocal else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json, .plainText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        performAntigravityImport(for: saved, makeReport: { try AntigravityUsageReport.parseStandalone(readAntigravityReport(url)) })
+    }
+
+    private func performAntigravityImport(for saved: Account, makeReport: () throws -> UsageSnapshot, savedReport: () -> Void = {}) {
         error = nil
         testResult = nil
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.plainText]
-        guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let source: AntigravityUsageReport.Source = saved.connection == .geminiApp ? .embedded : .standalone
-            let snapshot = try AntigravityUsageReport.parse(readAntigravityReport(url), source: source)
+            let snapshot = try makeReport()
             let confirm = NSAlert()
             confirm.messageText = L("确认报告归属")
             let destination = L("目标账户") + " 「\(saved.name)」"
-            let reportSource = L("报告来源") + " 「\(L(source.title))」"
-            let explanation = L("请核对报告来自该连接当前登录的正确 Google 账号。账号、观测时间和重置时刻未经核实，报告仅供历史参考。")
-            confirm.informativeText = [destination, reportSource, "", explanation].joined(separator: "\n")
-            confirm.addButton(withTitle: L("确认并导入"))
+            let mode = L("记录方式") + " 「\(L(snapshot.source))」"
+            let explanation = L("请确认额度来自你选择的应用及 Google 账号。来源、账号和观测时间未经应用核验，记录仅供历史参考。")
+            confirm.informativeText = [destination, mode, "", explanation].joined(separator: "\n")
+            confirm.addButton(withTitle: L("确认并保存"))
             confirm.addButton(withTitle: L("取消"))
             confirm.buttons[0].keyEquivalent = ""
             confirm.buttons[1].keyEquivalent = "\u{1b}"
@@ -245,7 +296,8 @@ struct AccountEditor: View {
                 throw MonitorError.message("账户已变更，请重新选择报告并确认归属。")
             }
             try store.importAntigravityReport(snapshot, for: saved.id)
-            testResult = "已导入历史参考报告。"
+            testResult = saved.connection == .geminiApp ? "已保存手工记录。" : "已导入历史参考报告。"
+            savedReport()
         } catch let error as MonitorError {
             self.error = error.localizedDescription
         } catch {
@@ -258,7 +310,7 @@ struct AccountEditor: View {
             guard let path else { return -1 }
             return Darwin.open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
         }
-        let invalidFile = MonitorError.message("请选择 Antigravity UTF-8 文本报告（普通文件，最大 64 KB）。")
+        let invalidFile = MonitorError.message("请选择 Antigravity UTF-8 JSON 或文本报告（最大 64 KB）。")
         guard descriptor >= 0 else { throw invalidFile }
         let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         defer { try? file.close() }

@@ -285,8 +285,8 @@ import UniformTypeIdentifiers
             throw MonitorError.message("请选择已保存的 Gemini 或 Antigravity 账户导入报告。")
         }
         let account = library.accounts[index]
-        guard account.antigravityManualSource == snapshot.source else {
-            throw MonitorError.message("报告来源与账户连接方式不符。请选择对应模式的报告。")
+        guard account.acceptsAntigravityReport(source: snapshot.source) else {
+            throw MonitorError.message("报告类型与账户连接方式不符。请选择对应模式的记录。")
         }
         guard !refreshing.contains(id) else {
             throw MonitorError.message("账户正在同步，请在同步完成后导入 Antigravity 报告。")

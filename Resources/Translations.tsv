@@ -651,4 +651,29 @@ Antigravity 独立版 · /usage 手动报告	Standalone Antigravity · imported 
 账号、观测时间与重置时刻未经核实。仅供历史参考。	The account, observation time, and reset are unverified. Historical reference only.
 报告来源与账户连接方式不符。请选择对应模式的报告。	The report source does not match this account's connection. Choose a report from the matching mode.
 Antigravity 按模型组共享 5 小时与每周额度。Gemini 内置版与独立版分别导入本机报告，作为历史参考。	Antigravity shares five-hour and weekly limits by model group. Import a local report for the matching Gemini or standalone connection as a historical reference.
+Antigravity 独立 CLI · /usage JSON（手动导入）	Standalone Antigravity CLI · imported /usage JSON
+Gemini 内置 Antigravity · 手工记录	Antigravity in Gemini · manual entry
+请在账户设置手工记录或导入额度。	Record or import quotas in account settings.
+请在 Gemini 内置界面核对账户，按实际显示的名称和剩余百分比手工记录。	Check your account in Gemini and record the quota name and remaining percentage shown there.
+选择自己从官方独立 CLI 保存的 /usage JSON 或文本。文件和 Google 账户来源由你核对。	Choose the /usage JSON or text you saved from the official standalone CLI. Check the file's origin and Google account before importing.
+保存账户及连接方式后可记录额度。	Save the account and connection before recording quotas.
+剩余百分比	Remaining %
+时段	Window
+未注明	Unspecified
+移除额度行	Remove quota row
+添加额度行	Add quota row
+保存手工记录	Save manual entry
+请填写额度名称和 0 到 100 的剩余百分比。	Enter a quota name and a remaining percentage from 0 to 100.
+请选择独立 Antigravity CLI 的 /usage JSON 输出。	Choose the /usage JSON output from the standalone Antigravity CLI.
+请选择 Antigravity UTF-8 JSON 或文本报告（最大 64 KB）。	Choose a UTF-8 Antigravity JSON or text report (up to 64 KB).
+请确认额度来自你选择的应用及 Google 账号。来源、账号和观测时间未经应用核验，记录仅供历史参考。	Confirm that the values came from the application and Google account you selected. The application cannot verify the source, account, or observation time. Historical reference only.
+确认并保存	Confirm and Save
+记录方式	Capture method
+手工记录额度…	Record Quota Manually…
+在主窗口记录	Record in Main Window
+报告中的重置时间	Reset time in report
+来源、账号与观测时间未经核实	Source, account, and observation time are unverified
+来源、账号与观测时间未经核实。仅供历史参考。	The source, account, and observation time are unverified. Historical reference only.
+已保存手工记录。	Saved the manual entry.
+报告类型与账户连接方式不符。请选择对应模式的记录。	The report type does not match this account's connection. Choose a record for the matching mode.
 

@@ -260,15 +260,18 @@ try {
       'Standalone import action was unavailable.');
     await devtools.evaluate(`document.querySelector('#agent-inspector [data-action="antigravity-import"]').click()`);
     assert.match(await devtools.evaluate(`document.querySelector('.antigravity-target').innerText`), /Antigravity 报告账户/);
-    assert.match(await devtools.evaluate(`document.querySelector('#antigravity-import-warning').innerText`), /采集时间均无法验证/);
+    assert.match(await devtools.evaluate(`document.querySelector('#antigravity-import-warning').innerText`), /文件来源、所属账号与额度采集时间均未经验证/);
+    assert.match(await devtools.evaluate(`document.querySelector('#antigravity-import-form [name="report"]').accept`), /\.json.*\.txt/);
     const fixture = path.join(scratch, 'report.txt');
     const secondSelection = path.join(scratch, 'second-report.txt');
     const report = 'Fixture owner: antigravity-fixture@example.invalid\nGemini Models\nFive Hour Limit Remaining: 75.5%\nClaude and GPT models\nWeekly Limit Remaining: 42%';
     await Promise.all([writeFile(fixture, report), writeFile(secondSelection, report)]);
-    const { root } = await devtools.send('DOM.getDocument');
-    const { nodeId } = await devtools.send('DOM.querySelector', { nodeId: root.nodeId, selector: '#antigravity-import-form [name="report"]' });
     const isConfirmDisabled = () => devtools.evaluate(`document.querySelector('#antigravity-import-form button[type="submit"]').disabled`);
-    const selectFile = file => devtools.send('DOM.setFileInputFiles', { nodeId, files: [file] });
+    const selectFile = async file => {
+      const { root } = await devtools.send('DOM.getDocument');
+      const { nodeId } = await devtools.send('DOM.querySelector', { nodeId: root.nodeId, selector: '#antigravity-import-form [name="report"]' });
+      await devtools.send('DOM.setFileInputFiles', { nodeId, files: [file] });
+    };
     await selectFile(fixture);
     assert.equal(await isConfirmDisabled(), true);
     await devtools.evaluate(`document.querySelector('#antigravity-import-form [name="confirmed"]').click()`);
@@ -284,9 +287,32 @@ try {
     const display = await devtools.evaluate(`document.querySelector('#agent-inspector .account-reading').innerText`);
     assert.match(display, /历史报告 · 采集时间未验证/);
     assert.match(display, /报告导入时间/);
+    assert.match(display, /导入方式 · Antigravity 独立版 \/usage 手动报告/);
     assert.match(display, /报告记录剩余 75\.5%/);
     assert.match(display, /报告记录剩余 42%/);
-    assert.doesNotMatch(display, /实测额度|antigravity-fixture@example\.invalid/);
+    assert.doesNotMatch(display, /实测额度|报告所列重置时间|antigravity-fixture@example\.invalid/);
+
+    await devtools.evaluate(`document.querySelector('#agent-inspector [data-action="antigravity-import"]').click()`);
+    const jsonFixture = path.resolve(workspace, '..', 'Tests', 'Fixtures', 'AntigravityCLIUsage.json');
+    await selectFile(jsonFixture);
+    assert.equal(await isConfirmDisabled(), true);
+    await devtools.evaluate(`document.querySelector('#antigravity-import-form [name="confirmed"]').click();
+      document.querySelector('#antigravity-import-form button[type="submit"]').click()`);
+    await retry(() => devtools.evaluate(`!document.querySelector('#dialog').open && Boolean(document.querySelector('#agent-inspector .antigravity-report-quotas time'))`),
+      'The standalone JSON quota and its reported reset did not render.');
+    const jsonDisplay = await devtools.evaluate(`document.querySelector('#agent-inspector .account-reading').innerText`);
+    assert.match(jsonDisplay, /导入方式 · Antigravity 独立 CLI · \/usage JSON（手动导入）/);
+    assert.match(jsonDisplay, /报告记录剩余 62\.5%/);
+    assert.match(jsonDisplay, /报告记录剩余 0%/);
+    assert.match(jsonDisplay, /Gemini 4 Argon/);
+    assert.match(jsonDisplay, /报告所列重置时间/);
+    assert.doesNotMatch(jsonDisplay, /实测额度|等待新数据|Sanitized fixture/);
+    const resets = await devtools.evaluate(`[...document.querySelectorAll('#agent-inspector .antigravity-report-quotas time')].map(item => Date.parse(item.dateTime)).sort()`);
+    assert.deepEqual(resets, [
+      Date.parse('2026-10-20T17:20:45.125Z'), Date.parse('2026-10-21T15:42:30Z'),
+      Date.parse('2026-10-22T11:10:15+02:00'), Date.parse('2026-10-25T20:25:10Z'),
+    ]);
+    assert.equal(await devtools.evaluate(`document.querySelectorAll('#agent-inspector .antigravity-report-quotas li').length`), 4);
     const accounts = (await api('/api/state')).accounts;
     const preserved = accounts.find(account => account.id === legacyAntigravityID);
     assert.equal(preserved.connection, legacyAntigravityConnection);
