@@ -16,11 +16,11 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from gaociyuan.errors import AppError
-from gaociyuan.version import MARKETING_VERSION
+from gaociyuan.version import MARKETING_VERSION, WINDOWS_BUILD
 
 SPARKLE = '{http://www.andymatuschak.org/xml-namespaces/sparkle}'
 VERSION = re.compile(r'v?(\d{1,6}(?:\.\d{1,6}){0,5})', re.IGNORECASE)
-PACKAGE = re.compile(r'GaoCiYuan-Windows-[\d.]+-x64\.(?:exe|zip)', re.IGNORECASE)
+PACKAGE = re.compile(r'GaoCiYuan-Windows-[\d.]+(?:-build\d+)?-x64\.(?:exe|zip)', re.IGNORECASE)
 FEED_LIMIT = 1024 * 1024
 PACKAGE_LIMIT = 200 * 1024 * 1024
 
@@ -85,6 +85,30 @@ class Update:
     signature: str
     expected_length: int | None
     suffix: str
+    build: int | None = None
+
+    @property
+    def display_version(self) -> str:
+        return self.version if self.build is None else f'{self.version}+{self.build}'
+
+    @property
+    def sort_key(self) -> tuple[tuple[int, ...], int]:
+        return (version_parts(self.version), self.build or 0)
+
+
+def _windows_pe_build(marketing: str, full_version: str) -> int | None:
+    full = VERSION.fullmatch(full_version.strip())
+    if full is None:
+        return None
+    prefix = marketing.split('.')
+    parts = full[1].split('.')
+    if parts[:len(prefix)] != prefix:
+        return None
+    suffix = parts[len(prefix):]
+    if len(suffix) != 1 and (len(suffix) != 2 or suffix[1] != '0'):
+        return None
+    build = int(suffix[0])
+    return build if 0 < build <= 65_535 else None
 
 
 def parse_appcast(data: bytes) -> list[Update]:
@@ -98,6 +122,7 @@ def parse_appcast(data: bytes) -> list[Update]:
     items = []
     for entry in document.findall('.//item'):
         title_version = entry.findtext(SPARKLE + 'shortVersionString') or ''
+        entry_version = entry.findtext(SPARKLE + 'version') or ''
         entry_os = entry.findtext(SPARKLE + 'os') or ''
         for enclosure in entry.findall('enclosure'):
             attributes = enclosure.attrib
@@ -107,7 +132,9 @@ def parse_appcast(data: bytes) -> list[Update]:
                 continue
             if architecture and architecture not in ('x64', 'amd64', 'x86_64'):
                 continue
-            candidate = title_version or attributes.get(SPARKLE + 'shortVersionString') or attributes.get(SPARKLE + 'version', '')
+            market_version = title_version or attributes.get(SPARKLE + 'shortVersionString') or ''
+            enclosure_version = attributes.get(SPARKLE + 'version', '')
+            candidate = market_version or enclosure_version
             try:
                 version_parts(candidate)
                 url = update_url(attributes.get('url', ''))
@@ -120,7 +147,9 @@ def parse_appcast(data: bytes) -> list[Update]:
                     continue
             except (AppError, ValueError):
                 continue
-            items.append(Update(VERSION.fullmatch(candidate.strip())[1], url, attributes.get(SPARKLE + 'edSignature', ''), length, suffix))
+            normalized = VERSION.fullmatch(candidate.strip())[1]
+            build = _windows_pe_build(normalized, enclosure_version or entry_version) if platform and market_version else None
+            items.append(Update(normalized, url, attributes.get(SPARKLE + 'edSignature', ''), length, suffix, build))
     return items
 
 
@@ -141,11 +170,11 @@ class UpdateService:
         items = parse_appcast(read_resource(source, FEED_LIMIT, 15))
         if not items:
             raise AppError('更新源中没有可用的 Windows x64 条目。', 'update_feed')
-        latest = max(items, key=lambda item: version_parts(item.version))
-        if version_parts(latest.version) > version_parts(MARKETING_VERSION):
+        latest = max(items, key=lambda item: item.sort_key)
+        if latest.sort_key > (version_parts(MARKETING_VERSION), int(WINDOWS_BUILD)):
             self.available = latest
         status = 'available' if self.available else 'current'
-        self.public_state = {'status': status, 'version': self.available.version if self.available else MARKETING_VERSION}
+        self.public_state = {'status': status, 'version': self.available.display_version if self.available else MARKETING_VERSION}
         return self.public_state
 
     def download(self, source: str, public_key: str) -> dict:
@@ -167,7 +196,8 @@ class UpdateService:
         except InvalidSignature as exc:
             raise AppError('更新包签名或长度验证失败。', 'update_signature') from exc
         self.directory.mkdir(parents=True, exist_ok=True)
-        destination = self.directory / f'GaoCiYuan-Windows-{item.version}-x64{item.suffix}'
+        version_suffix = item.version if item.build is None else f'{item.version}-build{item.build}'
+        destination = self.directory / f'GaoCiYuan-Windows-{version_suffix}-x64{item.suffix}'
         temporary = destination.with_suffix('.partial')
         try:
             temporary.write_bytes(payload)
@@ -181,4 +211,4 @@ class UpdateService:
         for previous in self.directory.iterdir():
             if previous != destination and PACKAGE.fullmatch(previous.name) and previous.is_file():
                 previous.unlink(missing_ok=True)
-        return {'path': str(destination), 'version': item.version}
+        return {'path': str(destination), 'version': item.display_version}

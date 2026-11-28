@@ -60,6 +60,8 @@ Windows 自动发现仅识别独立版 Antigravity。旧的 Gemini 内置账户�
 
 设置中可配置团队发布的 Windows appcast（HTTPS 或本机 `file:` 地址）及 Base64 编码的 32 字节 Ed25519 公钥。建议在 enclosure 标注 `sparkle:os="windows"` 和 `sparkle:arch="x64"`，并提供版本、文件长度和 `sparkle:edSignature`。点击下载后，软件先验证签名和长度，再把包保存至资料目录下的 `updates`。安装由用户启动。Windows 发布尚未配置公共 appcast 和发布公钥，首次检查会显示未配置。
 
+同一发行版本有多个 Windows 构建时，请在明确标注为 Windows 的条目同时声明营销版本及 PE 文件版本。例如 `sparkle:shortVersionString="4.15"` 和 `sparkle:version="4.15.3"`（或 `4.15.3.0`）代表 4.15 的第 3 个 Windows 构建。只有文件版本以完全相同的营销版本数字段开头时，才比较构建号。旧条目只声明营销版本也可继续使用。
+
 ## 构建与验证
 
 使用独立的 Windows x64 CPython 3.12 环境和 Inno Setup 7 x64。build.ps1 会检查版本和 Microsoft 引导程序的 Authenticode 签名，执行回归，再生成安装包和 SHA-256。已有已验证的引导程序时可以用 `-WebViewBootstrapper` 指定文件。 [Inno Setup](https://jrsoftware.org/inno-setup/downloads) [WebView2 Runtime 分发](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution)

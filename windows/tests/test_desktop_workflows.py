@@ -50,6 +50,61 @@ def test_platform_filtered_updates_require_explicit_verified_download(tmp_path, 
         service.download('https://example.invalid/changed.xml', public_key)
 
 
+@pytest.mark.parametrize(('full_version', 'platform', 'available'), [
+    ('4.15.3', 'windows', True), ('4.15.3.0', 'win64', True),
+    ('4.15.2.0', 'windows', False), ('4.15.1.0', 'windows', False),
+    ('4.16.3', 'windows', False), ('4.150.3', 'windows', False),
+    ('4.015.3', 'windows', False), ('4.15.3.1', 'windows', False),
+    ('4.15.65536', 'windows', False), ('1248', 'windows', False),
+    ('windows-signed-2026a', 'windows', False), ('', 'windows', False),
+    ('4.15.3', '', False),
+])
+def test_appcast_uses_only_matching_windows_pe_build_numbers(tmp_path, monkeypatch, full_version, platform, available):
+    monkeypatch.setattr('gaociyuan.updates.MARKETING_VERSION', '4.15')
+    monkeypatch.setattr('gaociyuan.updates.WINDOWS_BUILD', '2')
+    feed = tmp_path / 'windows.xml'
+    url = (tmp_path / 'GaoCiYuan-Windows-4.15-build3-x64-Setup.exe').as_uri()
+    feed.write_text(
+        f'<rss xmlns:s="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>'
+        f'<enclosure s:os="{platform}" s:arch="x64" s:shortVersionString="4.15" s:version="{full_version}" '
+        f'url={quoteattr(url)} /></item></channel></rss>', encoding='utf-8',
+    )
+    expected = {'status': 'available', 'version': '4.15+3'} if available else {'status': 'current', 'version': '4.15'}
+    assert UpdateService(tmp_path).check(feed.as_uri()) == expected
+
+
+def test_windows_pe_build_order_keeps_signature_validation_and_download_identity(tmp_path, monkeypatch):
+    monkeypatch.setattr('gaociyuan.updates.MARKETING_VERSION', '4.15')
+    monkeypatch.setattr('gaociyuan.updates.WINDOWS_BUILD', '2')
+    key = Ed25519PrivateKey.generate()
+    public_key = base64.b64encode(key.public_key().public_bytes_raw()).decode()
+    package = tmp_path / 'GaoCiYuan-Windows-4.15-build10-x64-Setup.exe'
+    data = b'synthetic build-ten bytes'
+    package.write_bytes(data)
+    signature = base64.b64encode(key.sign(data)).decode()
+    feed = tmp_path / 'windows.xml'
+    feed.write_text(
+        '<rss xmlns:s="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel>'
+        '<item><s:shortVersionString>4.15</s:shortVersionString><s:version>4.15.3</s:version>'
+        f'<enclosure s:os="windows" url={quoteattr(package.as_uri())} /></item>'
+        '<item><s:shortVersionString>4.15</s:shortVersionString><s:version>4.15.10.0</s:version>'
+        f'<enclosure s:os="windows" s:arch="x64" url={quoteattr(package.as_uri())} '
+        f's:edSignature="{signature}" length="{len(data)}" /></item>'
+        '</channel></rss>', encoding='utf-8',
+    )
+    service = UpdateService(tmp_path)
+    assert service.check(feed.as_uri()) == {'status': 'available', 'version': '4.15+10'}
+    package.write_bytes(b'X' * len(data))
+    with pytest.raises(AppError, match='签名'):
+        service.download(feed.as_uri(), public_key)
+    assert not service.directory.exists()
+    package.write_bytes(data)
+    result = service.download(feed.as_uri(), public_key)
+    destination = service.directory / 'GaoCiYuan-Windows-4.15-build10-x64.exe'
+    assert result == {'version': '4.15+10', 'path': str(destination)}
+    assert destination.read_bytes() == data
+
+
 def test_routes_and_loopback_hosts_are_validated(tmp_path):
     assert deep_link('gaociyuan://analytics') == '#analytics'
     assert deep_link('gaociyuan://agents?account=fixture-1') == '#agents?account=fixture-1'
