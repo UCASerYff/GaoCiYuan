@@ -14,6 +14,12 @@ namespace GaoCiYuan.Smoke
             public string Title { get; set; }
             public bool Visible { get; set; }
         }
+        public sealed class MenuItem
+        {
+            public string Text { get; set; }
+            public uint Id { get; set; }
+            public Rectangle Bounds { get; set; }
+        }
 
         [StructLayout(LayoutKind.Sequential)]
         public struct Rectangle { public int Left, Top, Right, Bottom; }
@@ -75,6 +81,23 @@ namespace GaoCiYuan.Smoke
             var release = new Input { Mouse = new MouseInput { Flags = right ? 0x0010u : 0x0004u } };
             return SendInput(2, new[] { press, release }, Marshal.SizeOf<Input>()) == 2;
         }
+        public static MenuItem FindPopupItem(IntPtr popup, string expectedText)
+        {
+            const uint byPosition = 0x0400;
+            IntPtr menu;
+            if (SendMessageTimeout(popup, 0x01e1, IntPtr.Zero, IntPtr.Zero, 0x22, 800, out menu) == IntPtr.Zero || menu == IntPtr.Zero) return null;
+            int count = GetMenuItemCount(menu);
+            for (uint index = 0; index < count; index++)
+            {
+                var text = new StringBuilder(256);
+                if (GetMenuString(menu, index, text, text.Capacity, byPosition) == 0 || text.ToString() != expectedText) continue;
+                if ((GetMenuState(menu, index, byPosition) & 3) != 0) return null;
+                Rectangle rectangle;
+                if (!GetMenuItemRect(IntPtr.Zero, menu, index, out rectangle) || rectangle.Right <= rectangle.Left || rectangle.Bottom <= rectangle.Top) return null;
+                return new MenuItem { Text = text.ToString(), Id = GetMenuItemID(menu, (int)index), Bounds = rectangle };
+            }
+            return null;
+        }
         public static int[] NativeIcon(IntPtr window, int kind)
         {
             IntPtr icon;
@@ -111,6 +134,11 @@ namespace GaoCiYuan.Smoke
         [DllImport("user32.dll")] private static extern int GetSystemMetricsForDpi(int metric, uint dpi);
         [DllImport("shell32.dll")] private static extern int Shell_NotifyIconGetRect(ref NotifyId key, out Rectangle rect);
         [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW")] private static extern IntPtr SendMessageTimeout(IntPtr window, uint message, IntPtr key, IntPtr value, uint flags, uint timeout, out IntPtr result);
+        [DllImport("user32.dll")] private static extern int GetMenuItemCount(IntPtr menu);
+        [DllImport("user32.dll", EntryPoint = "GetMenuStringW", CharSet = CharSet.Unicode)] private static extern int GetMenuString(IntPtr menu, uint index, StringBuilder text, int capacity, uint flags);
+        [DllImport("user32.dll")] private static extern uint GetMenuState(IntPtr menu, uint item, uint flags);
+        [DllImport("user32.dll")] private static extern uint GetMenuItemID(IntPtr menu, int index);
+        [DllImport("user32.dll")] private static extern bool GetMenuItemRect(IntPtr window, IntPtr menu, uint index, out Rectangle result);
         [DllImport("user32.dll")] private static extern bool GetIconInfo(IntPtr icon, out IconInfo info);
         [DllImport("gdi32.dll", EntryPoint = "GetObjectW")] private static extern int GetObject(IntPtr handle, int length, out Bitmap data);
         [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr handle);

@@ -184,16 +184,22 @@ function Invoke-ActualTrayExit($Registration, [IntPtr]$ShellWindow) {
     $popup = Wait-Probe {
         $n::Windows($app.Id) | Where-Object { $_.Class -eq '#32768' -and $_.Visible } | Select-Object -First 1
     } 'The right-click did not display the exact application menu.' 5
-    Add-Type -AssemblyName UIAutomationClient
-    Add-Type -AssemblyName UIAutomationTypes
-    $root = [Windows.Automation.AutomationElement]::FromHandle($popup.Handle)
-    $exitName = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, '退出搞词元')
-    $item = Wait-Probe { $root.FindFirst([Windows.Automation.TreeScope]::Descendants, $exitName) } 'The active menu did not expose its own Exit item.' 5
-    Assert-Probe ($item.Current.ProcessId -eq $app.Id -and $item.Current.IsEnabled) 'The Exit item does not belong to the guarded application process.'
-    $result.exitMenuItem = $item.Current.Name
-    $rectangle = $item.Current.BoundingRectangle
-    Assert-Probe ($rectangle.Width -gt 0 -and $rectangle.Height -gt 0) 'The Exit item was not visible.'
-    Assert-Probe ($n::PointerClick([int]($rectangle.Left + $rectangle.Width/2), [int]($rectangle.Top + $rectangle.Height/2), $false)) 'The hosted desktop rejected the Exit click.'
+    $result.actualPopupOwnerVerified = $n::Owner($popup.Handle) -eq $app.Id
+    Assert-Probe $result.actualPopupOwnerVerified 'The active popup menu does not belong to the guarded app process.'
+    $item = Wait-Probe { $n::FindPopupItem($popup.Handle, '退出搞词元') } 'The live Win32 popup did not contain an enabled Exit command.' 5
+    $result.exitMenuItem = $item.Text
+    $result.exitMenuCommand = $item.Id
+    $rectangle = $item.Bounds
+    Assert-Probe ($n::PointerClick([int](($rectangle.Left + $rectangle.Right)/2), [int](($rectangle.Top + $rectangle.Bottom)/2), $false)) 'The hosted desktop rejected the Exit click.'
+    $null = Wait-Probe {
+        if ($app.HasExited) { return $true }
+        $dialog = $n::Windows($app.Id) | Where-Object { $_.Class -eq '#32770' -and $_.Title -ceq '退出搞词元' -and $_.Visible } | Select-Object -First 1
+        if ($dialog) {
+            $t::ChooseQuitPrompt($dialog.Handle, $true)
+            $result.menuExitConfirmation = $true
+            return $true
+        }
+    } 'Choosing the Exit item neither closed the app nor opened its confirmation.' 8
     return $app.WaitForExit(10000)
 }
 
