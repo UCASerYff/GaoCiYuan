@@ -167,7 +167,19 @@ function Confirm-ExactTrayPixels($Bounds, [IntPtr]$ShellWindow) {
 
 function Invoke-ActualTrayExit($Registration, [IntPtr]$ShellWindow) {
     $target = Add-Bounds $Registration.Bounds
-    Assert-Probe (Confirm-ExactTrayPixels $target $ShellWindow) 'The pixels at the exact registered rectangle did not match the packaged tray icon.'
+    if (-not (Confirm-ExactTrayPixels $target $ShellWindow)) {
+        if (-not $result.Contains('overflowInvokedAfterRestart') -or -not $result.overflowInvokedAfterRestart) {
+            $result.overflowInvokedForExit = Open-NotificationOverflow $ShellWindow
+        }
+        # Explorer may keep returning the chevron rectangle until the flyout layout finishes.
+        $target = Wait-Probe {
+            $current = Find-TrayRegistration
+            if ($current -and $current.Window -eq $Registration.Window -and $current.Id -eq $Registration.Id) {
+                $bounds = Add-Bounds $current.Bounds
+                if (Confirm-ExactTrayPixels $bounds $ShellWindow) { $bounds }
+            }
+        } 'The exact registered rectangle did not reach the visible packaged tray icon.' 8
+    }
     Assert-Probe ($n::PointerClick([int]($target.left + $target.width/2), [int]($target.top + $target.height/2), $true)) 'The hosted desktop rejected the test right-click.'
     $popup = Wait-Probe {
         $n::Windows($app.Id) | Where-Object { $_.Class -eq '#32768' -and $_.Visible } | Select-Object -First 1
