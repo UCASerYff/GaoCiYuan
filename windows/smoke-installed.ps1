@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$InstallerPath = (Join-Path $PSScriptRoot 'dist\GaoCiYuan-Windows-4.15-build2-x64-Setup.exe'),
+    [string]$InstallerPath = (Join-Path $PSScriptRoot 'dist\GaoCiYuan-Windows-4.15-build3-x64-Setup.exe'),
     [string]$PreviousInstallerPath,
     [switch]$HeadlessServerOnly,
     [switch]$KeepArtifacts
@@ -9,13 +9,14 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$expectedVersion = '4.15+2'
-$expectedFileVersion = '4.15.2.0'
+$expectedVersion = '4.15+3'
+$expectedFileVersion = '4.15.3.0'
 $previousVersions = @{
     '4.13.5.0' = '4.13+5'
     '4.14.6.0' = '4.14+6'
     '4.14.7.0' = '4.14+7'
     '4.15.1.0' = '4.15+1'
+    '4.15.2.0' = '4.15+2'
 }
 $productName = ConvertFrom-Json '"\u641e\u8bcd\u5143"'
 $fileConnection = ConvertFrom-Json '"\u81ea\u52a8\u8bfb\u53d6\u5feb\u7167\u6587\u4ef6"'

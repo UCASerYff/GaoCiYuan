@@ -1,6 +1,6 @@
 # 搞词元 Windows 4.15
 
-Windows 10（2004 及更新版本）和 Windows 11 的 x64 当前用户安装包。营销版本为 **4.15**，Windows 构建号为 **2**。发行文件为 `GaoCiYuan-Windows-4.15-build2-x64-Setup.exe` 和同名 `.sha256`，核对 SHA-256 后运行安装程序。已有 Windows 版时，从通知区域退出应用，再沿用原安装目录升级。安装程序创建开始菜单入口，注册 `gaociyuan://analytics`，并在缺少 WebView2 时调用 Microsoft 签名的引导程序。卸载移除程序、快捷方式和协议注册，保留用户资料和凭据。此 Windows 发布包目前没有 Authenticode 签名。
+Windows 10（2004 及更新版本）和 Windows 11 的 x64 当前用户安装包。营销版本为 **4.15**，Windows 构建号为 **3**。发行文件为 `GaoCiYuan-Windows-4.15-build3-x64-Setup.exe` 和同名 `.sha256`，核对 SHA-256 后运行安装程序。已有 Windows 版时，从通知区域退出应用，再沿用原安装目录升级。安装程序创建开始菜单入口，注册 `gaociyuan://analytics`，并在缺少 WebView2 时调用 Microsoft 签名的引导程序。卸载移除程序、快捷方式和协议注册，保留用户资料和凭据。此 Windows 发布包目前没有 Authenticode 签名。
 
 构建 2 从原始书法图生成透明圆角、多尺寸 Windows 图标。开始菜单和固定任务栏继续使用同一个程序身份与主程序图标。运行中窗口和通知区域依据系统 DPI 选择图标，保留原托盘操作。应用内 Agent 软件标记在浅深色均保留原形，只有图片缺失时显示文字占位。
 
@@ -72,8 +72,8 @@ py -3.12 -m venv .build-venv
 ./smoke-installed.ps1
 ```
 
-安装冒烟使用单独资料目录与合成凭据，核对快捷方式身份、图标索引和安装后主程序的多尺寸图标组。已有正式 Windows 安装时，冒烟脚本会停止。在干净的 Windows 测试环境可通过 `-PreviousInstallerPath` 提供 4.13+5、4.14+6、4.14+7 或 4.15+1 安装包路径，按顺序安装两个构建并验证资料。直接运行 `GaoCiYuan-cli.exe` 会显示命令帮助，标准输出和错误输出使用 UTF-8。可用 `python launch.py --serve --no-browser --data-dir <隔离目录> --no-refresh` 运行只监听本机的测试入口。已构建 CLI 与 Edge 可通过 `node tests/visual-smoke.mjs <CLI 路径> 4.15+2 <截图目录>` 验证代表性页面与高 DPI 布局。
+安装冒烟使用单独资料目录与合成凭据，核对快捷方式身份、图标索引和安装后主程序的多尺寸图标组。已有正式 Windows 安装时，冒烟脚本会停止。在干净的 Windows 测试环境可通过 `-PreviousInstallerPath` 提供 4.13+5、4.14+6、4.14+7、4.15+1 或 4.15+2 安装包路径，按顺序安装两个构建并验证资料。直接运行 `GaoCiYuan-cli.exe` 会显示命令帮助，标准输出和错误输出使用 UTF-8。可用 `python launch.py --serve --no-browser --data-dir <隔离目录> --no-refresh` 运行只监听本机的测试入口。已构建 CLI 与 Edge 可通过 `node tests/visual-smoke.mjs <CLI 路径> 4.15+3 <截图目录>` 验证代表性页面与高 DPI 布局。
 
-可用 PowerShell 7 运行 `./tests/smoke-tray.ps1 -Executable <已安装程序路径> -ExpectedFileVersion 4.15.2.0`，在独立 Windows 桌面与合成资料中验证托盘和退出行为。加 `-ProbeExplorer` 可在当前桌面用隐藏测试窗口核验 Windows Shell 的图标注册和删除。
+可用 PowerShell 7 运行 `./tests/smoke-tray.ps1 -Executable <已安装程序路径> -ExpectedFileVersion 4.15.3.0`，在独立 Windows 桌面与合成资料中验证托盘和退出行为。加 `-ProbeExplorer` 可在当前桌面用隐藏测试窗口核验 Windows Shell 的图标注册和删除。
 
 v4.13 Windows 的附带差异包括原生窗口边框、字体与部分图标、部分平台提示的英文译文，以及悬浮窗视觉效果。Mac 专属的 WidgetKit、Dock/菜单栏集成、CLI 活跃指示点和网络诊断导出未迁移。安装、卸载、更新签名和核心交互在隔离资料下验收；未使用实际 Agent 订阅账户或 macOS 真机。
