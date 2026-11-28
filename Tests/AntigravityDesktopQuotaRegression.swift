@@ -44,6 +44,39 @@ enum AlertRules {
         precondition(Desktop.Route.standalone.bundleIdentifier == "com.google.antigravity")
         precondition(Desktop.Route.embedded.bundleIdentifier == "com.google.GeminiMacOS")
 
+        let compact = "Gemini Models Weekly limit 67% left Resets in 5d 11h 5h limit 100% left"
+        let compactReading = try snapshot(["Signed in as \(email)", "Usage", compact],
+                                          title: "Antigravity Usage", route: .embedded)
+        precondition(compactReading.quotas.map(\.id) == ["gemini-models-weekly", "gemini-models-5h"])
+        precondition(compactReading.quotas.map(\.remaining) == [67, 100])
+        precondition(compactReading.quotas.map(\.windowSeconds) == [604_800, 18_000])
+        precondition(compactReading.quotas[0].resetsAt == date.addingTimeInterval(5 * 86_400 + 11 * 3_600))
+        precondition(compactReading.quotas[1].resetsAt == nil)
+        let splitReading = try snapshot(["Signed in as \(email)", "Gemini Models", "Weekly limit", "67% left",
+                                         "Resets in", "5d 11h", "5h limit", "100% left",
+                                         "Claude and GPT Models", "5h limit: 35.5% left Resets in 2h 17m",
+                                         "Gemini 4 Argon Weekly limit 100% left"], title: "Antigravity Usage", route: .embedded)
+        precondition(Array(splitReading.quotas.prefix(2)) == compactReading.quotas)
+        precondition(splitReading.quotas[2].id == "claude-and-gpt-models-5h")
+        precondition(splitReading.quotas[2].remaining == 35.5)
+        precondition(splitReading.quotas[2].resetsAt == date.addingTimeInterval(2 * 3_600 + 17 * 60))
+        precondition(splitReading.quotas[3].id == "gemini-4-argon-weekly")
+        for invalid in [
+            "Gemini Models Weekly limit 101% left 5h limit 100% left",
+            "Gemini Models Weekly limit 67% left Resets in 5d 11h 11h 5h limit 100% left",
+            "Gemini Models Weekly limit 67% left Resets in tomorrow 5h limit 100% left",
+            "Gemini Models Weekly limit 67% left Resets in 5d 24h 5h limit 100% left",
+            "Gemini Models Weekly limit 67% left 5h limit 80% left Resets in 6h",
+            "Gemini Models Weekly limit 67% left Weekly limit 66% left 5h limit 100% left",
+            "Unrecognized Models Weekly limit 67% left 5h limit 100% left",
+        ] {
+            rejects(.paneNotAvailable) {
+                try snapshot(["Signed in as \(email)", invalid], title: "Antigravity Usage", route: .embedded)
+            }
+        }
+        rejects(.accountNotVerified) { try snapshot([compact], title: "Antigravity Usage", route: .embedded) }
+        rejects(.paneNotAvailable) { try snapshot(["Signed in as \(email)", compact]) }
+
         rejects(.paneNotAvailable) { try snapshot(["Signed in as \(email)"] + lines, title: "Gemini Usage Limits", route: .embedded) }
         rejects(.paneNotAvailable) { try snapshot(["Signed in as \(email)"] + lines, route: .embedded) }
         rejects(.paneNotAvailable) { try snapshot(["Signed in as \(email)"] + lines, title: "Google Settings") }
@@ -60,6 +93,6 @@ enum AlertRules {
             try Desktop.parsePane(title: "View Usage", lines: lines, route: .standalone,
                                   expectedEmail: "owner example.com", observedAt: date)
         }
-        print("PASS: desktop Antigravity source scope, account evidence, quota labels, unknown groups and limits.")
+        print("PASS: desktop Antigravity source scope, account evidence, compact quota windows and reset countdowns.")
     }
 }

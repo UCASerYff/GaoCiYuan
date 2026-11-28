@@ -1,8 +1,8 @@
 import AppKit
 import ApplicationServices
+import Security
 
-/// Reads the focused, already open quota pane in the user's Google client. The connector
-/// never activates either app, modifies its accessibility tree, or navigates inside it.
+/// Reads the focused, already open quota pane in the user's Google client.
 enum AntigravityDesktopQuota {
     enum Failure: LocalizedError, Equatable {
         case invalidAccount, permissionRequired, appNotVisible, paneNotAvailable, accountNotVerified, clientNotResponding
@@ -93,6 +93,9 @@ enum AntigravityDesktopQuota {
         let strings = lines.map(displayText)
         let identities = accountEvidence(strings)
         guard !identities.isEmpty, identities.allSatisfy({ $0.email == email }) else { throw Failure.accountNotVerified }
+        if route == .embedded, let quotas = try GeminiEmbeddedAntigravityQuota.parse(lines: strings, observedAt: observedAt) {
+            return try makePane(quotas: quotas, route: route, observedAt: observedAt, identityIndices: identities.flatMap(\.indices))
+        }
         var quotas: [Quota] = []
         var group: String?
         var seen = Set<String>()
@@ -114,12 +117,16 @@ enum AntigravityDesktopQuota {
                                 usedPercent: label.used ? percent : 100 - percent,
                                 resetsAt: nil, windowSeconds: label.window.seconds))
         }
+        return try makePane(quotas: quotas, route: route, observedAt: observedAt, identityIndices: identities.flatMap(\.indices))
+    }
+
+    private static func makePane(quotas: [Quota], route: Route, observedAt: Date, identityIndices: [Int] = []) throws -> ParsedPane {
         guard !quotas.isEmpty else { throw Failure.paneNotAvailable }
         var snapshot = UsageSnapshot.empty(source: route.snapshotSource)
         snapshot.observedAt = observedAt
         snapshot.quotas = quotas
         try snapshot.validate()
-        return ParsedPane(snapshot: snapshot, identityIndices: identities.flatMap { $0.indices })
+        return ParsedPane(snapshot: snapshot, identityIndices: identityIndices)
     }
 
     private static func displayText(_ value: String) -> String {
@@ -194,17 +201,33 @@ enum AntigravityDesktopQuota {
     private static let modalRoles: Set<String> = ["AXSheet", "AXPopover", "AXDialog"]
     private static let textRoles: Set<String> = ["AXStaticText", "AXHeading"]
     private static let settingsTitles: Set<String> = ["settings", "preferences", "antigravity settings", "gemini settings", "设置", "設定"]
+    private static let geminiMenuLock = NSLock()
 
     private static func readClient(_ client: Client, route: Route, email: String) throws -> UsageSnapshot {
-        let query = AccessibilityQuery()
+        let query = AccessibilityQuery(timeout: route == .embedded ? .seconds(8) : .seconds(2),
+                                       messagingTimeout: route == .embedded ? 0.30 : 0.12)
         let app = AXUIElementCreateApplication(client.pid)
         try query.prepare(app)
-        guard let window = try query.element(app, kAXFocusedWindowAttribute) else { throw Failure.paneNotAvailable }
+        guard let window = try query.element(app, kAXFocusedWindowAttribute) else {
+            if route == .embedded { Log.connectors.notice("Gemini Antigravity missing focused window") }
+            throw Failure.paneNotAvailable
+        }
         try query.prepare(window)
         var windowPID: pid_t = 0
         guard AXUIElementGetPid(window, &windowPID) == .success, windowPID == client.pid,
               try !query.isHidden(window), try !query.isTrue(window, kAXMinimizedAttribute) else { throw Failure.paneNotAvailable }
         let windowTitle = try query.string(window, kAXTitleAttribute)
+        if route == .embedded {
+            guard geminiMenuLock.try() else { throw Failure.clientNotResponding }
+            defer { geminiMenuLock.unlock() }
+            if let picker = try findGeminiPicker(in: window, query: query) {
+                Log.connectors.notice("Gemini Antigravity scoped picker detected")
+                if let menu = try findGeminiMenu(picker, query: query), let pane = try openedGeminiPane(menu, query: query) {
+                    Log.connectors.notice("Gemini Antigravity expanded usage pane detected")
+                    return try readEmbeddedMenu(menu, pane: pane, picker: picker, app: app, window: window, email: email, query: query)
+                }
+            }
+        }
         let settings = settingsTitles.contains(windowTitle.lowercased()) || route.isQuotaTitle(windowTitle)
         var panes: [(AXUIElement, String)] = []
         try findPanes(window, route: route, inSettings: settings, depth: 0, query: query, into: &panes)
@@ -218,6 +241,234 @@ enum AntigravityDesktopQuota {
         guard let current = try query.element(app, kAXFocusedWindowAttribute), CFEqual(current, window),
               try !query.isTrue(window, kAXMinimizedAttribute), try !query.isHidden(pane) else { throw Failure.paneNotAvailable }
         return parsed.snapshot
+    }
+
+    private struct GeminiPicker {
+        let button: AXUIElement
+        let container: AXUIElement
+        let webArea: AXUIElement
+        let origin: URL
+    }
+
+    private struct GeminiMenu {
+        let root: AXUIElement
+        let disclosure: AXUIElement
+    }
+
+    private static func label(_ element: AXUIElement, query: AccessibilityQuery) throws -> [String] {
+        try [kAXTitleAttribute, kAXDescriptionAttribute].map { try query.string(element, $0).lowercased() }
+    }
+
+    private static func hasMenuLabel(_ element: AXUIElement, _ expected: String, query: AccessibilityQuery) throws -> Bool {
+        try label(element, query: query).contains(expected) || query.leafText(element).lowercased() == expected
+            || query.string(element, kAXHelpAttribute).lowercased() == expected
+    }
+
+    private static func isModelLabel(_ labels: [String]) -> Bool {
+        labels.contains { $0 == "select model" || $0.hasPrefix("select model, current:") }
+    }
+
+    private static func geminiOrigin(_ web: AXUIElement, query: AccessibilityQuery) throws -> URL? {
+        guard let url = try query.url(web),
+              let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              parts.scheme == "http", parts.host == "127.0.0.1", let port = parts.port, (1...65535).contains(port),
+              parts.user == nil, parts.password == nil,
+              parts.queryItems?.filter({ $0.name == "hostVariant" }).map(\.value) == ["gemini-app"] else { return nil }
+        return URL(string: "http://127.0.0.1:\(port)")
+    }
+
+    private static func findGeminiPicker(in element: AXUIElement, webArea: AXUIElement? = nil, origin: URL? = nil, depth: Int = 0,
+                                         query: AccessibilityQuery) throws -> GeminiPicker? {
+        guard depth < 8 else { return nil }
+        let role = try query.string(element, kAXRoleAttribute)
+        guard [kAXWindowRole, kAXScrollAreaRole, kAXGroupRole, "AXWebArea", kAXSplitGroupRole].contains(role),
+              try !query.isHidden(element) else { return nil }
+        let origin = role == "AXWebArea" ? try geminiOrigin(element, query: query) : origin
+        let webArea = role == "AXWebArea" ? element : webArea
+        guard role != "AXWebArea" || origin != nil else { return nil }
+        // The sidebar holds user conversations, outside the quota reader's scope.
+        if try label(element, query: query).contains("sidebar") { return nil }
+        let children = try query.list(element)
+        if let origin, let webArea {
+            let buttons = try children.filter {
+                try query.string($0, kAXRoleAttribute) == kAXPopUpButtonRole &&
+                    isModelLabel(label($0, query: query)) && !query.isHidden($0)
+            }
+            guard buttons.count <= 1 else { throw Failure.paneNotAvailable }
+            if let button = buttons.first { return GeminiPicker(button: button, container: element, webArea: webArea, origin: origin) }
+        }
+        for child in children {
+            if let found = try findGeminiPicker(in: child, webArea: webArea, origin: origin, depth: depth + 1, query: query) { return found }
+        }
+        return nil
+    }
+
+    private static func findGeminiMenu(_ picker: GeminiPicker, query: AccessibilityQuery) throws -> GeminiMenu? {
+        var menus: [GeminiMenu] = []
+        try collectGeminiMenus(in: picker.container, requireModelLabel: false, query: query, into: &menus)
+        if menus.isEmpty {
+            try collectGeminiMenus(in: picker.webArea, requireModelLabel: true, query: query, into: &menus)
+        }
+        if menus.isEmpty {
+            let kinds = try query.list(picker.container).prefix(20).map { try query.string($0, kAXRoleAttribute) }
+            Log.connectors.notice("Gemini Antigravity composer roles: \(kinds.joined(separator: ","), privacy: .public)")
+        }
+        guard menus.count <= 1 else { throw Failure.paneNotAvailable }
+        return menus.first
+    }
+
+    private static func collectGeminiMenus(in node: AXUIElement, requireModelLabel: Bool, depth: Int = 0, query: AccessibilityQuery,
+                                           into menus: inout [GeminiMenu]) throws {
+        guard depth < 8, try !query.isHidden(node) else { return }
+        let role = try query.string(node, kAXRoleAttribute)
+        if role == kAXMenuRole {
+            if requireModelLabel, try !isModelLabel(label(node, query: query)) { return }
+            if let disclosure = try geminiDisclosure(in: node, query: query) {
+                menus.append(GeminiMenu(root: node, disclosure: disclosure))
+            }
+            return
+        }
+        guard depth == 0 || [kAXGroupRole, kAXUnknownRole, kAXPopoverRole, kAXPopUpButtonRole, kAXScrollAreaRole,
+                             "AXLayoutArea", "AXLayoutItem"].contains(role),
+              try !label(node, query: query).contains("sidebar") else { return }
+        for child in try query.list(node) {
+            try collectGeminiMenus(in: child, requireModelLabel: requireModelLabel, depth: depth + 1, query: query, into: &menus)
+        }
+    }
+
+    private static func geminiDisclosure(in menu: AXUIElement, query: AccessibilityQuery) throws -> AXUIElement? {
+        let candidates = try query.list(menu).filter { try hasMenuLabel($0, "view usage", query: query) && !query.isHidden($0) }
+        var controls: [AXUIElement] = []
+        var expanded: [AXUIElement] = []
+        for candidate in candidates where !controls.contains(where: { CFEqual($0, candidate) }) {
+            let state = try query.bool(candidate, kAXExpandedAttribute)
+            if state == true { expanded.append(candidate) }
+            if try state != nil || query.supports("AXExpand", on: candidate) || query.supports("AXCollapse", on: candidate) {
+                controls.append(candidate)
+            }
+        }
+        if expanded.count == 1 { return expanded.first }
+        if expanded.count > 1 {
+            let withUsage = try expanded.filter { try openedGeminiPane(GeminiMenu(root: menu, disclosure: $0), query: query) != nil }
+            guard withUsage.count == 1 else { throw Failure.paneNotAvailable }
+            return withUsage.first
+        }
+        guard controls.count <= 1 else { throw Failure.paneNotAvailable }
+        return controls.first
+    }
+
+    private static func openedGeminiPane(_ menu: GeminiMenu, query: AccessibilityQuery) throws -> AXUIElement? {
+        let expanded = try query.bool(menu.disclosure, kAXExpandedAttribute)
+        if expanded == false { return nil }
+        if try hasCompactQuota(in: menu.disclosure, query: query) { return menu.disclosure }
+        let panels = try query.list(menu.root).filter { panel in
+            try !CFEqual(panel, menu.disclosure) && !query.isHidden(panel)
+                && hasMenuLabel(panel, "view usage", query: query) && hasCompactQuota(in: panel, query: query)
+        }
+        Log.connectors.notice("Gemini Antigravity visible usage panel candidates: \(panels.count, privacy: .public)")
+        guard panels.count <= 1 else { throw Failure.paneNotAvailable }
+        return panels.first
+    }
+
+    private static func hasCompactQuota(in node: AXUIElement, query: AccessibilityQuery) throws -> Bool {
+        let lines = try geminiQuotaText(node, query: query)
+        return try GeminiEmbeddedAntigravityQuota.parse(lines: lines, observedAt: Date()) != nil
+    }
+
+    static func foregroundWindow(_ app: AXUIElement, original: AXUIElement, allowRecreated: Bool = false,
+                                 query: AccessibilityQuery) throws -> AXUIElement {
+        guard try query.isTrue(app, kAXFrontmostAttribute),
+              let activeWindow = try query.element(app, kAXFocusedWindowAttribute),
+              try !query.isTrue(activeWindow, kAXMinimizedAttribute), try !query.isHidden(activeWindow) else {
+            throw Failure.appNotVisible
+        }
+        if CFEqual(activeWindow, original) { return activeWindow }
+        guard allowRecreated, try query.string(activeWindow, kAXSubroleAttribute) == kAXStandardWindowSubrole else {
+            throw Failure.appNotVisible
+        }
+        let standard = try query.list(app, kAXWindowsAttribute).filter {
+            try query.string($0, kAXSubroleAttribute) == kAXStandardWindowSubrole
+        }
+        guard standard.count == 1, let only = standard.first, CFEqual(only, activeWindow) else { throw Failure.appNotVisible }
+        return activeWindow
+    }
+
+    private static func verifyGeminiProcess(_ app: AXUIElement) throws {
+        var pid: pid_t = 0
+        var code: SecCode?
+        var requirement: SecRequirement?
+        guard AXUIElementGetPid(app, &pid) == .success,
+              SecRequirementCreateWithString(#"anchor apple generic and identifier "com.google.GeminiMacOS" and certificate leaf[subject.OU] = "EQHXZ8M8AV""# as CFString, [], &requirement) == errSecSuccess,
+              let requirement,
+              SecCodeCopyGuestWithAttributes(nil, [kSecGuestAttributePid as String: pid] as CFDictionary, [], &code) == errSecSuccess,
+              let code, SecCodeCheckValidity(code, [], requirement) == errSecSuccess else { throw Failure.accountNotVerified }
+    }
+
+    private static func reopenGeminiPane(app: AXUIElement, window: AXUIElement, origin: URL, query: AccessibilityQuery) throws -> AXUIElement {
+        var pressedPicker = false
+        var pressedUsage = false
+        for _ in 0..<28 {
+            do {
+                let window = try foregroundWindow(app, original: window, allowRecreated: true, query: query)
+                if let picker = try findGeminiPicker(in: window, query: query), picker.origin == origin {
+                    if let menu = try findGeminiMenu(picker, query: query) {
+                        if let pane = try openedGeminiPane(menu, query: query) { return pane }
+                        if !pressedUsage {
+                            try query.performFirstSupported(["AXExpand", kAXPressAction], on: menu.disclosure)
+                            pressedUsage = true
+                        }
+                    } else if !pressedPicker {
+                        try query.perform(kAXPressAction, on: picker.button)
+                        pressedPicker = true
+                    }
+                }
+            } catch Failure.clientNotResponding {
+                // AppKit can briefly invalidate accessibility children while changing modes.
+            }
+            try query.pause()
+        }
+        throw Failure.paneNotAvailable
+    }
+
+    private static func readEmbeddedMenu(_ menu: GeminiMenu, pane: AXUIElement, picker: GeminiPicker, app: AXUIElement,
+                                         window: AXUIElement, email: String, query: AccessibilityQuery) throws -> UsageSnapshot {
+        let lines = try geminiQuotaText(pane, query: query)
+        let observedAt = Date()
+        guard let readings = try GeminiEmbeddedAntigravityQuota.parse(lines: lines, observedAt: observedAt) else {
+            Log.connectors.notice("Gemini Antigravity could not parse scoped quota text")
+            throw Failure.paneNotAvailable
+        }
+        _ = try foregroundWindow(app, original: window, query: query)
+        try verifyGeminiProcess(app)
+        guard let current = try findGeminiMenu(picker, query: query), CFEqual(current.root, menu.root),
+              try openedGeminiPane(current, query: query) != nil else { throw Failure.paneNotAvailable }
+        let account = Result {
+            if try query.supports(kAXCancelAction, on: menu.root) {
+                try query.perform(kAXCancelAction, on: menu.root)
+            } else {
+                try query.perform(kAXPressAction, on: picker.button)
+            }
+            Log.connectors.notice("Gemini Antigravity closed usage menu for native account verification")
+            return try readGeminiAccount(app: app, window: window, query: query)
+        }
+        let restore = AccessibilityQuery(timeout: .seconds(4), checksCancellation: false, messagingTimeout: 0.3)
+        let reopened = Result { try reopenGeminiPane(app: app, window: window, origin: picker.origin, query: restore) }
+        guard try account.get() == email else { throw Failure.accountNotVerified }
+        guard try geminiQuotaText(reopened.get(), query: query) == lines else { throw Failure.paneNotAvailable }
+        return try makePane(quotas: readings, route: .embedded, observedAt: observedAt).snapshot
+    }
+
+    private static func geminiQuotaText(_ node: AXUIElement, depth: Int = 0, query: AccessibilityQuery) throws -> [String] {
+        guard depth < 8, try !query.isHidden(node) else { return [] }
+        let role = try query.string(node, kAXRoleAttribute)
+        let structural = [kAXGroupRole, kAXUnknownRole, kAXScrollAreaRole, kAXMenuItemRole, "AXLayoutArea", "AXLayoutItem"]
+        if textRoles.contains(role) { return [try query.leafText(node)].filter { !$0.isEmpty } }
+        guard depth == 0 || structural.contains(role) else { return [] }
+        let children = try query.list(node)
+        let text = try children.flatMap { try geminiQuotaText($0, depth: depth + 1, query: query) }
+        if !text.isEmpty { return text }
+        let leaf = try query.leafText(node)
+        return leaf.lowercased().contains("limit") ? [leaf] : []
     }
 
     private static func findPanes(_ element: AXUIElement, route: Route, inSettings: Bool, depth: Int,
@@ -275,19 +526,51 @@ enum AntigravityDesktopQuota {
         }
     }
 
-    private final class AccessibilityQuery {
-        private let deadline = ContinuousClock.now + .seconds(2)
-        private var remaining = 700
+    final class AccessibilityQuery {
+        private let deadline: ContinuousClock.Instant
+        private let checksCancellation: Bool
+        private let messagingTimeout: Float
+        private var remaining = 1200
+
+        init(timeout: Duration = .seconds(2), checksCancellation: Bool = true, messagingTimeout: Float = 0.12) {
+            deadline = ContinuousClock.now + timeout
+            self.checksCancellation = checksCancellation
+            self.messagingTimeout = messagingTimeout
+        }
 
         private func checkBudget() throws {
-            try Task.checkCancellation()
+            if checksCancellation { try Task.checkCancellation() }
             guard ContinuousClock.now < deadline, remaining > 0 else { throw Failure.clientNotResponding }
             remaining -= 1
         }
 
         func prepare(_ element: AXUIElement) throws {
             try checkBudget()
-            guard AXUIElementSetMessagingTimeout(element, 0.12) == .success else { throw Failure.clientNotResponding }
+            guard AXUIElementSetMessagingTimeout(element, messagingTimeout) == .success else { throw Failure.clientNotResponding }
+        }
+
+        func perform(_ action: String, on element: AXUIElement) throws {
+            try prepare(element)
+            let result = AXUIElementPerformAction(element, action as CFString)
+            if result == .apiDisabled { throw Failure.permissionRequired }
+            guard result == .success else { throw Failure.paneNotAvailable }
+        }
+
+        func supports(_ action: String, on element: AXUIElement) throws -> Bool {
+            try prepare(element)
+            var actions: CFArray?
+            guard AXUIElementCopyActionNames(element, &actions) == .success else { return false }
+            return (actions as? [String])?.contains(action) == true
+        }
+
+        func performFirstSupported(_ actions: [String], on element: AXUIElement) throws {
+            guard let action = try actions.first(where: { try supports($0, on: element) }) else { throw Failure.paneNotAvailable }
+            try perform(action, on: element)
+        }
+
+        func pause() throws {
+            try checkBudget()
+            Thread.sleep(forTimeInterval: 0.03)
         }
 
         private func attribute(_ element: AXUIElement, _ name: String) throws -> CFTypeRef? {
@@ -313,6 +596,12 @@ enum AntigravityDesktopQuota {
             return ""
         }
 
+        func url(_ element: AXUIElement) throws -> URL? {
+            if let value = try attribute(element, kAXURLAttribute) as? URL { return value }
+            let text = try string(element, kAXURLAttribute)
+            return URL(string: text)
+        }
+
         func leafText(_ leaf: AXUIElement) throws -> String {
             for name in [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute] {
                 let value = try string(leaf, name)
@@ -322,7 +611,11 @@ enum AntigravityDesktopQuota {
         }
 
         func isTrue(_ element: AXUIElement, _ name: String) throws -> Bool {
-            (try attribute(element, name) as? Bool) == true
+            try bool(element, name) == true
+        }
+
+        func bool(_ element: AXUIElement, _ name: String) throws -> Bool? {
+            try attribute(element, name) as? Bool
         }
 
         func isHidden(_ element: AXUIElement) throws -> Bool {
@@ -333,6 +626,14 @@ enum AntigravityDesktopQuota {
             if let visible = try children(parent, attribute: kAXVisibleChildrenAttribute) { return visible }
             guard role != "AXScrollArea" else { return [] }
             return try children(parent, attribute: kAXChildrenAttribute) ?? []
+        }
+
+        func list(_ parent: AXUIElement, _ attributeName: String = kAXChildrenAttribute) throws -> [AXUIElement] {
+            if let list = try attribute(parent, attributeName) as? [AXUIElement] {
+                guard list.count <= 64 else { throw Failure.paneNotAvailable }
+                return list
+            }
+            return try children(parent, attribute: attributeName) ?? []
         }
 
         private func children(_ parent: AXUIElement, attribute name: String) throws -> [AXUIElement]? {

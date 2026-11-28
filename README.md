@@ -62,7 +62,7 @@
 
 - 账户设置中启用 Antigravity 自动同步并填写对应的 Google 登录邮箱。macOS 的 Gemini 内置版和独立版分开建账户。独立版可选 CLI 状态栏推送或桌面额度面板，Gemini 内置版使用桌面额度面板。
 - 独立 CLI 只需一次设置。复制应用内的状态栏配置，加入 Antigravity CLI 的 `~/.gemini/antigravity-cli/settings.json`，并在已登录的正常 CLI 会话中使用。已有自定义状态栏时，将接收命令合并进原脚本，并让两个命令分别收到同一份标准输入。搞词元不会改写 CLI 设置。CLI 状态变化时推送已登录邮箱和各额度窗。搞词元仅保存本地额度数据，匹配邮箱后自动更新。CLI 静默时按上次观测时间显示。 [Google 官方状态栏说明](https://antigravity.google/docs/cli/statusline/)
-- 桌面读取经 macOS 辅助功能授权。在对应客户端打开额度面板并保持窗口可见。搞词元只在面板本身包含可匹配的登录邮箱和额度时更新。两种客户端的实际辅助功能树仍需用签名实机核对。 [Gemini 内置 Antigravity](https://support.google.com/gemini/answer/18755601) · [独立版额度面板](https://antigravity.google/docs/models#select-a-model)
+- 桌面读取经 macOS 辅助功能授权。在前台 Gemini 的 Antigravity 模型菜单打开 **View Usage**。搞词元短暂切换到同一 Gemini 窗口的原生账号菜单，核对当前邮箱后恢复用量菜单。只在邮箱与设置一致、额度内容确认有效时更新。重置时间按 Google 显示的倒计时精度换算，Google 未显示倒计时的额度窗不填重置时间。独立版仍要求在对应额度面板中核对账号。 [Gemini 内置 Antigravity](https://support.google.com/gemini/answer/18755601) · [独立版额度面板](https://antigravity.google/docs/models#select-a-model)
 
 ## V4.14 / build 16
 

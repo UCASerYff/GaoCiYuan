@@ -248,7 +248,9 @@ struct AccountEditor: View {
                     if let guide = URL(string: AntigravityStatusLine.guide) { Link(L("查看 Google 官方说明 ↗"), destination: guide) }
                 }
             } else {
-                Text(L("在对应桌面应用打开额度面板。授权后，搞词元会自动读取可确认账号的可见额度。内置版面板需在实际 Mac 上验证。"))
+                Text(L(account.connection == .geminiApp
+                       ? "在前台 Gemini 打开 Antigravity 模型菜单的 View Usage。同步时会短暂打开 Gemini 的原生账号菜单核对邮箱，再返回额度面板。"
+                       : "在对应桌面应用打开额度面板。授权后，搞词元会自动读取可确认账号的可见额度。"))
                     .font(.callout).foregroundStyle(.secondary)
                 Button(L("打开系统设置授权 ↗")) {
                     if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") { NSWorkspace.shared.open(url) }

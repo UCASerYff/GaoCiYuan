@@ -42,7 +42,7 @@ models=(Sources/{Models,AgentTables,ProviderIntegrations,GrokBotUsageReport,Quot
     -framework CryptoKit -o "$fixture/antigravity-statusline"
 "$fixture/antigravity-statusline"
 
-"${compiler[@]}" "${models[@]}" Sources/{AntigravityDesktopQuota,AntigravityStatusLine,Log}.swift \
+"${compiler[@]}" "${models[@]}" Sources/{AntigravityDesktopQuota,GeminiEmbeddedAntigravityQuota,GeminiAntigravityAccountReader,AntigravityStatusLine,Log}.swift \
     Tests/AntigravityDesktopQuotaRegression.swift -framework AppKit -framework ApplicationServices \
     -framework CryptoKit -o "$fixture/antigravity-desktop-quota"
 "$fixture/antigravity-desktop-quota"
