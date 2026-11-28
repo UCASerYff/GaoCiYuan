@@ -173,7 +173,9 @@ struct AccountEditor: View {
 
     private var connectionOptions: [Connection] {
         var options = Connection.creationOptions(account.provider, account.kind)
-        if let existing = store.library.accounts.first(where: { $0.id == account.id }), !options.contains(existing.connection) {
+        if let existing = store.library.accounts.first(where: { $0.id == account.id }),
+           existing.provider == account.provider, existing.kind == account.kind,
+           !options.contains(existing.connection) {
             options.append(existing.connection)
         }
         return options

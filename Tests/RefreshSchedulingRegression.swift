@@ -203,6 +203,30 @@ actor UsageLedger {
         try MonitorStore.validate(legacyRoundTrip)
         try check(legacyRoundTrip.accounts.first?.connection == .file,
                   "Existing Gemini file connections must still decode and validate")
+        let legacyFileDirectory = directory.appendingPathComponent("legacy-gemini-file", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacyFileDirectory, withIntermediateDirectories: true)
+        let legacyFileURL = legacyFileDirectory.appendingPathComponent("library.json")
+        try legacyData.write(to: legacyFileURL)
+        let legacyFileStore = MonitorStore(directory: legacyFileDirectory, fetch: { _, _ in
+            throw MonitorError.message("Unexpected legacy file fixture fetch")
+        })
+        var savedFile = legacyRoundTrip.accounts[0]
+        savedFile.name = "Renamed legacy file"
+        try legacyFileStore.upsert(savedFile)
+        try check(legacyFileStore.library.accounts.first?.name == savedFile.name
+                  && legacyFileStore.library.accounts.first?.connection == .file,
+                  "The saved Gemini file route remains editable")
+        var convertedFile = Account(provider: .openai, kind: .agent, name: "Other provider file", connection: .file)
+        try legacyFileStore.upsert(convertedFile)
+        convertedFile.provider = .gemini
+        let beforeInvalidFileRoutes = try Data(contentsOf: legacyFileURL)
+        for invalid in [convertedFile, Account(provider: .gemini, kind: .agent, name: "New file", connection: .file)] {
+            var rejected = false
+            do { try legacyFileStore.upsert(invalid) } catch { rejected = true }
+            let afterInvalidFileRoute = try Data(contentsOf: legacyFileURL)
+            try check(rejected && beforeInvalidFileRoutes == afterInvalidFileRoute,
+                      "A new or converted Gemini file route must leave the saved accounts untouched")
+        }
 
         var fetchCalls = 0
         let store = MonitorStore(directory: directory, fetch: { _, _ in

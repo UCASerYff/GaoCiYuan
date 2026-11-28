@@ -227,11 +227,18 @@ import UniformTypeIdentifiers
     func upsert(_ account: Account, key: String = "") throws {
         guard !loadFailed else { throw MonitorError.message("数据文件不可写，请检查原文件后再试。") }
         guard account.kind == .agent, account.provider != .custom else { throw MonitorError.message("搞词元仅记录 Agent 软件，不支持 API 账户。") }
+        let existingIndex = library.accounts.firstIndex { $0.id == account.id }
+        if account.provider == .gemini && account.connection == .file {
+            guard let existingIndex, library.accounts[existingIndex].provider == .gemini,
+                  library.accounts[existingIndex].kind == account.kind, library.accounts[existingIndex].connection == .file else {
+                throw MonitorError.message("Gemini 新连接请选择内置 Antigravity 或 Antigravity 独立版。")
+            }
+        }
         try validateCredentialRetry(for: account, key: key)
         let enteredKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
         var copy = library
         var connectionChanged = false
-        if let i = copy.accounts.firstIndex(where:{$0.id == account.id}) {
+        if let i = existingIndex {
             var edited = account
             let current = copy.accounts[i]
             edited.history = current.history
