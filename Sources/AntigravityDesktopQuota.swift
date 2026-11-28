@@ -5,15 +5,16 @@ import Security
 /// Reads the focused, already open quota pane in the user's Google client.
 enum AntigravityDesktopQuota {
     enum Failure: LocalizedError, Equatable {
-        case invalidAccount, permissionRequired, appNotVisible, paneNotAvailable, accountNotVerified, clientNotResponding
+        case invalidAccount, permissionRequired, appNotVisible, paneNotAvailable, accountNotVerified, clientNotVerified, clientNotResponding
 
         var errorDescription: String? {
             switch self {
             case .invalidAccount: return "请填写要同步额度的 Google 账号邮箱。"
             case .permissionRequired: return "需在「系统设置」中允许搞词元使用辅助功能。"
-            case .appNotVisible: return "请打开所选 Google 客户端的额度面板。"
+            case .appNotVisible: return "请将所选 Google 客户端置于前台并打开额度面板。"
             case .paneNotAvailable: return "未读到所选 Google 客户端的额度面板。"
             case .accountNotVerified: return "额度面板未显示与设置一致的已登录 Google 账号。"
+            case .clientNotVerified: return "无法验证所选 Google 客户端的签名。"
             case .clientNotResponding: return "Google 客户端的额度面板暂时不可读取。"
             }
         }
@@ -34,8 +35,12 @@ enum AntigravityDesktopQuota {
             self == .embedded ? "com.google.GeminiMacOS" : "com.google.antigravity"
         }
 
+        var signingRequirement: String {
+            #"anchor apple generic and identifier "\#(bundleIdentifier)" and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "EQHXZ8M8AV""#
+        }
+
         var snapshotSource: String {
-            self == .embedded ? "Gemini 内置 Antigravity · 本机窗口" : "Antigravity 独立版 · 本机窗口"
+            self == .embedded ? "Gemini 内置 Antigravity · 已核验窗口" : "Antigravity 独立版 · 已核验窗口"
         }
 
         func isQuotaTitle(_ value: String) -> Bool {
@@ -56,7 +61,8 @@ enum AntigravityDesktopQuota {
             let matches = NSWorkspace.shared.runningApplications.filter {
                 $0.bundleIdentifier == route.bundleIdentifier && !$0.isTerminated && !$0.isHidden && $0.processIdentifier > 0
             }
-            guard matches.count == 1, let app = matches.first, let launchDate = app.launchDate else { throw Failure.appNotVisible }
+            guard matches.count == 1, let app = matches.first, let launchDate = app.launchDate,
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { throw Failure.appNotVisible }
             return Client(pid: app.processIdentifier, launchDate: launchDate)
         }
         let work = Task.detached(priority: .utility) { try readClient(target, route: route, email: email) }
@@ -66,6 +72,7 @@ enum AntigravityDesktopQuota {
             guard let current = NSRunningApplication(processIdentifier: target.pid) else { return false }
             return current.bundleIdentifier == route.bundleIdentifier && current.launchDate == target.launchDate
                 && !current.isHidden && !current.isTerminated
+                && NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid
         }
         guard stillVisible else { throw Failure.appNotVisible }
         return snapshot
@@ -93,7 +100,8 @@ enum AntigravityDesktopQuota {
         let strings = lines.map(displayText)
         let identities = accountEvidence(strings)
         guard !identities.isEmpty, identities.allSatisfy({ $0.email == email }) else { throw Failure.accountNotVerified }
-        if route == .embedded, let quotas = try GeminiEmbeddedAntigravityQuota.parse(lines: strings, observedAt: observedAt) {
+        if route == .embedded {
+            let quotas = try parseEmbeddedQuotas(strings, observedAt: observedAt)
             return try makePane(quotas: quotas, route: route, observedAt: observedAt, identityIndices: identities.flatMap(\.indices))
         }
         var quotas: [Quota] = []
@@ -118,6 +126,13 @@ enum AntigravityDesktopQuota {
                                 resetsAt: nil, windowSeconds: label.window.seconds))
         }
         return try makePane(quotas: quotas, route: route, observedAt: observedAt, identityIndices: identities.flatMap(\.indices))
+    }
+
+    private static func parseEmbeddedQuotas(_ lines: [String], observedAt: Date) throws -> [Quota] {
+        guard let quotas = try GeminiEmbeddedAntigravityQuota.parse(lines: lines, observedAt: observedAt) else {
+            throw Failure.paneNotAvailable
+        }
+        return quotas
     }
 
     private static func makePane(quotas: [Quota], route: Route, observedAt: Date, identityIndices: [Int] = []) throws -> ParsedPane {
@@ -200,11 +215,12 @@ enum AntigravityDesktopQuota {
     private static let paneRoles: Set<String> = ["AXWindow", "AXSheet", "AXPopover", "AXDialog", "AXGroup", "AXTabGroup", "AXScrollArea", "AXWebArea", "AXSplitGroup"]
     private static let modalRoles: Set<String> = ["AXSheet", "AXPopover", "AXDialog"]
     private static let textRoles: Set<String> = ["AXStaticText", "AXHeading"]
-    private static let settingsTitles: Set<String> = ["settings", "preferences", "antigravity settings", "gemini settings", "设置", "設定"]
+    private static let settingsTitles: Set<String> = ["settings", "preferences", "antigravity settings", "设置", "設定"]
     private static let geminiMenuLock = NSLock()
 
     private static func readClient(_ client: Client, route: Route, email: String) throws -> UsageSnapshot {
-        let query = AccessibilityQuery(timeout: route == .embedded ? .seconds(8) : .seconds(2),
+        try verifyGoogleProcess(client.pid, route: route)
+        let query = AccessibilityQuery(timeout: route == .embedded ? .seconds(8) : .seconds(3),
                                        messagingTimeout: route == .embedded ? 0.30 : 0.12)
         let app = AXUIElementCreateApplication(client.pid)
         try query.prepare(app)
@@ -213,34 +229,53 @@ enum AntigravityDesktopQuota {
             throw Failure.paneNotAvailable
         }
         try query.prepare(window)
-        var windowPID: pid_t = 0
-        guard AXUIElementGetPid(window, &windowPID) == .success, windowPID == client.pid,
-              try !query.isHidden(window), try !query.isTrue(window, kAXMinimizedAttribute) else { throw Failure.paneNotAvailable }
-        let windowTitle = try query.string(window, kAXTitleAttribute)
-        if route == .embedded {
+        guard belongsToProcess(window, pid: client.pid) else { throw Failure.paneNotAvailable }
+        _ = try foregroundWindow(app, original: window, query: query)
+        switch route {
+        case .embedded:
             guard geminiMenuLock.try() else { throw Failure.clientNotResponding }
             defer { geminiMenuLock.unlock() }
-            if let picker = try findGeminiPicker(in: window, query: query) {
-                Log.connectors.notice("Gemini Antigravity scoped picker detected")
-                if let menu = try findGeminiMenu(picker, query: query), let pane = try openedGeminiPane(menu, query: query) {
-                    Log.connectors.notice("Gemini Antigravity expanded usage pane detected")
-                    return try readEmbeddedMenu(menu, pane: pane, picker: picker, app: app, window: window, email: email, query: query)
-                }
-            }
+            guard let picker = try findGeminiPicker(in: window, query: query),
+                  let menu = try findGeminiMenu(picker, query: query),
+                  let pane = try openedGeminiPane(menu, query: query),
+                  belongsToProcess(pane, pid: client.pid) else { throw Failure.paneNotAvailable }
+            return try readEmbeddedMenu(menu, pane: pane, picker: picker, app: app, window: window, email: email, query: query)
+        case .standalone:
+            return try readStandalonePane(app: app, window: window, pid: client.pid, email: email, query: query)
         }
-        let settings = settingsTitles.contains(windowTitle.lowercased()) || route.isQuotaTitle(windowTitle)
-        var panes: [(AXUIElement, String)] = []
-        try findPanes(window, route: route, inSettings: settings, depth: 0, query: query, into: &panes)
-        guard panes.count == 1, let (pane, title) = panes.first else { throw Failure.paneNotAvailable }
+    }
+
+    private static func readStandalonePane(app: AXUIElement, window: AXUIElement, pid: pid_t, email: String,
+                                           query: AccessibilityQuery) throws -> UsageSnapshot {
+        let (pane, title) = try standalonePane(in: window, pid: pid, query: query)
         var leaves: [(element: AXUIElement, text: String)] = []
         try collectText(pane, depth: 0, query: query, into: &leaves)
-        let parsed = try parse(title: title, lines: leaves.map { $0.text }, route: route, email: email, observedAt: Date())
+        let parsed = try parse(title: title, lines: leaves.map { $0.text }, route: .standalone, email: email, observedAt: Date())
+        _ = try foregroundWindow(app, original: window, query: query)
+        let (current, currentTitle) = try standalonePane(in: window, pid: pid, query: query)
+        guard CFEqual(current, pane), currentTitle == title else { throw Failure.paneNotAvailable }
         for index in Set(parsed.identityIndices) {
-            guard try query.leafText(leaves[index].element) == leaves[index].text else { throw Failure.accountNotVerified }
+            let (element, text) = leaves[index]
+            guard belongsToProcess(element, pid: pid), try !query.isHidden(element),
+                  try query.leafText(element) == text else { throw Failure.accountNotVerified }
         }
-        guard let current = try query.element(app, kAXFocusedWindowAttribute), CFEqual(current, window),
-              try !query.isTrue(window, kAXMinimizedAttribute), try !query.isHidden(pane) else { throw Failure.paneNotAvailable }
+        _ = try foregroundWindow(app, original: window, query: query)
         return parsed.snapshot
+    }
+
+    private static func standalonePane(in window: AXUIElement, pid: pid_t,
+                                       query: AccessibilityQuery) throws -> (AXUIElement, String) {
+        let title = try query.string(window, kAXTitleAttribute)
+        let isSettings = settingsTitles.contains(title.lowercased()) || Route.standalone.isQuotaTitle(title)
+        var panes: [(AXUIElement, String)] = []
+        try findStandalonePanes(window, inSettings: isSettings, depth: 0, query: query, into: &panes)
+        guard panes.count == 1, let pane = panes.first, belongsToProcess(pane.0, pid: pid) else { throw Failure.paneNotAvailable }
+        return pane
+    }
+
+    private static func belongsToProcess(_ element: AXUIElement, pid: pid_t) -> Bool {
+        var owner: pid_t = 0
+        return pid > 0 && AXUIElementGetPid(element, &owner) == .success && owner == pid
     }
 
     private struct GeminiPicker {
@@ -393,15 +428,14 @@ enum AntigravityDesktopQuota {
         return activeWindow
     }
 
-    private static func verifyGeminiProcess(_ app: AXUIElement) throws {
-        var pid: pid_t = 0
+    private static func verifyGoogleProcess(_ pid: pid_t, route: Route) throws {
         var code: SecCode?
         var requirement: SecRequirement?
-        guard AXUIElementGetPid(app, &pid) == .success,
-              SecRequirementCreateWithString(#"anchor apple generic and identifier "com.google.GeminiMacOS" and certificate leaf[subject.OU] = "EQHXZ8M8AV""# as CFString, [], &requirement) == errSecSuccess,
+        guard pid > 0,
+              SecRequirementCreateWithString(route.signingRequirement as CFString, [], &requirement) == errSecSuccess,
               let requirement,
               SecCodeCopyGuestWithAttributes(nil, [kSecGuestAttributePid as String: pid] as CFDictionary, [], &code) == errSecSuccess,
-              let code, SecCodeCheckValidity(code, [], requirement) == errSecSuccess else { throw Failure.accountNotVerified }
+              let code, SecCodeCheckValidity(code, [], requirement) == errSecSuccess else { throw Failure.clientNotVerified }
     }
 
     private static func reopenGeminiPane(app: AXUIElement, window: AXUIElement, origin: URL, query: AccessibilityQuery) throws -> AXUIElement {
@@ -434,12 +468,8 @@ enum AntigravityDesktopQuota {
                                          window: AXUIElement, email: String, query: AccessibilityQuery) throws -> UsageSnapshot {
         let lines = try geminiQuotaText(pane, query: query)
         let observedAt = Date()
-        guard let readings = try GeminiEmbeddedAntigravityQuota.parse(lines: lines, observedAt: observedAt) else {
-            Log.connectors.notice("Gemini Antigravity could not parse scoped quota text")
-            throw Failure.paneNotAvailable
-        }
+        let readings = try parseEmbeddedQuotas(lines, observedAt: observedAt)
         _ = try foregroundWindow(app, original: window, query: query)
-        try verifyGeminiProcess(app)
         guard let current = try findGeminiMenu(picker, query: query), CFEqual(current.root, menu.root),
               try openedGeminiPane(current, query: query) != nil else { throw Failure.paneNotAvailable }
         let account = Result {
@@ -471,8 +501,8 @@ enum AntigravityDesktopQuota {
         return leaf.lowercased().contains("limit") ? [leaf] : []
     }
 
-    private static func findPanes(_ element: AXUIElement, route: Route, inSettings: Bool, depth: Int,
-                                  query: AccessibilityQuery, into panes: inout [(AXUIElement, String)]) throws {
+    private static func findStandalonePanes(_ element: AXUIElement, inSettings: Bool, depth: Int,
+                                            query: AccessibilityQuery, into panes: inout [(AXUIElement, String)]) throws {
         guard depth < 12 else { return }
         try query.prepare(element)
         let role = try query.string(element, kAXRoleAttribute)
@@ -482,7 +512,7 @@ enum AntigravityDesktopQuota {
         let scoped = inSettings || modal
         if scoped {
             let title = try query.string(element, kAXTitleAttribute)
-            if route.isQuotaTitle(title) {
+            if Route.standalone.isQuotaTitle(title) {
                 panes.append((element, title))
                 return
             }
@@ -493,7 +523,7 @@ enum AntigravityDesktopQuota {
                 try query.prepare(child)
                 guard try textRoles.contains(query.string(child, kAXRoleAttribute)), try !query.isHidden(child) else { continue }
                 let title = try query.leafText(child)
-                if route.isQuotaTitle(title) {
+                if Route.standalone.isQuotaTitle(title) {
                     panes.append((element, title))
                     return
                 }
@@ -506,7 +536,7 @@ enum AntigravityDesktopQuota {
                 try query.prepare(child)
                 guard try modalRoles.contains(query.string(child, kAXRoleAttribute)) else { continue }
             }
-            try findPanes(child, route: route, inSettings: scoped, depth: depth + 1, query: query, into: &panes)
+            try findStandalonePanes(child, inSettings: scoped, depth: depth + 1, query: query, into: &panes)
         }
     }
 

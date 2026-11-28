@@ -28,9 +28,6 @@ import Token
         }
         .defaultSize(width:1120,height:720)
         .handlesExternalEvents(matching:["*"])
-        .commands {
-            CommandGroup(after:.newItem) {  }
-        }
         Settings {
             TabView {
                 TokenSettingsView().tabItem { Label("模块设置",systemImage:"slider.horizontal.3") }
@@ -116,21 +113,17 @@ import Token
                 self.deliverRoute()
             }
         })
-        for name in ["Standalone.showWindow", "gaociyuan.openMainWindow"] {
-            observers.append(center.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] event in
-                let route = Self.presentationRoute(from: event.userInfo)
-                MainActor.assumeIsolated { self?.requestMainWindow(route: route) }
-            })
-        }
-        for name in ["GaoSeries.app.openSettings", "appOpenSettings"] {
-            observers.append(center.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.wantsSettings = true
-                    self.openRequestedScenes()
-                }
-            })
-        }
+        observers.append(center.addObserver(forName: Notification.Name("gaociyuan.openMainWindow"), object: nil, queue: .main) { [weak self] event in
+            let route = Self.presentationRoute(from: event.userInfo)
+            MainActor.assumeIsolated { self?.requestMainWindow(route: route) }
+        })
+        observers.append(center.addObserver(forName: Notification.Name("GaoSeries.app.openSettings"), object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.wantsSettings = true
+                self.openRequestedScenes()
+            }
+        })
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

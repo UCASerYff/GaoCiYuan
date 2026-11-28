@@ -22,10 +22,10 @@ from gaociyuan.errors import AppError
 from gaociyuan.resources import brand_dir
 from gaociyuan.routes import app_fragment
 from gaociyuan.version import APP_NAME, MARKETING_VERSION
+from gaociyuan.webview_runtime import EDGE_RENDERER
 
 APP_ID = 'com.gaoseries.GaoCiYuan'
 APP_MUTEX = 'Local\\com.gaoseries.GaoCiYuan.desktop'
-RUNTIME_KEY = r'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
 UINT = wintypes.UINT
 HWND = wintypes.HWND
 RECT = wintypes.RECT
@@ -314,7 +314,7 @@ class Desktop:
         profile = self.store.directory / 'webview2'
         profile.mkdir(parents=True, exist_ok=True)
         try:
-            webview.start(self._run, gui='edgechromium', private_mode=False, storage_path=str(profile))
+            webview.start(self._run, gui=EDGE_RENDERER, private_mode=False, storage_path=str(profile))
         finally:
             try:
                 self.tray.stop()
@@ -620,19 +620,3 @@ class PanelBridge:
 
 def utf16_prefix(text: str, units: int) -> str:
     return text.encode('utf-16-le')[:units * 2].decode('utf-16-le', errors='ignore')
-
-
-def runtime_available() -> bool:
-    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
-        for view in (winreg.KEY_WOW64_32KEY, winreg.KEY_WOW64_64KEY):
-            try:
-                with winreg.OpenKey(hive, RUNTIME_KEY, 0, winreg.KEY_READ | view) as key:
-                    if winreg.QueryValueEx(key, 'pv')[0] not in ('', '0.0.0.0'):
-                        return True
-            except OSError:
-                continue
-    return False
-
-
-def startup_error(message: str) -> None:
-    ctypes.windll.user32.MessageBoxW(None, message, f'{APP_NAME} V{MARKETING_VERSION}', 0x10)

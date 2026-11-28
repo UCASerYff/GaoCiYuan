@@ -78,11 +78,13 @@ function quota(id, title, usedPercent, resetHours, windowSeconds) {
 async function seedLegacyAntigravity() {
   const snapshot = { observedAt: instant(-0.05), source: 'Older macOS fixture',
     quotas: [quota('five', 'Gemini Models · 5 小时', 33, 1.5, 18000)], balances: [], costs: [] };
+  const previous = { observedAt: instant(-2), source: 'Archived first reading fixture',
+    quotas: [quota('five', 'Gemini Models · 5 小时', 70, -1, 18000)], balances: [], costs: [] };
   await mkdir(dataDir, { recursive: true });
   await writeFile(path.join(dataDir, 'library.json'), JSON.stringify({
     schema: 1, autoRefresh: false, refreshMinutes: 5, warningThreshold: 20,
     accounts: [{ id: legacyAntigravityID, provider: 'gemini', kind: 'Agent', name: 'Gemini 旧账户',
-      plan: '旧版套餐', enabled: true, connection: legacyAntigravityConnection, snapshot, history: [snapshot] }],
+      plan: '旧版套餐', enabled: true, connection: legacyAntigravityConnection, snapshot, history: [previous, snapshot] }],
   }));
 }
 
@@ -257,12 +259,21 @@ try {
       'Legacy Gemini details did not open.');
     const legacy = await devtools.evaluate(`(() => {
       const inspector = document.querySelector('#agent-inspector');
-      return { text: inspector.innerText, liveControls: !!inspector.querySelector('[data-action="refresh"], [data-action="antigravity-import"]') };
+      const readings = [...inspector.querySelectorAll('.antigravity-history details')];
+      readings.at(-1).open = true;
+      return { text: inspector.innerText, count: readings.length,
+        liveControls: !!inspector.querySelector('[data-action="refresh"], [data-action="antigravity-import"]') };
     })()`);
     assert.match(legacy.text, /macOS 旧版连接/);
     assert.match(legacy.text, /Older macOS fixture/);
+    assert.match(legacy.text, /Archived first reading fixture/);
+    assert.match(legacy.text, /记录中的剩余额度 30%/);
+    assert.equal(legacy.count, 2);
     assert.doesNotMatch(legacy.text, /实测额度/);
     assert.equal(legacy.liveControls, false);
+    await devtools.evaluate(`document.querySelector('#agent-inspector .antigravity-history').scrollIntoView({ block: 'start' })`);
+    const { data: archiveImage } = await devtools.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    await writeFile(path.join(evidence, '11-antigravity-legacy-history-dark-150.png'), Buffer.from(archiveImage, 'base64'));
     await devtools.evaluate(`document.querySelector('#agent-inspector [data-action="add-antigravity"]').click()`);
     const newAccountControls = await devtools.evaluate(`(() => ({
       choices: [...document.querySelector('#account-editor [name="connection"]').options].map(option => option.value),
@@ -339,7 +350,7 @@ try {
     const accounts = (await api('/api/state')).accounts;
     const preserved = accounts.find(account => account.id === legacyAntigravityID);
     assert.equal(preserved.connection, legacyAntigravityConnection);
-    assert.equal(preserved.history.length, 1);
+    assert.equal(preserved.history.length, 2);
     assert.equal(accounts.find(account => account.id === standalone.id).snapshot, null);
     await capture('10-antigravity-history-dark-150', route, 760, 620, 1.5);
     if (testAntigravitySync) {

@@ -14,6 +14,7 @@ import UniformTypeIdentifiers
     @Published var refreshing = Set<UUID>()
     @Published var notice: String?
     private(set) var loadFailed = false
+    private var archivedAccountRecords: [[String: Any]] = []
     let dataURL: URL
     let alerts: AlertCenter
     private var timer: Timer?
@@ -43,23 +44,17 @@ import UniformTypeIdentifiers
             ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("GaoSeries/Token")
         dataURL = root.appendingPathComponent("library.json")
         alerts = AlertCenter(directory: root)
+        library = Library()
         if FileManager.default.fileExists(atPath:dataURL.path) {
             do {
                 let savedData = try Data(contentsOf: dataURL)
-                var loaded = try JSONCoding.decoder.decode(Library.self, from: savedData)
-                // V4.13：永久删除旧 LLM API 账户及专属凭据，不创建迁移备份。
-                let migration = LegacyAccountMigration.removingLLMAccounts(from: loaded)
-                loaded = migration.library
-                for id in migration.removedIDs {
-                    KeyVault.delete(id)
-                    alerts.forget(account: id)
-                }
-                // Rewrite a valid legacy library once even when refresh is disabled.
-                // Business validation below must succeed before anything is saved.
-                let savedFields = try JSONSerialization.jsonObject(with: savedData) as? [String: Any]
-                var changed = savedFields?.keys.contains("station") == true || !migration.removedIDs.isEmpty
+                let migration = try LegacyAccountMigration.prepare(savedData)
+                var loaded = migration.library
+                archivedAccountRecords = migration.archived
+                var changed = migration.needsRewrite
                 for i in 0..<loaded.accounts.count {
                     let a = loaded.accounts[i]
+                    if loaded.accounts[i].moveLegacyAntigravityHistoryToArchive() { changed = true }
                     if a.kind == .agent {
                         let legacyNames = ["ChatGPT / Codex", "OpenAI · ChatGPT", "ChatGPT/Codex", "Codex", "\(a.provider.name)", "\(a.provider.name) · \(a.provider.agentSoftware)"]
                         if legacyNames.contains(a.name) || (a.provider == .openai && a.name.contains("/")) {
@@ -95,21 +90,36 @@ import UniformTypeIdentifiers
                         changed = true
                     }
                     if let forecast = loaded.accounts[i].quotaForecastHistory,
-                       !forecast.sourceKey.hasPrefix(Self.quotaSourceIdentity(loaded.accounts[i]) + ":") {
+                       loaded.accounts[i].snapshot?.isHistoricalAntigravityReading == true ||
+                        !forecast.sourceKey.hasPrefix(Self.quotaSourceIdentity(loaded.accounts[i]) + ":") {
                         loaded.accounts[i].quotaForecastHistory = nil
+                        changed = true
                     }
                 }
                 // 旧存档可能带有滑杆范围外的阈值：钳制回 5...50 而不是锁死存档。
                 if !(5...50).contains(loaded.warningThreshold) { loaded.warningThreshold = min(50, max(5, loaded.warningThreshold)); changed = true }
-                try Self.validate(loaded); library = loaded
+                try Self.validate(loaded)
+                if changed { try persistLibrary(loaded) }
+                library = loaded
                 let unknownConnections = Connection.takeUnknownFallbacks()
+                var notices: [String] = []
                 if !unknownConnections.isEmpty {
-                    notice = "有 \(unknownConnections.count) 处连接方式无法识别，已回退为「本机软件自动读取」，请在账户设置中确认。"
+                    notices.append("有 \(unknownConnections.count) 处连接方式无法识别，已回退为「本机软件自动读取」，请在账户设置中确认。")
                     Log.store.error("unknown connection values fell back to agentLocal")
                 }
-                if changed { save() }
+                if !archivedAccountRecords.isEmpty {
+                    let examples = archivedAccountRecords.prefix(3).compactMap { record -> String? in
+                        guard let name = record["name"] as? String else { return nil }
+                        let label = name.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+                        return label.isEmpty ? nil : String(label.prefix(40))
+                    }.joined(separator: "、")
+                    let names = examples.isEmpty ? "" : "（\(examples)）"
+                    notices.append("有 \(archivedAccountRecords.count) 条历史账户记录无法识别\(names)，已保留在资料库，等待兼容版本读取。")
+                }
+                if !notices.isEmpty { notice = notices.joined(separator: "\n") }
+                finishLegacyCredentialCleanup()
             } catch { library = Library(); loadFailed = true; notice = "数据文件读取失败，原文件已保留，暂时禁止写入。请检查原文件后再试。\n\(error.localizedDescription)" }
-        } else { library = Library() }
+        }
     }
     func start() {
         guard timer == nil, ProcessInfo.processInfo.environment["GAOQINIANSAN_INTEGRATION_TEST"] != "1" else { return }
@@ -161,10 +171,6 @@ import UniformTypeIdentifiers
         }
     }
     nonisolated private static func serviceKey(_ account: Account) -> String {
-        if account.connection == .customAPI, let url = account.customConfig?.url,
-           let host = URL(string: url)?.host { return "host." + host.lowercased() }
-        if [.newAPIQuota, .sub2APIQuota].contains(account.connection),
-           let host = URL(string: account.filePath)?.host { return "host." + host.lowercased() }
         return "provider." + account.provider.rawValue
     }
     // 纯函数校验：不访问实例状态，标记 nonisolated 供 DataTransfer 后台线程直接调用。
@@ -175,24 +181,57 @@ import UniformTypeIdentifiers
                   a.budget.map({ $0.isFinite && $0 > 0 }) ?? true,
                   // 币种必须是大写三字母 ASCII（小写 "usd" 会让预算提醒静默失效）
                   a.currency.count == 3 && a.currency.unicodeScalars.allSatisfy({ CharacterSet.uppercaseLetters.contains($0) && $0.isASCII }) else { throw MonitorError.message("账户设置无效。") }
-            try a.snapshot?.validate(); for s in a.history { try s.validate() }
+            try a.snapshot?.validate()
+            for s in a.history { try s.validate() }
+            for s in a.archivedAntigravitySnapshots ?? [] { try s.validate() }
         }
     }
     func save() {
         guard !loadFailed else { return }
-        for i in library.accounts.indices { library.accounts[i].history=Array(library.accounts[i].history.suffix(300)) }
+        for i in library.accounts.indices {
+            _ = library.accounts[i].moveLegacyAntigravityHistoryToArchive()
+            library.accounts[i].history = Array(library.accounts[i].history.suffix(300))
+        }
         do {
-            try FileManager.default.createDirectory(at:dataURL.deletingLastPathComponent(),withIntermediateDirectories:true)
-            try JSONCoding.encoder.encode(library).write(to:dataURL,options:.atomic)
-            try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:dataURL.path)
+            try persistLibrary(library)
         } catch { notice = "保存失败：\(error.localizedDescription)" }
+    }
+    private func persistLibrary(_ candidate: Library) throws {
+        let staged = try stageAccountSave(candidate)
+        defer { try? FileManager.default.removeItem(at: staged) }
+        try replaceStagedAccountSave(staged)
+    }
+    private func finishLegacyCredentialCleanup() {
+        guard let pending = library.pendingLegacyCredentialIDs else { return }
+        var remaining: [UUID] = []
+        for id in pending {
+            if KeyVault.deleteMigratedCredential(id) { alerts.forget(account: id) }
+            else { remaining.append(id) }
+        }
+        if remaining != pending {
+            var candidate = library
+            candidate.pendingLegacyCredentialIDs = remaining.isEmpty ? nil : remaining
+            do {
+                try persistLibrary(candidate)
+                library = candidate
+            } catch { Log.store.error("legacy credential cleanup journal could not be rewritten") }
+        }
+        if library.pendingLegacyCredentialIDs != nil {
+            notice = [notice, "旧凭据清理尚未完成，下次启动会再试。"].compactMap { $0 }.joined(separator: "\n")
+        }
     }
     private static func fileError(at url: URL) -> NSError {
         let code = Int(errno)
         return NSError(domain: NSPOSIXErrorDomain, code: code, userInfo: [NSFilePathErrorKey: url.path])
     }
     private func stageAccountSave(_ candidate: Library) throws -> URL {
-        let data = try JSONCoding.encoder.encode(candidate)
+        var data = try JSONCoding.encoder.encode(candidate)
+        if !archivedAccountRecords.isEmpty {
+            guard var fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let active = fields["accounts"] as? [[String: Any]] else { throw MonitorError.message("无法保留旧账户资料。") }
+            fields["accounts"] = active + archivedAccountRecords
+            data = try JSONSerialization.data(withJSONObject: fields, options: [.prettyPrinted, .sortedKeys])
+        }
         let directory = dataURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let staged = directory.appendingPathComponent(".library-\(UUID().uuidString).tmp")
@@ -229,9 +268,11 @@ import UniformTypeIdentifiers
     func upsert(_ draft: Account, key: String = "") throws {
         var account = draft
         guard !loadFailed else { throw MonitorError.message("数据文件不可写，请检查原文件后再试。") }
-        guard account.kind == .agent, account.provider != .custom else { throw MonitorError.message("搞词元仅记录 Agent 软件，不支持 API 账户。") }
+        guard account.kind == .agent, account.provider != .custom, account.provider.integration?.kind != .llm else { throw MonitorError.message("搞词元仅记录 Agent 软件，不支持 API 账户。") }
         let existingIndex = library.accounts.firstIndex { $0.id == account.id }
         let existing = existingIndex.map { library.accounts[$0] }
+        let sharedArchivedID = hasArchivedAccountID(account.id)
+        if sharedArchivedID && existing == nil { throw MonitorError.message("该编号仍由历史账户记录使用。") }
         if let previous = existing, let email = previous.antigravityEmail {
             guard account.connection == previous.connection, account.provider == previous.provider,
                   account.antigravityEmail.flatMap(AntigravityStatusLine.canonicalEmail) == email else {
@@ -242,6 +283,12 @@ import UniformTypeIdentifiers
             guard account.antigravitySyncOptions.contains(method),
                   let email = account.antigravityEmail.flatMap(AntigravityStatusLine.canonicalEmail) else {
                 throw MonitorError.message("请为所选的 Antigravity 自动同步方式填写有效的 Google 账号邮箱。")
+            }
+            if existing?.antigravityEmail != email || existing?.connection != account.connection {
+                guard !library.accounts.contains(where: {
+                    $0.id != account.id && $0.usesAntigravityReport && $0.connection == account.connection &&
+                    $0.antigravityEmail.flatMap(AntigravityStatusLine.canonicalEmail) == email
+                }) else { throw MonitorError.message("此来源与邮箱已绑定另一个 Antigravity 账户。") }
             }
             account.antigravityEmail = email
         } else {
@@ -255,6 +302,9 @@ import UniformTypeIdentifiers
         }
         try validateCredentialRetry(for: account, key: key)
         let enteredKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        if sharedArchivedID && !enteredKey.isEmpty {
+            throw MonitorError.message("该凭据也属于已保留的历史账户，无法覆盖。")
+        }
         var copy = library
         var connectionChanged = false
         if let i = existingIndex {
@@ -262,10 +312,16 @@ import UniformTypeIdentifiers
             let current = copy.accounts[i]
             edited.history = current.history
             edited.antigravityReports = current.antigravityReports
+            edited.archivedAntigravitySnapshots = current.archivedAntigravitySnapshots
             let sameSource = Self.sameSource(current, edited)
             if sameSource && enteredKey.isEmpty {
                 edited.snapshot = current.snapshot; edited.lastAttempt = current.lastAttempt; edited.error = current.error; edited.statusNote = current.statusNote; edited.grokBotManualReading = current.grokBotManualReading
-            } else { edited.snapshot = nil; edited.lastAttempt = nil; edited.error = nil; edited.statusNote = nil; edited.grokBotManualReading = nil }
+            } else {
+                var archived = current
+                archived.preserveLegacyAntigravitySnapshot()
+                edited.archivedAntigravitySnapshots = archived.archivedAntigravitySnapshots
+                edited.snapshot = nil; edited.lastAttempt = nil; edited.error = nil; edited.statusNote = nil; edited.grokBotManualReading = nil
+            }
             edited.quotaForecastHistory = sameSource && current.plan == edited.plan && current.currency == edited.currency && enteredKey.isEmpty
                 ? current.quotaForecastHistory : nil
             connectionChanged = current.connection != edited.connection
@@ -274,6 +330,7 @@ import UniformTypeIdentifiers
             var created = account
             created.quotaForecastHistory = nil
             created.antigravityReports = nil
+            created.archivedAntigravitySnapshots = nil
             copy.accounts.append(created)
         }
         try Self.validate(copy)
@@ -283,7 +340,7 @@ import UniformTypeIdentifiers
 
         if !enteredKey.isEmpty { try KeyVault.save(enteredKey,id:account.id) }
         // 切换连接方式且未提供新密钥时，清理旧连接残留的钥匙串条目。
-        else if connectionChanged { KeyVault.delete(account.id) }
+        else if connectionChanged && !sharedArchivedID { KeyVault.delete(account.id) }
         do {
             try replaceStagedAccountSave(staged)
         } catch {
@@ -340,11 +397,23 @@ import UniformTypeIdentifiers
         library = candidate
     }
     func remove(_ id: UUID) {
-        guard !loadFailed else { return }
+        guard !loadFailed, let account = library.accounts.first(where: { $0.id == id }) else { return }
+        var candidate = library
+        candidate.accounts.removeAll { $0.id == id }
+        do { try persistLibrary(candidate) }
+        catch { notice = "移除失败：\(error.localizedDescription)"; return }
         // 3.33：移除可自动发现的 agent 账户时记住选择，下次扫描不再自动加回。
-        if let account = library.accounts.first(where: { $0.id == id }) { MemberDiscovery.rememberRemoval(account) }
+        MemberDiscovery.rememberRemoval(account)
         incompleteCredentialSaves.remove(id)
-        revisions[id,default:0] += 1; library.accounts.removeAll { $0.id == id }; save(); KeyVault.delete(id); alerts.forget(account: id)
+        revisions[id,default:0] += 1
+        library = candidate
+        if !hasArchivedAccountID(id) { KeyVault.delete(id) }
+        alerts.forget(account: id)
+    }
+    private func hasArchivedAccountID(_ id: UUID) -> Bool {
+        archivedAccountRecords.contains { record in
+            (record["id"] as? String).flatMap(UUID.init(uuidString:)) == id
+        }
     }
     func updateSnapshot(_ s: UsageSnapshot, for id: UUID, forecastOrigin: String? = nil) throws {
         guard !loadFailed else { throw MonitorError.message("存档不可写。") }
@@ -364,6 +433,7 @@ import UniformTypeIdentifiers
             library.accounts[i].error = nil; library.accounts[i].statusNote = nil; library.accounts[i].lastAttempt = now; save()
             return
         }
+        library.accounts[i].preserveLegacyAntigravitySnapshot()
         library.accounts[i].history.append(s)
         if library.accounts[i].history.count > 300 { library.accounts[i].history.removeFirst(library.accounts[i].history.count - 300) }
         lastChanges[id] = now
@@ -520,7 +590,7 @@ import UniformTypeIdentifiers
         if !a.warnings(threshold: library.warningThreshold).isEmpty { return .needsAction }
         if a.usesAntigravityReport && a.snapshot?.isHistoricalAntigravityReading != false {
             if a.canRefreshQuota && a.enabled && a.statusNote != nil { return .syncPaused }
-            return a.historicalAntigravityReport != nil || a.unassignedLegacyAntigravityReport != nil ? .historical : .ok
+            return a.historicalAntigravityReport != nil || !a.legacyAntigravityHistory.isEmpty ? .historical : .ok
         }
         if a.error != nil {
             // 凭证类（不自愈）或连续失败才算「需处理」；单次读取失败/服务未启动是「暂时无法同步」。

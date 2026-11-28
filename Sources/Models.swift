@@ -229,14 +229,21 @@ enum AccountKind: String, Codable, CaseIterable {
     case agent = "Agent"
     case llm = "LLM"
 
+    static func recognized(_ raw: String) -> Self? {
+        switch raw {
+        case "Agent", "agent", "会员额度", "membership": return .agent
+        case "LLM", "llm": return .llm
+        default: return nil
+        }
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         let raw = try container.decode(String.self)
-        if raw == "Agent" || raw == "agent" || raw == "会员额度" || raw == "membership" {
-            self = .agent
-        } else {
-            self = .llm
+        guard let kind = Self.recognized(raw) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unrecognized account kind")
         }
+        self = kind
     }
 
     func encode(to encoder: Encoder) throws {
@@ -494,16 +501,10 @@ struct UsageSnapshot: Codable, Equatable {
         embeddedAntigravityManualSource, embeddedAntigravityEntrySource, standaloneAntigravityManualSource, standaloneAntigravityJSONSource,
         "Gemini App 中的 Antigravity", "Gemini App 中的 Antigravity · /usage",
         "Antigravity /usage 手动报告", "Antigravity 本机服务", "Antigravity 独立版 /usage 手动报告",
+        "Gemini 内置 Antigravity · 本机窗口", "Antigravity 独立版 · 本机窗口",
     ]
     var isHistoricalAntigravityReading: Bool {
         isUnverifiedAntigravityReport == true || Self.historicalAntigravitySources.contains(source)
-    }
-    fileprivate var legacyAntigravityConnection: Connection? {
-        switch source {
-        case "Gemini App 中的 Antigravity", "Gemini App 中的 Antigravity · /usage": return .geminiApp
-        case "Antigravity 本机服务": return .agentLocal
-        default: return nil
-        }
     }
     func isFreshObservation(at date: Date) -> Bool {
         !isHistoricalAntigravityReading && (0...900).contains(date.timeIntervalSince(observedAt))
@@ -628,13 +629,14 @@ struct Account: Codable, Identifiable {
     var grokBotManualReading: GrokBotUsageReport.ManualReading? = nil
     // Keep one separate reference per Gemini route, keyed by the persisted connection value.
     var antigravityReports: [String: UsageSnapshot]? = nil
+    var archivedAntigravitySnapshots: [UsageSnapshot]? = nil
     var antigravitySyncMethod: AntigravitySyncMethod? = nil
     var antigravityEmail: String? = nil
     /// Source-verified percentage observations, separate from the quota change history.
     var quotaForecastHistory: QuotaForecastHistory? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, provider, kind, name, plan, connection, filePath, scopeID, region, enabled, budget, currency, snapshot, lastAttempt, error, statusNote, balanceBasis, baselines, history, lastQuotaChangedAt, customConfig, showInRail, autoDiscovered, grokBotManualReading, quotaForecastHistory, antigravityReports, antigravitySyncMethod, antigravityEmail
+        case id, provider, kind, name, plan, connection, filePath, scopeID, region, enabled, budget, currency, snapshot, lastAttempt, error, statusNote, balanceBasis, baselines, history, lastQuotaChangedAt, customConfig, showInRail, autoDiscovered, grokBotManualReading, quotaForecastHistory, antigravityReports, archivedAntigravitySnapshots, antigravitySyncMethod, antigravityEmail
     }
 
     init(id: UUID = UUID(), provider: Provider, kind: AccountKind, name: String, plan: String = "", connection: Connection, filePath: String = "", scopeID: String? = nil, region: String? = nil, enabled: Bool = true, budget: Double? = nil, currency: String = "USD", snapshot: UsageSnapshot? = nil, lastAttempt: Date? = nil, error: String? = nil, statusNote: String? = nil, history: [UsageSnapshot] = []) {
@@ -684,6 +686,7 @@ struct Account: Codable, Identifiable {
         autoDiscovered = try container.decodeIfPresent(Bool.self, forKey: .autoDiscovered) ?? false
         grokBotManualReading = try container.decodeIfPresent(GrokBotUsageReport.ManualReading.self, forKey: .grokBotManualReading)
         antigravityReports = try container.decodeIfPresent([String: UsageSnapshot].self, forKey: .antigravityReports)
+        archivedAntigravitySnapshots = try container.decodeIfPresent([UsageSnapshot].self, forKey: .archivedAntigravitySnapshots)
         antigravitySyncMethod = try? container.decode(AntigravitySyncMethod.self, forKey: .antigravitySyncMethod)
         antigravityEmail = try container.decodeIfPresent(String.self, forKey: .antigravityEmail)
         if var evidence = try? container.decode(QuotaForecastHistory.self, forKey: .quotaForecastHistory) {
@@ -723,19 +726,47 @@ struct Account: Codable, Identifiable {
         if let report = antigravityReports?[connection.rawValue], acceptsAntigravityReport(source: report.source) {
             return report
         }
-        return snapshot.flatMap { $0.legacyAntigravityConnection == connection ? $0 : nil }
-    }
-    // Archived data has no verified observation or import date, even if a legacy timestamp exists.
-    var unassignedLegacyAntigravityReport: UsageSnapshot? {
-        guard usesAntigravityReport else { return nil }
-        if let snapshot, snapshot.isHistoricalAntigravityReading, snapshot.legacyAntigravityConnection != connection {
-            return snapshot
-        }
-        if let report = antigravityReports?[connection.rawValue], report.isHistoricalAntigravityReading,
-           !acceptsAntigravityReport(source: report.source) {
-            return report
-        }
         return nil
+    }
+    var legacyAntigravityHistory: [UsageSnapshot] {
+        guard provider == .gemini, kind == .agent else { return [] }
+        let manual = historicalAntigravityReport
+        var candidates = archivedAntigravitySnapshots ?? []
+        candidates.append(contentsOf: history)
+        if let report = antigravityReports?[connection.rawValue], !acceptsAntigravityReport(source: report.source) {
+            candidates.append(report)
+        }
+        if let snapshot { candidates.append(snapshot) }
+        var unique: [UsageSnapshot] = []
+        for reading in candidates.filter(\.isHistoricalAntigravityReading).sorted(by: { $0.observedAt > $1.observedAt }) {
+            if !(manual.map { Self.sameHistoricalReading($0, reading) } ?? false) &&
+                !unique.contains(where: { Self.sameHistoricalReading($0, reading) }) {
+                unique.append(reading)
+            }
+        }
+        return unique
+    }
+
+    mutating func preserveLegacyAntigravitySnapshot() {
+        guard provider == .gemini, kind == .agent, let snapshot, snapshot.isHistoricalAntigravityReading else { return }
+        if !(archivedAntigravitySnapshots ?? []).contains(where: { Self.sameHistoricalReading($0, snapshot) }) {
+            archivedAntigravitySnapshots = (archivedAntigravitySnapshots ?? []) + [snapshot]
+        }
+    }
+
+    mutating func moveLegacyAntigravityHistoryToArchive() -> Bool {
+        guard provider == .gemini, kind == .agent, history.contains(where: \.isHistoricalAntigravityReading) else { return false }
+        var archive = archivedAntigravitySnapshots ?? []
+        for reading in history where reading.isHistoricalAntigravityReading {
+            if !archive.contains(where: { Self.sameHistoricalReading($0, reading) }) { archive.append(reading) }
+        }
+        archivedAntigravitySnapshots = archive
+        history.removeAll(where: \.isHistoricalAntigravityReading)
+        return true
+    }
+
+    private static func sameHistoricalReading(_ first: UsageSnapshot, _ second: UsageSnapshot) -> Bool {
+        first.observedAt == second.observedAt && first.sameObservation(as: second)
     }
     func stale(at date: Date = Date()) -> Bool { !(snapshot?.isFreshObservation(at: date) ?? false) }
     /// 3.31/3.32 失败兜底（Antigravity、Codex）：读取报错（服务未启动/网络失败/端口未响应）时
@@ -778,10 +809,11 @@ struct Library: Codable {
     var refreshMinutes = 5
     var warningThreshold: Double = 20
     var autoRefresh = true
+    var pendingLegacyCredentialIDs: [UUID]? = nil
 
     // Legacy libraries and module backups may contain removed game fields.
     // The keyed decoder ignores those fields without changing business records.
-    enum CodingKeys: String, CodingKey { case schema, accounts, refreshMinutes, warningThreshold, autoRefresh }
+    enum CodingKeys: String, CodingKey { case schema, accounts, refreshMinutes, warningThreshold, autoRefresh, pendingLegacyCredentialIDs }
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -790,6 +822,7 @@ struct Library: Codable {
         refreshMinutes = try c.decodeIfPresent(Int.self, forKey: .refreshMinutes) ?? 5
         warningThreshold = try c.decodeIfPresent(Double.self, forKey: .warningThreshold) ?? 20
         autoRefresh = try c.decodeIfPresent(Bool.self, forKey: .autoRefresh) ?? true
+        pendingLegacyCredentialIDs = try c.decodeIfPresent([UUID].self, forKey: .pendingLegacyCredentialIDs)
     }
 }
 enum MonitorError: LocalizedError {

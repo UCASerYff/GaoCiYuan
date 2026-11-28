@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$InstallerPath = (Join-Path $PSScriptRoot 'dist\GaoCiYuan-Windows-4.15-build3-x64-Setup.exe'),
+    [string]$InstallerPath = (Join-Path $PSScriptRoot 'dist\GaoCiYuan-Windows-4.16-build1-x64-Setup.exe'),
     [string]$PreviousInstallerPath,
     [switch]$HeadlessServerOnly,
     [switch]$KeepArtifacts
@@ -9,14 +9,15 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$expectedVersion = '4.15+3'
-$expectedFileVersion = '4.15.3.0'
+$expectedVersion = '4.16+1'
+$expectedFileVersion = '4.16.1.0'
 $previousVersions = @{
     '4.13.5.0' = '4.13+5'
     '4.14.6.0' = '4.14+6'
     '4.14.7.0' = '4.14+7'
     '4.15.1.0' = '4.15+1'
     '4.15.2.0' = '4.15+2'
+    '4.15.3.0' = '4.15+3'
 }
 $productName = ConvertFrom-Json '"\u641e\u8bcd\u5143"'
 $fileConnection = ConvertFrom-Json '"\u81ea\u52a8\u8bfb\u53d6\u5feb\u7167\u6587\u4ef6"'
@@ -294,6 +295,18 @@ $uninstallLog = Join-Path $runRoot 'uninstall.log'
 $appExe = Join-Path $installDir 'GaoCiYuan.exe'
 $cliExe = Join-Path $installDir 'GaoCiYuan-cli.exe'
 $launchExe = if ($HeadlessServerOnly) { $cliExe } else { $appExe }
+$webViewLib = Join-Path $installDir '_internal\webview\lib'
+$webViewPlatforms = Join-Path $installDir '_internal\webview\platforms'
+$androidPlatform = Join-Path $webViewPlatforms 'android'
+$clrLib = Join-Path $installDir '_internal\clr_loader\ffi\dlls'
+$obsoleteWebViewPlatforms = @('cef.py', 'cocoa.py', 'gtk.py', 'mshtml.py', 'qt.py')
+$obsoleteWebViewFiles = @(
+    'WebBrowserInterop.x64.dll'
+    'WebBrowserInterop.x86.dll'
+    'pywebview-android.jar'
+    'runtimes\win-arm64\native\WebView2Loader.dll'
+    'runtimes\win-x86\native\WebView2Loader.dll'
+)
 $credentialDir = Join-Path $dataDir 'credentials'
 $libraryFile = Join-Path $dataDir 'library.json'
 $alertsFile = Join-Path $dataDir 'alerts.json'
@@ -347,6 +360,16 @@ try {
     if ($previousInstaller) {
         Invoke-QuietProcess $previousInstaller ($installerArguments + ('/LOG="{0}"' -f $previousInstallLog)) 55000
         Assert-Test ((Get-RegistrationPath) -eq $installDir) 'The previous installer registered the wrong location.'
+        if ($previousVersion -eq '4.15+3') {
+            foreach ($file in $obsoleteWebViewFiles) {
+                Assert-Test (Test-Path -LiteralPath (Join-Path $webViewLib $file) -PathType Leaf) "The baseline did not contain $file."
+            }
+            foreach ($file in $obsoleteWebViewPlatforms) {
+                Assert-Test (Test-Path -LiteralPath (Join-Path $webViewPlatforms $file) -PathType Leaf) "The baseline did not contain $file."
+            }
+            Assert-Test (Test-Path -LiteralPath (Join-Path $androidPlatform '__init__.py') -PathType Leaf) 'The baseline did not contain the Android renderer.'
+            Assert-Test (Test-Path -LiteralPath (Join-Path $clrLib 'x86\ClrLoader.dll') -PathType Leaf) 'The baseline did not contain the x86 .NET bootstrap.'
+        }
         $previousState = & $cliExe --data-dir $dataDir --inspect
         Assert-Test ($LASTEXITCODE -eq 0 -and $previousState -ccontains "version=$previousVersion" -and
             $previousState -ccontains 'status=ready' -and $previousState -ccontains 'accounts=2') 'The previous build did not open the isolated library.'
@@ -359,6 +382,21 @@ try {
         Assert-Test ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -eq $upgradeHashes[$file]) 'Upgrade changed the isolated user data.'
     }
     Assert-LocalDirectory $installDir
+    foreach ($file in $obsoleteWebViewFiles) {
+        Assert-Test (-not (Test-Path -LiteralPath (Join-Path $webViewLib $file))) "Obsolete WebView file remains installed: $file."
+    }
+    foreach ($file in $obsoleteWebViewPlatforms) {
+        Assert-Test (-not (Test-Path -LiteralPath (Join-Path $webViewPlatforms $file))) "Obsolete WebView renderer remains installed: $file."
+    }
+    if (Test-Path -LiteralPath $androidPlatform) {
+        Assert-Test (-not (Get-ChildItem -LiteralPath $androidPlatform -Filter '*.py' -Recurse -File)) 'Obsolete Android renderer files remain installed.'
+    }
+    foreach ($file in @('Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll')) {
+        Assert-Test (Test-Path -LiteralPath (Join-Path $webViewLib $file) -PathType Leaf) "Required WebView file is missing: $file."
+    }
+    Assert-X64Pe (Join-Path $webViewLib 'runtimes\win-x64\native\WebView2Loader.dll')
+    Assert-Test (-not (Test-Path -LiteralPath (Join-Path $clrLib 'x86\ClrLoader.dll'))) 'Obsolete x86 .NET bootstrap remains installed.'
+    Assert-Test (Test-Path -LiteralPath (Join-Path $clrLib 'amd64\ClrLoader.dll') -PathType Leaf) 'Required AMD64 .NET bootstrap is missing.'
     Assert-Test ([string]::Equals((Get-RegistrationPath), $installDir, [StringComparison]::OrdinalIgnoreCase)) 'The installer registered the wrong location.'
     $view = [Microsoft.Win32.RegistryView]::Registry64
     Assert-Test ((Get-RegistryValue $currentUser $view $protocolKey 'URL Protocol') -ceq '') 'The protocol marker is missing.'

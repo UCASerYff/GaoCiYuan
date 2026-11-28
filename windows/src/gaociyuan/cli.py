@@ -81,6 +81,9 @@ def main(argv: list[str] | None = None, *, console: bool = False) -> int:
             if not instance.primary:
                 instance.activate(fragment if args.link else '')
                 return 0
+            from gaociyuan.webview_runtime import require_webview2
+
+            require_webview2()
         credentials = open_credential_store(directory, system_store=not args.data_dir)
         store = TokenStore(directory, credentials=credentials)
         if args.create_empty:
@@ -100,10 +103,7 @@ def main(argv: list[str] | None = None, *, console: bool = False) -> int:
                        start_timer=not args.no_refresh, local_usage=local_usage, discovery=discovery)
         try:
             if desktop:
-                from gaociyuan.desktop import Desktop, runtime_available
-
-                if not runtime_available():
-                    raise AppError('需要 Microsoft Edge WebView2 运行时。请再运行搞词元安装程序以安装运行时。')
+                from gaociyuan.desktop import Desktop
                 if discovery.enabled:
                     def discover_on_startup():
                         with server.work() as admitted:
@@ -122,7 +122,7 @@ def main(argv: list[str] | None = None, *, console: bool = False) -> int:
     except (AppError, OSError) as exc:
         message = getattr(exc, 'message', '无法启动搞词元。请检查资料目录与运行环境。')
         if desktop and not args.desktop_hidden and not (args.inspect or args.create_empty):
-            from gaociyuan.desktop import startup_error
+            from gaociyuan.webview_runtime import startup_error
 
             startup_error(message)
         elif sys.stderr:

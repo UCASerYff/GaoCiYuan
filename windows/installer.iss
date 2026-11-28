@@ -35,6 +35,35 @@ VersionInfoProductName={#ProductName}
 Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[InstallDelete]
+; Files shipped by previous builds before the WebView2 x64-only packaging.
+Type: files; Name: "{app}\_internal\webview\lib\WebBrowserInterop.x64.dll"
+Type: files; Name: "{app}\_internal\webview\lib\WebBrowserInterop.x86.dll"
+Type: files; Name: "{app}\_internal\webview\lib\pywebview-android.jar"
+Type: files; Name: "{app}\_internal\webview\lib\runtimes\win-arm64\native\WebView2Loader.dll"
+Type: files; Name: "{app}\_internal\webview\lib\runtimes\win-x86\native\WebView2Loader.dll"
+Type: files; Name: "{app}\_internal\clr_loader\ffi\dlls\x86\ClrLoader.dll"
+Type: files; Name: "{app}\_internal\webview\platforms\cef.py"
+Type: files; Name: "{app}\_internal\webview\platforms\cocoa.py"
+Type: files; Name: "{app}\_internal\webview\platforms\gtk.py"
+Type: files; Name: "{app}\_internal\webview\platforms\mshtml.py"
+Type: files; Name: "{app}\_internal\webview\platforms\qt.py"
+Type: files; Name: "{app}\_internal\webview\platforms\android\__init__.py"
+Type: files; Name: "{app}\_internal\webview\platforms\android\app.py"
+Type: files; Name: "{app}\_internal\webview\platforms\android\base.py"
+Type: files; Name: "{app}\_internal\webview\platforms\android\event.py"
+Type: files; Name: "{app}\_internal\webview\platforms\android\jclass\__init__.py"
+Type: files; Name: "{app}\_internal\webview\platforms\android\jclass\app.py"
+Type: files; Name: "{app}\_internal\webview\platforms\android\jclass\content.py"
+Type: files; Name: "{app}\_internal\webview\platforms\android\jclass\net.py"
+Type: files; Name: "{app}\_internal\webview\platforms\android\jclass\os.py"
+Type: files; Name: "{app}\_internal\webview\platforms\android\jclass\view.py"
+Type: files; Name: "{app}\_internal\webview\platforms\android\jclass\webkit.py"
+Type: files; Name: "{app}\_internal\webview\platforms\android\jinterface\__init__.py"
+Type: files; Name: "{app}\_internal\webview\platforms\android\jinterface\pywebview.py"
+Type: files; Name: "{app}\_internal\webview\platforms\android\jinterface\view.py"
+Type: files; Name: "{app}\_internal\webview\platforms\android\jinterface\webkit.py"
+
 [Files]
 Source: "{#StageDir}\GaoCiYuan\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\GaoCiYuan\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs

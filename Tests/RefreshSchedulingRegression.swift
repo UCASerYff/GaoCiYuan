@@ -20,8 +20,14 @@ enum Log {
 func L(_ text: String) -> String { text }
 enum KeyVault {
     static var deleted: [UUID] = []
+    static var onMigrationDelete: ((UUID) -> Bool)?
     static func save(_ value: String, id: UUID) throws {}
     static func delete(_ id: UUID) { deleted.append(id) }
+    static func deleteMigratedCredential(_ id: UUID) -> Bool {
+        guard onMigrationDelete?(id) ?? true else { return false }
+        delete(id)
+        return true
+    }
 }
 enum MemberDiscovery { static func rememberRemoval(_ account: Account) {} }
 enum Connectors { static func fetch(_ account: Account, userInitiated: Bool) async throws -> ConnectorResult { fatalError("Unexpected real fetch") } }
@@ -52,12 +58,10 @@ struct UsageLedgerDashboard { static var empty: Self { .init() } }
 struct UsageLedgerSessionSummary { static var empty: Self { .init() } }
 struct UsageLedgerSessionPage { var totalCount = 0; static var empty: Self { .init() } }
 actor UsageLedger {
-    static let didRestoreNotification = Notification.Name("FixtureRestore")
     private(set) var ingested = 0
     init(directory: URL) {}
-    nonisolated static func restoreGeneration() -> UInt64 { 0 }
     func knownDayFingerprints() throws -> [String: String] { [:] }
-    func ingest(_ scan: UsageEngineScan, expectedGeneration: UInt64) throws { ingested += scan.value }
+    func ingest(_ scan: UsageEngineScan) throws { ingested += scan.value }
     func dashboard(fromDay: String?, throughDay: String?) throws -> UsageLedgerDashboard { .empty }
     func sessionSummary() throws -> UsageLedgerSessionSummary { .empty }
     func sessionPage(offset: Int, limit: Int) throws -> UsageLedgerSessionPage { .empty }
@@ -320,7 +324,7 @@ actor UsageLedger {
         let standalone = store.library.accounts[0]
         let latestReport = standalone.historicalAntigravityReport
         try check(rejectedLive && standalone.snapshot == nil && standalone.history == before.history
-                  && standalone.quotaForecastHistory == nil && standalone.unassignedLegacyAntigravityReport == nil
+                  && standalone.quotaForecastHistory == nil && standalone.legacyAntigravityHistory.isEmpty
                   && latestReport?.source == UsageSnapshot.standaloneAntigravityJSONSource
                   && latestReport?.isUnverifiedAntigravityReport == true && latestReport?.quotas.first?.remaining == 45
                   && standalone.stale() && store.health(of: standalone) == .historical,
@@ -408,8 +412,11 @@ actor UsageLedger {
         try JSONCoding.encoder.encode(legacy).write(to: legacyDirectory.appendingPathComponent("library.json"))
         let migrated = MonitorStore(directory: legacyDirectory, fetch: { _, _ in throw MonitorError.message("Unexpected fetch") })
         try check(migrated.library.accounts.map(\.id) == [agentID], "Legacy API account was not removed")
-        try check(KeyVault.deleted == [llmID, customAPIID], "Legacy API credentials were not deleted exactly once")
+        try check(Set(KeyVault.deleted) == Set([llmID, customAPIID]) && KeyVault.deleted.count == 2,
+                  "Legacy API credentials were not deleted exactly once")
         try check(migrated.active.allSatisfy { $0.kind == .agent && $0.provider != .custom }, "Non-agent account entered active set")
+        try checkLegacyCredentialJournal(in: root.appendingPathComponent("legacy-journal"))
+        try checkUnreadableUsageSettings(in: root.appendingPathComponent("broken-settings"))
         for invalid in [
             Account(provider: .custom, kind: .llm, name: "Rejected LLM", connection: .file),
             Account(provider: .custom, kind: .agent, name: "Rejected custom API", connection: .customAPI)
@@ -553,5 +560,68 @@ actor UsageLedger {
         try await checkAntigravityHistoricalImport(in: root.appendingPathComponent("antigravity-import"))
         try await checkAntigravityAutoSync(in: root.appendingPathComponent("antigravity-auto"))
         print("Refresh scheduling regression passed: quota evidence provenance and persistence, historical Antigravity import and atomic save failure, disabled gates, manual override, single-flight, cancellation, concurrency and history policy. Synthetic data only.")
+    }
+
+    @MainActor static func checkLegacyCredentialJournal(in directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("library.json")
+        let active = UUID(), archived = UUID(), retired = UUID()
+        let archive: [String: Any] = ["id": archived.uuidString.lowercased(), "provider": "next-version",
+                                      "kind": "FutureAgent", "name": "Archive fixture", "extra": ["digits": [1, 2]]]
+        let records: [[String: Any]] = [
+            ["id": active.uuidString, "provider": "openai", "kind": "Agent",
+             "name": "Active fixture", "connection": "本机 Codex"],
+            ["id": active.uuidString.lowercased(), "provider": "openai", "kind": "LLM", "name": "Active collision"],
+            ["id": archived.uuidString, "provider": "custom", "kind": "Agent", "name": "Archived collision"],
+            archive,
+            ["id": retired.uuidString, "provider": "openai", "kind": "LLM", "name": "Retired fixture"],
+        ]
+        var persistedBeforeDelete = false, allowDelete = false, attempts: [UUID] = []
+        KeyVault.onMigrationDelete = { id in
+            attempts.append(id)
+            if let bytes = try? Data(contentsOf: url),
+               let raw = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
+               let pending = raw["pendingLegacyCredentialIDs"] as? [String],
+               let records = raw["accounts"] as? [[String: Any]] {
+                persistedBeforeDelete = pending == [retired.uuidString] && records.count == 2
+            }
+            return allowDelete
+        }
+        defer { KeyVault.onMigrationDelete = nil }
+        let invalid = try JSONSerialization.data(withJSONObject: ["schema": 9, "accounts": records])
+        try invalid.write(to: url)
+        let blocked = MonitorStore(directory: directory)
+        let unchanged = try Data(contentsOf: url)
+        try check(blocked.loadFailed && attempts.isEmpty && unchanged == invalid, "Invalid library triggered cleanup")
+
+        try JSONSerialization.data(withJSONObject: ["schema": 1, "accounts": records]).write(to: url)
+        let first = MonitorStore(directory: directory)
+        try check(!first.loadFailed && first.library.accounts.map(\.id) == [active] && persistedBeforeDelete,
+                  "Cleanup started before validated migration persisted")
+        try check(attempts == [retired] && first.library.pendingLegacyCredentialIDs == [retired],
+                  "Cleanup touched an active or archived credential or lost its retry journal")
+        allowDelete = true
+        let second = MonitorStore(directory: directory)
+        try check(second.library.pendingLegacyCredentialIDs == nil && attempts == [retired, retired],
+                  "Retired credential was not retried and cleared")
+        second.save()
+        let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        let savedRecords = saved?["accounts"] as? [[String: Any]]
+        let retained = savedRecords?.first { $0["kind"] as? String == "FutureAgent" }
+        try check((retained.map { NSDictionary(dictionary: $0).isEqual(to: archive) } ?? false)
+                  && saved?["pendingLegacyCredentialIDs"] == nil, "Archive changed after ordinary save")
+    }
+
+    @MainActor static func checkUnreadableUsageSettings(in directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("usage-settings.json")
+        let original = Data("{broken".utf8)
+        try original.write(to: url)
+        let store = UsageAnalyticsStore(directory: directory)
+        var replacement = UsageAnalyticsPreferences()
+        replacement.refreshMinutes = 10
+        store.savePreferences(replacement)
+        let saved = try Data(contentsOf: url)
+        try check(saved == original && store.errorMessage != nil, "Save overwrote unreadable usage settings")
     }
 }

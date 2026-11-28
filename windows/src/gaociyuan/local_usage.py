@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 import csv
 import io
 import json
@@ -12,6 +13,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -42,6 +44,8 @@ from gaociyuan.usage_scan import (
 PAGE_SIZE = 50
 MAX_ARCHIVE_SIZE = 64 * 1024 * 1024
 MAX_DEVICES = 64
+MAC_EVENT_CLIENTS = frozenset(("kimi", "antigravity"))
+MAC_USAGE_ROWS = ("events", "coverageDays", "coverageSessions", "baselineDays", "baselineSessions")
 COLUMNS = "input, output, cache_read, cache_write, reasoning, messages, cost"
 SUMS = ", ".join(f"SUM({column})" for column in COLUMNS.split(", ")[:-1])
 SUMS += ", CASE WHEN COUNT(*) = COUNT(cost) THEN SUM(cost) END"
@@ -197,6 +201,29 @@ def _settings(candidate: object, existing: dict, directory: Path) -> dict:
     }
 
 
+def _stored_settings(raw: object, defaults: dict, directory: Path) -> dict:
+    if not isinstance(raw, dict) or not raw.keys() <= defaults.keys():
+        raise ValueError("invalid usage settings")
+    engine = raw.get("engine", {})
+    if not isinstance(engine, dict) or not engine.keys() <= defaults["engine"].keys():
+        raise ValueError("invalid usage engine settings")
+    authorized = raw.get("authorized", False)
+    if type(authorized) is not bool:
+        raise ValueError("invalid usage authorization")
+    export = raw.get("automaticExportPath")
+    if export is not None:
+        # A saved local drive may be disconnected. Check the saved path's shape
+        # now and its drive, directory and ancestry before any export writes.
+        if (not isinstance(export, str) or not export or len(export) > 4096
+                or export.startswith(("\\\\", "//")) or any(ord(char) < 32 for char in export)):
+            raise ValueError("invalid usage export path")
+        path = Path(export)
+        if not path.is_absolute() or ":" in str(path)[len(path.drive):]:
+            raise ValueError("invalid usage export path")
+    validated = _settings({**raw, "automaticExportPath": None}, defaults, directory)
+    return {**validated, "authorized": authorized, "automaticExportPath": export}
+
+
 def _record_cost(record: UsageEvent, custom: dict, public: dict) -> float | None:
     rates = custom.get(record.model, {})
     if not rates and record.cost is not None:
@@ -225,26 +252,19 @@ class LocalUsageService:
         self.allow_default_paths = allow_default_paths
         self._settings = _defaults()
         self._settings_error = None
+        self._settings_source = None
         self._lock = threading.RLock()
         self._scan_lock = threading.Lock()
         self._revision = 0
         self._last_attempt = None
         self._warnings = None
-        if self.settings_path.exists():
-            try:
-                info = local_item(self.settings_path)
-                if info is None or not stat.S_ISREG(info.st_mode) or info.st_size > 2_000_000:
-                    raise ValueError("invalid preferences file")
-                raw = json.loads(self.settings_path.read_text(encoding="utf-8"))
-                # An unavailable automatic-export folder does not disable scans.
-                validated = _settings({**raw, "automaticExportPath": None}, self._settings, self.directory)
-                validated["authorized"] = raw.get("authorized") is True
-                stored_export = raw.get("automaticExportPath")
-                if isinstance(stored_export, str) and local_path(stored_export) is not None:
-                    validated["automaticExportPath"] = stored_export
-                self._settings = validated
-            except (AppError, OSError, ValueError, TypeError, RecursionError):
-                self._settings_error = "用量采集设置读取失败，原文件已保留。"
+        try:
+            source = self._read_settings_data()
+            if source is not None:
+                self._settings = _stored_settings(json.loads(source.decode("utf-8")), self._settings, self.directory)
+                self._settings_source = source
+        except (AppError, OSError, ValueError, TypeError, RecursionError):
+            self._settings_error = "用量采集设置读取失败，原文件已保留。"
 
     def settings_state(self) -> dict:
         with self._lock:
@@ -255,7 +275,7 @@ class LocalUsageService:
             paths = default_paths(source, allow_default_paths=self.allow_default_paths)
             extra = [Path(value) for value in config["engine"]["customPaths"].get(source.id, [])]
             detected = False
-            for path in (*paths, *extra):
+            for path in (() if config["error"] else (*paths, *extra)):
                 try:
                     if local_item(path) is not None:
                         detected = True
@@ -278,11 +298,35 @@ class LocalUsageService:
             self._settings = next_settings
         return self.settings_state()
 
+    def _read_settings_data(self) -> bytes | None:
+        try:
+            info = local_item(self.settings_path)
+        except FileNotFoundError:
+            return None
+        limit = 2_000_000
+        if info is None or not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            raise ValueError("invalid preferences file")
+        with self.settings_path.open("rb") as stream:
+            source = stream.read(limit + 1)
+        if len(source) > limit:
+            raise ValueError("invalid preferences file")
+        return source
+
     def _write_settings(self, settings: dict) -> None:
         try:
-            _atomic_bytes(self.settings_path, json.dumps(settings, ensure_ascii=False, indent=2).encode("utf-8"))
+            unchanged = self._read_settings_data() == self._settings_source
+        except (OSError, ValueError):
+            unchanged = False
+        if not unchanged:
+            self._settings_error = "用量采集设置已在应用外更改或无法读取，原文件已保留。"
+            self._revision += 1
+            raise AppError(self._settings_error, "usage-settings")
+        source = json.dumps(settings, ensure_ascii=False, indent=2).encode("utf-8")
+        try:
+            _atomic_bytes(self.settings_path, source)
         except OSError as error:
             raise AppError("用量采集设置无法保存。", "usage-settings") from error
+        self._settings_source = source
 
     @contextmanager
     def _db(self, *, create: bool = False):
@@ -339,6 +383,9 @@ class LocalUsageService:
                 PRIMARY KEY (account_key, id)
             );
             CREATE INDEX IF NOT EXISTS cursor_events_at ON cursor_events(at);
+            CREATE TABLE IF NOT EXISTS mac_archive_usage (
+                device TEXT PRIMARY KEY, source_id TEXT NOT NULL, payload TEXT NOT NULL
+            );
         """)
 
     @staticmethod
@@ -424,8 +471,9 @@ class LocalUsageService:
             self._warnings = warnings
             if settings["automaticExportPath"]:
                 try:
-                    export_dir = Path(settings["automaticExportPath"])
-                    if local_item(export_dir) is None or not export_dir.is_dir() or export_dir.resolve().is_relative_to(self.directory.resolve()):
+                    export_dir = local_path(settings["automaticExportPath"])
+                    if (export_dir is None or local_item(export_dir) is None or not export_dir.is_dir()
+                            or export_dir.resolve().is_relative_to(self.directory.resolve())):
                         raise OSError("invalid export path")
                     _atomic_bytes(export_dir / f"搞词元-用量-{device}.json", self.export_json(now, zone))
                 except (AppError, OSError):
@@ -585,6 +633,7 @@ class LocalUsageService:
         return buffer.getvalue().encode("utf-8-sig")
 
     def export_json(self, now: datetime | None = None, zone=None) -> bytes:
+        archive_format = 2
         with self._lock, self._db() as conn:
             metadata = self._metadata(conn)
             if zone is None:
@@ -620,7 +669,16 @@ class LocalUsageService:
                         raise AppError("用量 JSON 超过 20 万条记录。", "usage-limit")
                     devices[device]["cursorEvents"].append({"accountKey": account_key, "eventID": event_id, "timestamp": _archive_date(at),
                                                             "conversationID": session, "model": model, "amounts": _amounts(tuple(values))})
-        payload = {"format": 2, "exportedAt": _archive_date(_date_json(now or utcnow())), "devices": list(devices.values())}
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mac_archive_usage'").fetchone():
+                    for device, source_id, saved in conn.execute("SELECT device, source_id, payload FROM mac_archive_usage"):
+                        if device not in devices or source_id.lower() != device:
+                            raise _invalid_archive()
+                        batch, count = _stored_mac_usage(saved, limit=MAX_RECORDS - records)
+                        devices[device]["id"] = source_id
+                        devices[device]["localUsage"] = batch
+                        archive_format = 4
+                        records += count
+        payload = {"format": archive_format, "exportedAt": _archive_date(_date_json(now or utcnow())), "devices": list(devices.values())}
         result = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
         if len(result) > MAX_ARCHIVE_SIZE:
             raise AppError("用量 JSON 超过 64 MB。", "usage-limit")
@@ -630,15 +688,29 @@ class LocalUsageService:
         batches = _read_archive(payload)
         with self._lock, self._db(create=True) as conn:
             identifier = self._device(conn, self._metadata(conn))
-            for device, label, days, sessions, cursor in batches:
-                if device == identifier:
+            for batch in batches:
+                if batch.device == identifier:
+                    if batch.local_usage is not None:
+                        raise _archive_conflict()
                     continue
-                conn.execute("INSERT INTO devices VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET label = excluded.label", (device, label))
+                conn.execute("INSERT INTO devices VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET label = excluded.label", (batch.device, batch.label))
+                days, sessions = _merge_mac_archive(conn, batch)
                 conn.executemany(_import_sql("imported_days", "device, day, client, session, model", 12), days)
                 conn.executemany(_import_sql("imported_sessions", "device, client, session, model", 17, session=True), sessions)
-                conn.executemany("INSERT OR IGNORE INTO cursor_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", cursor)
-        return {"deviceCount": len(batches), "dayCount": sum(len(item[2]) for item in batches),
-                "sessionCount": sum(len(item[3]) for item in batches)}
+                conn.executemany("INSERT OR IGNORE INTO cursor_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", batch.cursor)
+        return {"deviceCount": len(batches), "dayCount": sum(len(batch.days) for batch in batches),
+                "sessionCount": sum(len(batch.sessions) for batch in batches)}
+
+
+@dataclass
+class _ArchiveDevice:
+    device: str
+    source_id: str
+    label: str
+    days: list[tuple]
+    sessions: list[tuple]
+    cursor: list[tuple]
+    local_usage: dict | None
 
 
 def _import_sql(table: str, keys: str, columns: int, *, session: bool = False) -> str:
@@ -658,6 +730,10 @@ def _import_sql(table: str, keys: str, columns: int, *, session: bool = False) -
 
 def _invalid_archive() -> AppError:
     return AppError("用量包格式或记录无效，已有历史保持不变。", "usage-archive")
+
+
+def _archive_conflict() -> AppError:
+    return AppError("用量包与已保存的 Mac 用量来源记录不一致，无法安全合并。已有历史保持不变。", "usage-archive")
 
 
 def _archive_text(value: object, *, limit: int = 1024, optional: bool = False) -> str | None:
@@ -707,9 +783,293 @@ def _archive_list(raw: dict, key: str, *, optional: bool = False) -> list[dict]:
     return values
 
 
-def _read_archive(payload: dict) -> list:
+def _archive_day(row: dict, device: str) -> tuple:
+    try:
+        day = date.fromisoformat(row.get("day"))
+    except (TypeError, ValueError):
+        raise _invalid_archive() from None
+    if day.isoformat() != row["day"]:
+        raise _invalid_archive()
+    return device, day.isoformat(), *_archive_ids(row), *_archive_amounts(row)
+
+
+def _archive_session(row: dict, device: str) -> tuple:
+    first = _archive_moment(row.get("firstActive"), optional=True)
+    last = _archive_moment(row.get("lastActive"), optional=True)
+    if first and last and first > last:
+        raise _invalid_archive()
+    label = _archive_text(row.get("projectLabel"), limit=160, optional=True)
+    if label and any(char in label for char in "/\\"):
+        raise _invalid_archive()
+    project = _archive_text(row.get("projectKey"), optional=True)
+    if project and not _sha256(project):
+        project = digest(project)
+    return (device, *_archive_ids(row), project, label, first, last,
+            _archive_count(row.get("timedTokens")), _archive_count(row.get("timedDurationMS")), *_archive_amounts(row))
+
+
+def _sha256(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+
+def _versioned_fields(value: object, keys: tuple[str, ...]) -> None:
+    if not isinstance(value, dict) or not value.keys() <= set(keys):
+        raise _invalid_archive()
+
+
+def _mac_source_text(value: object, *, limit: int = 1024) -> str:
+    result = _archive_text(value, limit=limit)
+    try:
+        if value != result or len(result.encode("utf-8")) > limit:
+            raise _invalid_archive()
+    except UnicodeEncodeError as error:
+        raise _invalid_archive() from error
+    return result
+
+
+def _mac_source_amounts(row: dict) -> dict:
+    _versioned_fields(row.get("amounts"), (*AMOUNT_FIELDS, "totalTokens"))
+    result = dict(zip(AMOUNT_FIELDS, _archive_amounts(row)))
+    supplied = row["amounts"].get("totalTokens")
+    if "totalTokens" in row["amounts"] and (type(supplied) is not int or supplied != sum(result[key] for key in TOKEN_FIELDS)):
+        raise _invalid_archive()
+    if result["costUSD"] is None:
+        result.pop("costUSD")
+    return result
+
+
+def _mac_source_row(row: dict, clients: set[str], kind: str) -> dict:
+    names = ("client", "sessionID", "model", "amounts")
+    project_fields = ("projectKey", "projectLabel")
+    if kind == "events":
+        fields = (*names, "eventID", "timestamp", "durationMS", *project_fields)
+    elif kind.endswith("Days"):
+        fields = (*names, "day")
+    else:
+        fields = (*names, "firstActive", "lastActive", "timedTokens", "timedDurationMS", *project_fields)
+    _versioned_fields(row, fields)
+    client = _mac_source_text(row.get("client"), limit=100)
+    if client not in clients:
+        raise _invalid_archive()
+    result = {"client": client, "sessionID": _mac_source_text(row.get("sessionID")),
+              "model": _mac_source_text(row.get("model")),
+              "amounts": _mac_source_amounts(row)}
+    if kind == "events":
+        if not _sha256(row.get("eventID")) or len(result["model"]) > 300:
+            raise _invalid_archive()
+        timestamp = _mac_source_date(row.get("timestamp"))
+        if timestamp == "1970-01-01T00:00:00Z":
+            raise _invalid_archive()
+        result.update(eventID=row["eventID"], timestamp=timestamp, durationMS=_archive_count(row.get("durationMS")))
+    elif kind.endswith("Days"):
+        result["day"] = _archive_day(row, "")[1]
+    else:
+        first = _mac_source_date(row.get("firstActive"), optional=True)
+        last = _mac_source_date(row.get("lastActive"), optional=True)
+        if first and last and first > last:
+            raise _invalid_archive()
+        if first is not None:
+            result["firstActive"] = first
+        if last is not None:
+            result["lastActive"] = last
+        result.update(timedTokens=_archive_count(row.get("timedTokens")), timedDurationMS=_archive_count(row.get("timedDurationMS")))
+    if row.get("projectKey") is not None:
+        if not _sha256(row["projectKey"]):
+            raise _invalid_archive()
+        result["projectKey"] = row["projectKey"]
+    if row.get("projectLabel") is not None:
+        label = _mac_source_text(row["projectLabel"])
+        if len(label) > 160 or "/" in label or "\\" in label:
+            raise _invalid_archive()
+        result["projectLabel"] = label
+    return result
+
+
+def _mac_source_date(value: object, *, optional: bool = False) -> str | None:
+    stamp = _archive_moment(value, optional=optional)
+    # Native Mac archive dates have whole-second precision. Do not truncate
+    # unsupported input and accidentally change an event's provenance.
+    if stamp is not None and ("." in value or "," in value):
+        raise _invalid_archive()
+    return _archive_date(stamp)
+
+
+def _mac_row_key(row: dict, kind: str) -> tuple:
+    if kind == "events":
+        return row["client"], row["eventID"]
+    key = row["client"], row["sessionID"], row["model"]
+    return (row["day"], *key) if kind.endswith("Days") else key
+
+
+def _read_mac_usage(raw: object, archive_format: int, *, limit: int) -> tuple[dict, int]:
+    _versioned_fields(raw, ("clients", *MAC_USAGE_ROWS, "retainedUnknownEventIDs"))
+    raw_clients = raw.get("clients")
+    if (archive_format < 3 or not isinstance(raw_clients, list) or not 1 <= len(raw_clients) <= len(MAC_EVENT_CLIENTS)
+            or any(not isinstance(client, str) or client not in MAC_EVENT_CLIENTS for client in raw_clients)
+            or len(raw_clients) != len(set(raw_clients))):
+        raise _invalid_archive()
+    if archive_format < 4 and raw.get("retainedUnknownEventIDs") is not None:
+        raise _invalid_archive()
+    clients = set(raw_clients)
+    retained = raw.get("retainedUnknownEventIDs")
+    if retained is not None and (not isinstance(retained, list) or len(retained) > limit
+                                 or not all(_sha256(event_id) for event_id in retained) or len(retained) != len(set(retained))):
+        raise _invalid_archive()
+    count = len(retained or [])
+    parsed = {"clients": sorted(clients)}
+    for kind in MAC_USAGE_ROWS:
+        if kind.startswith("baseline") and raw.get(kind) is None:
+            continue
+        rows = _archive_list(raw, kind)
+        count += len(rows)
+        if count > limit:
+            raise _invalid_archive()
+        keyed = {}
+        for row in rows:
+            normalized = _mac_source_row(row, clients, kind)
+            key = _mac_row_key(normalized, kind)
+            if key in keyed:
+                raise _invalid_archive()
+            keyed[key] = normalized
+        parsed[kind] = [keyed[key] for key in sorted(keyed)]
+    if retained is not None:
+        parsed["retainedUnknownEventIDs"] = sorted(retained)
+        marked = set(retained)
+        known = {event["eventID"]: event["sessionID"] for event in parsed["events"]
+                 if event["client"] == "antigravity" and event["model"].lower() not in ("unknown", "gemini-default")}
+        if not marked <= known.keys():
+            raise _invalid_archive()
+        protected_sessions = {known[event_id] for event_id in marked}
+        for kind in ("baselineDays", "baselineSessions"):
+            if any(row["client"] == "antigravity" and row["model"] == "unknown" and row["sessionID"] in protected_sessions
+                   and (any(row["amounts"].values()) or row.get("timedTokens") or row.get("timedDurationMS")) for row in parsed.get(kind, [])):
+                raise _archive_conflict()
+    return parsed, count
+
+
+def _stored_mac_usage(data: str, *, limit: int = MAX_RECORDS) -> tuple[dict, int]:
+    try:
+        return _read_mac_usage(json.loads(data), 4, limit=limit)
+    except (ValueError, TypeError, RecursionError) as error:
+        raise _invalid_archive() from error
+
+
+def _amounts_cover(current: tuple, previous: tuple) -> bool:
+    before, after = previous[:-1], current[:-1]
+    return (all(new >= old for new, old in zip(after, before))
+            and (after != before or previous[-1] is None or current[-1] == previous[-1]))
+
+
+def _rows_cover(current, previous, *, sessions: bool = False) -> bool:
+    key_length = 4 if sessions else 5
+    existing = {row[:key_length]: row for row in current}
+    for old in previous:
+        new = existing.get(old[:key_length])
+        if new is None or not _amounts_cover(new[-len(AMOUNT_FIELDS):], old[-len(AMOUNT_FIELDS):]):
+            return False
+        if sessions and (
+            any(before is not None and before != after for before, after in zip(old[4:6], new[4:6]))
+            or old[6] is not None and (new[6] is None or new[6] > old[6])
+            or old[7] is not None and (new[7] is None or new[7] < old[7])
+            or new[8] < old[8] or new[9] < old[9]
+        ):
+            return False
+    return True
+
+
+def _mac_usage_covers(current: dict, previous: dict) -> bool:
+    if (not set(previous["clients"]) <= set(current["clients"])
+            or not set(previous.get("retainedUnknownEventIDs", [])) <= set(current.get("retainedUnknownEventIDs", []))):
+        return False
+    events = {_mac_row_key(event, "events"): event for event in current["events"]}
+    for old in previous["events"]:
+        new = events.get(_mac_row_key(old, "events"))
+        if (new is None or any(new.get(key) != old.get(key) for key in ("sessionID", "model", "timestamp", "projectKey", "projectLabel"))
+                or new["durationMS"] < old["durationMS"] or not _amounts_cover(_archive_amounts(new), _archive_amounts(old))):
+            return False
+    for kind in MAC_USAGE_ROWS[1:]:
+        sessions = kind.endswith("Sessions")
+        parse = _archive_session if sessions else _archive_day
+        if not _rows_cover((parse(row, "") for row in current.get(kind, [])),
+                           (parse(row, "") for row in previous.get(kind, [])), sessions=sessions):
+            return False
+    return True
+
+
+def _merge_mac_archive(conn: sqlite3.Connection, batch: _ArchiveDevice) -> tuple[list[tuple], list[tuple]]:
+    current = batch.local_usage
+    saved = conn.execute("SELECT source_id, payload FROM mac_archive_usage WHERE device = ?", (batch.device,)).fetchone()
+    previous = _stored_mac_usage(saved[1])[0] if saved is not None else None
+    if current is None and previous is None:
+        return batch.days, batch.sessions
+    if current is not None and saved is not None and saved[0] != batch.source_id:
+        raise _archive_conflict()
+
+    # Swift exports the complete source state for each device plus its materialized
+    # day/session totals. Never add those totals to the same source's event records.
+    managed = sorted(set((current or {}).get("clients", [])) | set((previous or {}).get("clients", [])))
+    keys = ",".join("?" for _ in managed)
+    where = f"WHERE device = ? AND client IN ({keys})"
+    params = (batch.device, *managed)
+    old_days = conn.execute(f"SELECT * FROM imported_days {where}", params).fetchall()
+    old_sessions = conn.execute(f"SELECT * FROM imported_sessions {where}", params).fetchall()
+    new_days = [row for row in batch.days if row[2] in managed]
+    new_sessions = [row for row in batch.sessions if row[1] in managed]
+    newer_rows = _rows_cover(new_days, old_days) and _rows_cover(new_sessions, old_sessions, sessions=True)
+    older_rows = _rows_cover(old_days, new_days) and _rows_cover(old_sessions, new_sessions, sessions=True)
+
+    # On a later legacy import, do not overwrite or add a managed observation.
+    if current is None:
+        if not older_rows:
+            raise _archive_conflict()
+    elif previous is None or _mac_usage_covers(current, previous):
+        covers_new = previous is not None and _mac_usage_covers(previous, current)
+        if not newer_rows or (covers_new and (not older_rows or previous != current)):
+            raise _archive_conflict()
+        if not covers_new:
+            conn.execute(f"DELETE FROM imported_days {where}", params)
+            conn.execute(f"DELETE FROM imported_sessions {where}", params)
+            conn.executemany(_import_sql("imported_days", "device, day, client, session, model", 12), new_days)
+            conn.executemany(_import_sql("imported_sessions", "device, client, session, model", 17, session=True), new_sessions)
+            conn.execute("INSERT INTO mac_archive_usage VALUES (?, ?, ?) ON CONFLICT(device) DO UPDATE SET payload = excluded.payload",
+                         (batch.device, batch.source_id, json.dumps(current, ensure_ascii=False, separators=(",", ":"), allow_nan=False)))
+    elif not older_rows or not _mac_usage_covers(previous, current):
+        raise _archive_conflict()
+
+    return [row for row in batch.days if row[2] not in managed], [row for row in batch.sessions if row[1] not in managed]
+
+
+def _validate_mac_projection(batch: dict, days: list[tuple], sessions: list[tuple]) -> None:
+    # Check totals by original source session and model. The Mac's local time
+    # zone decides the daily buckets, so Windows must not relabel those dates.
+    counter_fields = AMOUNT_FIELDS[:-1]
+
+    def add(groups: dict, key: tuple, counts) -> None:
+        for index, value in enumerate(counts):
+            groups[key][index] += value
+
+    events = defaultdict(lambda: [0] * len(counter_fields))
+    for event in batch["events"]:
+        add(events, _mac_row_key(event, "sessions"), (event["amounts"][field] for field in counter_fields))
+    for name, rows, start in (("Days", days, 2), ("Sessions", sessions, 1)):
+        expected = defaultdict(lambda: [0] * len(counter_fields), {key: totals.copy() for key, totals in events.items()})
+        coverage = {_mac_row_key(row, name): row["amounts"] for row in batch[f"coverage{name}"]}
+        for baseline in batch.get(f"baseline{name}", []):
+            covered = coverage.get(_mac_row_key(baseline, name), {})
+            counts = (max(0, baseline["amounts"][field] - covered.get(field, 0)) for field in counter_fields)
+            add(expected, _mac_row_key(baseline, "sessions"), counts)
+        actual = defaultdict(lambda: [0] * len(counter_fields))
+        for row in rows:
+            if row[start] in batch["clients"]:
+                add(actual, row[start:start + 3], row[-len(AMOUNT_FIELDS):-1])
+        if {key: counts for key, counts in expected.items() if any(counts)} != {key: counts for key, counts in actual.items() if any(counts)}:
+            raise _archive_conflict()
+
+
+def _read_archive(payload: dict) -> list[_ArchiveDevice]:
     if not isinstance(payload, dict) or type(payload.get("format")) is not int or payload["format"] not in (1, 2, 3, 4):
         raise _invalid_archive()
+    archive_format = payload["format"]
     _archive_moment(payload.get("exportedAt"))
     devices = _archive_list(payload, "devices")
     if len(devices) > MAX_DEVICES:
@@ -719,7 +1079,8 @@ def _read_archive(payload: dict) -> list:
     entries = 0
     for raw in devices:
         try:
-            device = str(UUID(raw["id"]))
+            source_id = raw["id"]
+            device = str(UUID(source_id))
         except (AttributeError, ValueError, TypeError, KeyError):
             raise _invalid_archive() from None
         if device in seen_devices:
@@ -733,50 +1094,51 @@ def _read_archive(payload: dict) -> list:
         entries += len(raw_days) + len(raw_sessions) + len(raw_cursor)
         if entries > MAX_RECORDS:
             raise _invalid_archive()
+        local_usage = None
+        if raw.get("localUsage") is not None:
+            if source_id.lower() != device:
+                raise _invalid_archive()
+            _versioned_fields(payload, ("format", "exportedAt", "devices"))
+            _versioned_fields(raw, ("id", "name", "days", "sessions", "cursorEvents", "localUsage"))
+            local_usage, local_count = _read_mac_usage(raw["localUsage"], archive_format, limit=MAX_RECORDS - entries)
+            entries += local_count
         day_keys, session_keys, cursor_keys = set(), set(), set()
         for row in raw_days:
-            try:
-                day = date.fromisoformat(row.get("day"))
-            except (TypeError, ValueError):
-                raise _invalid_archive() from None
-            if day.isoformat() != row["day"]:
-                raise _invalid_archive()
-            client, session, model = _archive_ids(row)
-            key = day.isoformat(), client, session, model
+            parsed = _archive_day(row, device)
+            key = parsed[1:5]
+            client = parsed[2]
             if key in day_keys or (client == "cursor" and not raw_cursor):
                 raise _invalid_archive()
             day_keys.add(key)
-            amounts = _archive_amounts(row)
             if client != "cursor":
-                days.append((device, *key, *amounts))
+                days.append(parsed)
         for row in raw_sessions:
-            client, session, model = key = _archive_ids(row)
-            first = _archive_moment(row.get("firstActive"), optional=True)
-            last = _archive_moment(row.get("lastActive"), optional=True)
-            if key in session_keys or (first and last and first > last) or (client == "cursor" and not raw_cursor):
+            key = _archive_ids(row)
+            client = key[0]
+            if key in session_keys or (client == "cursor" and not raw_cursor):
                 raise _invalid_archive()
             session_keys.add(key)
-            amounts = _archive_amounts(row)
             if client != "cursor":
-                label_value = _archive_text(row.get("projectLabel"), limit=160, optional=True)
-                if label_value and any(char in label_value for char in "/\\"):
+                sessions.append(_archive_session(row, device))
+            else:
+                _archive_amounts(row)
+                first = _archive_moment(row.get("firstActive"), optional=True)
+                last = _archive_moment(row.get("lastActive"), optional=True)
+                if first and last and first > last:
                     raise _invalid_archive()
-                project = _archive_text(row.get("projectKey"), optional=True)
-                if project and (len(project) != 64 or any(char not in "abcdef0123456789" for char in project)):
-                    project = digest(project)
-                sessions.append((device, *key, project, label_value, first, last,
-                                 _archive_count(row.get("timedTokens")), _archive_count(row.get("timedDurationMS")), *amounts))
         for row in raw_cursor:
             key = _archive_text(row.get("accountKey"), limit=64)
             event_id = _archive_text(row.get("eventID"), limit=64)
             conversation = _archive_text(row.get("conversationID"), limit=64)
             amounts = _archive_amounts(row)
             hashes = (key, event_id, conversation)
-            if (any(len(value) != 64 or set(value) - set("0123456789abcdef") for value in hashes)
+            if (not all(_sha256(value) for value in hashes)
                     or str(UUID(hex=key[:32])) != device or (key, event_id) in cursor_keys or amounts[4:6] != (0, 1)):
                 raise _invalid_archive()
             cursor_keys.add((key, event_id))
             cursor.append((device, key, event_id, _archive_moment(row.get("timestamp")), conversation,
                            _archive_text(row.get("model")), *amounts))
-        result.append((device, label, days, sessions, cursor))
+        if local_usage is not None:
+            _validate_mac_projection(local_usage, days, sessions)
+        result.append(_ArchiveDevice(device, source_id, label, days, sessions, cursor, local_usage))
     return result

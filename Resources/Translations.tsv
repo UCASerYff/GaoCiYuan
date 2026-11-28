@@ -686,18 +686,26 @@ Antigravity 自动同步	Antigravity Auto Sync
 复制状态栏配置	Copy Status Line Configuration
 在对应桌面应用打开额度面板。授权后，搞词元会自动读取可确认账号的可见额度。内置版面板需在实际 Mac 上验证。	Open the quota pane in the selected desktop app. With Accessibility permission, visible quotas update automatically when the signed-in account can be verified. The built-in pane requires testing on a Mac.
 历史额度记录	Historical Quota Records
+旧版额度记录	Archived Quota Readings
+查看旧版额度记录	View Archived Quota Readings
+存档中的记录时间	Timestamp in archive
+搞词元账户 ID	GaoCiYuan Account ID
 设置自动同步…	Set Up Auto Sync…
 在账户设置选择 Antigravity 自动同步方式。	Choose an Antigravity auto-sync method in account settings.
 等待已绑定 Google 账号的 Antigravity 状态栏更新。	Waiting for an Antigravity status line update from the linked Google account.
 请填写要同步额度的 Google 账号邮箱。	Enter the email address of the Google account you want to sync.
 需在「系统设置」中允许搞词元使用辅助功能。	Allow GaoCiYuan to use Accessibility in macOS System Settings.
 请打开所选 Google 客户端的额度面板。	Open the quota pane in the selected Google client.
+请将所选 Google 客户端置于前台并打开额度面板。	Bring the selected Google client to the foreground and open its quota pane.
 未读到所选 Google 客户端的额度面板。	The quota pane in the selected Google client could not be read.
 额度面板未显示与设置一致的已登录 Google 账号。	The quota pane does not show the configured signed-in Google account.
+无法验证所选 Google 客户端的签名。	The selected Google client's signature could not be verified.
 Google 客户端的额度面板暂时不可读取。	The Google client's quota pane is temporarily unavailable.
 Antigravity 独立 CLI · 状态栏推送	Standalone Antigravity CLI · Status Line
 Gemini 内置 Antigravity · 本机窗口	Antigravity in Gemini · Desktop Window
 Antigravity 独立版 · 本机窗口	Standalone Antigravity · Desktop Window
+Gemini 内置 Antigravity · 已核验窗口	Antigravity in Gemini · Verified Desktop Window
+Antigravity 独立版 · 已核验窗口	Standalone Antigravity · Verified Desktop Window
 这个 Antigravity 账户已绑定来源和邮箱。切换 Google 账户或来源时请新建账户。	This Antigravity entry already has a linked source and email. Add a new entry to change the Google account or source.
 请为所选的 Antigravity 自动同步方式填写有效的 Google 账号邮箱。	Enter a valid Google account email for the selected Antigravity auto-sync method.
 

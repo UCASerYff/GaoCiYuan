@@ -140,30 +140,6 @@ enum PanelTheme {
         light: NSColor(srgbRed: 0.00, green: 0.62, blue: 0.50, alpha: 1),
         dark: NSColor(srgbRed: 0.20, green: 0.85, blue: 0.68, alpha: 1))
 
-    /// 自定义账户稳定哈希色（3.3）：同一账户永远同一色相，深浅外观各自调明度。
-    static func customColor(_ id: UUID) -> Color {
-        let hash = id.uuidString.unicodeScalars.reduce(0) { ($0 &+ Int($1.value)) & 0x7fffffff }
-        let hue = Double(hash % 360) / 360.0
-        return dynamic(
-            light: NSColor(calibratedHue: hue, saturation: 0.62, brightness: 0.62, alpha: 1),
-            dark: NSColor(calibratedHue: hue, saturation: 0.55, brightness: 0.85, alpha: 1))
-    }
-}
-
-/// 自定义账户首字符圆形徽章（无品牌图标的占位）：账户名首字符 + 稳定哈希色，账户卡与悬浮条共用。
-struct CustomAccountMark: View {
-    let name: String
-    let accountID: UUID
-    var size: CGFloat = 40
-    var body: some View {
-        let color = PanelTheme.customColor(accountID)
-        Text(String(name.trimmingCharacters(in: .whitespacesAndNewlines).first ?? "◈"))
-            .font(.system(size: size * 0.44, weight: .bold, design: .rounded))
-            .foregroundStyle(color)
-            .frame(width: size, height: size)
-            .background(color.opacity(0.12), in: Circle())
-            .overlay { Circle().strokeBorder(color.opacity(0.28), lineWidth: 0.5) }
-    }
 }
 
 struct QuotaRow: View {

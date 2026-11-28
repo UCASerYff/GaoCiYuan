@@ -33,6 +33,7 @@ from gaociyuan.catalog import (
     default_agent_name,
     display_name,
     agent_software,
+    integration,
     is_legacy_gemini_connection,
     known_provider,
     needs_key,
@@ -67,7 +68,8 @@ from gaociyuan.snapshots import (
 from gaociyuan.timeutil import format_iso, grokbot_snapshot_path, parse_instant, utcnow
 from gaociyuan.usage import UsageLedger
 
-LIBRARY_KEYS = {"schema", "accounts", "refreshMinutes", "warningThreshold", "autoRefresh"}
+LEGACY_CREDENTIAL_CLEANUP = "pendingLegacyCredentialIDs"
+LIBRARY_KEYS = {"schema", "accounts", "refreshMinutes", "warningThreshold", "autoRefresh", LEGACY_CREDENTIAL_CLEANUP}
 FORECAST_HISTORY = "quotaForecastHistory"
 SOURCE_FIELDS = ("provider", "kind", "connection", "filePath", "scopeID", "region", "customConfig")
 ACCOUNT_KEYS = {
@@ -142,10 +144,13 @@ class TokenStore:
         self.zone = zone or ZoneInfo("Asia/Shanghai")
         self._now = now or utcnow
         self.load_failed = False
+        self.settings_failed = False
         self.notice: str | None = None
         self.persisted = False
         self.library = empty_library()
         self.extras: dict = {}
+        self._unsupported_accounts: list[dict] = []
+        self._legacy_credential_cleanup: list[str] = []
         self.settings = default_settings()
         self.failures: dict[str, int] = {}
         self.alert_memory: dict[str, dict] = {}
@@ -193,6 +198,8 @@ class TokenStore:
         if not isinstance(account_id, str) or not ACCOUNT_ID.fullmatch(account_id):
             raise AppError("账户编号无效。")
         existing = self._find(account_id)
+        if existing is None and self._archived_identity(account_id):
+            raise AppError("该编号仍由历史账户记录使用。")
         if existing is None and not creation_kinds(provider):
             raise AppError("搞词元仅记录 Agent 软件，不支持 API 账户。")
         if provider == "custom":
@@ -201,7 +208,7 @@ class TokenStore:
         requested = str(payload.get("connection") or default)
         connection, unknown = (requested, False) if is_legacy_gemini_connection(provider, requested) else normalize_connection(requested)
         if unknown:
-            self.unknown_connections.append(str(payload.get("connection")))
+            raise AppError("这个 Agent 没有该连接方式。")
         if connection not in available_connections(provider, "Agent"):
             raise AppError("这个 Agent 没有该连接方式。")
         if account_id in self._incomplete_credential_saves and needs_key(connection) and not new_credential:
@@ -283,11 +290,13 @@ class TokenStore:
         accounts = self._accounts_with(account)
         self._validate({**self.library, "accounts": accounts})
         credential_changed = new_credential or existing is not None and existing["connection"] != connection
+        if new_credential and self._archived_identity(account_id):
+            raise AppError("该凭据也属于已保留的历史账户，无法覆盖。", "credential")
         with _staged_json(self.library_path, self._library_payload(accounts)) as staged:
             try:
                 if new_credential:
                     self.credentials.put(account_id, secret.strip())
-                elif credential_changed:
+                elif credential_changed and not self._archived_identity(account_id):
                     self.credentials.delete(account_id)
                 os.replace(staged, self.library_path)
             except (AppError, OSError) as exc:
@@ -321,17 +330,24 @@ class TokenStore:
         return added
 
     def delete_account(self, account_id: str) -> None:
-        self._ensure_writable()
-        before = len(self.library["accounts"])
-        self.library["accounts"] = [item for item in self.library["accounts"] if item["id"] != account_id]
-        if len(self.library["accounts"]) == before:
-            raise AppError("没有这个账户。", "missing")
-        self.credentials.delete(account_id)
-        self._incomplete_credential_saves.discard(account_id)
-        self.failures.pop(account_id, None)
-        self.alert_memory.pop(account_id, None)
-        self._write_library()
-        self._write_alerts()
+        with self.lock:
+            self._ensure_writable()
+            accounts = [item for item in self.library["accounts"] if item["id"] != account_id]
+            if len(accounts) == len(self.library["accounts"]):
+                raise AppError("没有这个账户。", "missing")
+            with _staged_json(self.library_path, self._library_payload(accounts)) as staged:
+                os.replace(staged, self.library_path)
+            self.library["accounts"] = accounts
+            if not self._archived_identity(account_id):
+                self.credentials.delete(account_id)
+            self._incomplete_credential_saves.discard(account_id)
+            self.failures.pop(account_id, None)
+            self.alert_memory.pop(account_id, None)
+            self._write_alerts()
+
+    def _archived_identity(self, account_id: str) -> bool:
+        identity = _credential_identity(account_id)
+        return any(_credential_identity(record["id"]) == identity for record in self._unsupported_accounts if isinstance(record.get("id"), str))
 
     def set_credential(self, account_id: str, secret: str) -> None:
         with self.lock:
@@ -341,6 +357,8 @@ class TokenStore:
                 raise AppError("没有这个账户。", "missing")
             if account.get("connection") == ANTIGRAVITY_REPORT:
                 raise AppError("Antigravity 手动报告不需要凭据。")
+            if self._archived_identity(account_id):
+                raise AppError("该凭据也属于已保留的历史账户，无法覆盖。", "credential")
             if not isinstance(secret, str) or not secret.strip():
                 raise AppError("凭据不能为空。", "credential")
             try:
@@ -354,6 +372,8 @@ class TokenStore:
             account = self._find(account_id)
             if account is None:
                 raise AppError("没有这个账户。", "missing")
+            if self._archived_identity(account_id):
+                raise AppError("该凭据也属于已保留的历史账户，无法删除。", "credential")
             try:
                 self.credentials.delete(account_id)
             finally:
@@ -373,6 +393,8 @@ class TokenStore:
     def update_settings(self, payload: dict) -> dict:
         if self.load_failed:
             raise AppError("原文件无法读取，不会写入。", "readonly")
+        if self.settings_failed:
+            raise AppError("设置文件无法读取。原文件已保留，请修复后重新启动。", "readonly")
         if "language" in payload and payload["language"] in {"system", "zh-Hans", "en"}:
             self.settings["language"] = payload["language"]
         if "appearance" in payload and payload["appearance"] in {"system", "light", "dark"}:
@@ -650,7 +672,7 @@ class TokenStore:
             view["quotaForecast"] = quota_forecast(account, now)
         view["hasCredential"] = not legacy_gemini and account["connection"] != ANTIGRAVITY_REPORT and self.credentials.has(account["id"])
         if legacy_gemini:
-            view["stale"] = bool(account.get("snapshot"))
+            view["stale"] = bool(account.get("history") or has_measured_values(account.get("snapshot") or {}))
             view["warnings"] = []
             view["health"] = "historical" if view["stale"] else "syncPaused"
             view["ring"] = ring_for({**account, "snapshot": None}, threshold, now, self.zone)
@@ -806,19 +828,37 @@ class TokenStore:
             self.extras = {key: value for key, value in raw.items() if key not in LIBRARY_KEYS and key != "station"}
             station = "station" in raw
             accounts = []
-            removed = []
+            pending = raw.get(LEGACY_CREDENTIAL_CLEANUP, [])
+            if not isinstance(pending, list) or any(not isinstance(value, str) or not ACCOUNT_ID.fullmatch(value) for value in pending):
+                raise AppError("旧凭据清理状态无效。")
+            retired: list[str] = []
             self.unknown_connections = []
             changed = station
-            for item in raw.get("accounts") or []:
+            records = raw.get("accounts", [])
+            if not isinstance(records, list):
+                raise AppError("账户格式无效。")
+            for item in records:
                 if not isinstance(item, dict):
                     raise AppError("账户格式无效。")
+                kind = normalize_kind(item.get("kind", "Agent"))
+                provider = item.get("provider")
+                account_id = item.get("id")
+                if (kind is None or not isinstance(provider, str) or not known_provider(provider)
+                        or account_id is not None and (not isinstance(account_id, str) or not ACCOUNT_ID.fullmatch(account_id))):
+                    self._unsupported_accounts.append(item)
+                    continue
+                if kind == "LLM" or provider == "custom":
+                    if account_id is not None:
+                        retired.append(account_id)
+                    changed = True
+                    continue
+                if (definition := integration(provider)) is not None and definition.kind == "LLM":
+                    # Agent-marked legacy integrations are ambiguous. Preserve the record and key.
+                    self._unsupported_accounts.append(item)
+                    continue
                 account, normalized = self._decode_account(item)
                 if normalized:
                     changed = True
-                if account["kind"] == "LLM" or account["provider"] == "custom":
-                    removed.append(account["id"])
-                    changed = True
-                    continue
                 accounts.append(account)
             library = {
                 "schema": 1,
@@ -835,28 +875,62 @@ class TokenStore:
                 raise AppError("不兼容或无效的存档。")
             self.library = library
             self._validate()
-            for account_id in removed:
-                self.credentials.delete(account_id)
+            protected = {_credential_identity(item["id"]) for item in accounts}
+            protected.update(_credential_identity(item["id"]) for item in self._unsupported_accounts if isinstance(item.get("id"), str))
+            self._legacy_credential_cleanup = [value for value in dict.fromkeys([*pending, *retired]) if _credential_identity(value) not in protected]
+            if changed or self._legacy_credential_cleanup != pending:
+                self._write_library()
             self.persisted = True
             self.load_failed = False
+            notices = [self.notice] if self.notice else []
             if self.unknown_connections:
-                self.notice = f"有 {len(self.unknown_connections)} 处连接方式无法识别，已回退为「本机软件自动读取」，请在账户设置中确认。"
-            if changed or removed:
-                self._write_library()
+                notices.append(f"有 {len(self.unknown_connections)} 处连接方式无法识别，已回退为「本机软件自动读取」，请在账户设置中确认。")
+            if self._unsupported_accounts:
+                examples = "、".join(
+                    " ".join(item["name"].split())[:40]
+                    for item in self._unsupported_accounts[:3] if isinstance(item.get("name"), str) and item["name"].strip()
+                )
+                names = f"（{examples}）" if examples else ""
+                notices.append(f"有 {len(self._unsupported_accounts)} 条历史账户记录无法识别{names}，已保留在资料库，等待兼容版本读取。")
+            self.notice = "\n".join(notices) or self.notice
         except Exception as exc:
             self.library = empty_library()
             self.load_failed = True
             self.persisted = True
             self.notice = f"数据文件读取失败，原文件已保留，暂时禁止写入。请检查原文件后再试。\n{exc}"
+            return
+        self._finish_legacy_credential_cleanup()
+
+    def _finish_legacy_credential_cleanup(self) -> None:
+        pending = self._legacy_credential_cleanup
+        if not pending:
+            return
+        remaining = []
+        for account_id in pending:
+            try:
+                self.credentials.delete(account_id)
+            except (AppError, OSError):
+                remaining.append(account_id)
+        if remaining != pending:
+            self._legacy_credential_cleanup = remaining
+            try:
+                self._write_library()
+            except (AppError, OSError):
+                self._legacy_credential_cleanup = pending
+        if self._legacy_credential_cleanup:
+            self.notice = "\n".join(filter(None, [self.notice, "旧凭据清理尚未完成，下次启动会再试。"]))
 
     def _decode_account(self, raw: dict) -> tuple[dict, bool]:
         provider = raw.get("provider")
         if not isinstance(provider, str) or not known_provider(provider):
             raise AppError("账户设置无效。")
-        kind = normalize_kind(str(raw.get("kind") or "Agent"))
+        kind = normalize_kind(raw.get("kind", "Agent"))
+        if kind is None:
+            raise AppError("账户类型无法识别。")
         connection_raw = str(raw.get("connection") or AGENT_LOCAL)
         gemini_legacy = is_legacy_gemini_connection(provider, connection_raw)
         connection, unknown = (connection_raw, False) if gemini_legacy else normalize_connection(connection_raw)
+        gemini_legacy = is_legacy_gemini_connection(provider, connection)
         if unknown:
             self.unknown_connections.append(connection_raw)
         original_currency = str(raw.get("currency") or "USD")
@@ -893,7 +967,9 @@ class TokenStore:
             item = strip_status_quotas(item)
             if has_measured_values(item):
                 history.append(item)
-        history = history[-300:]
+        # Retired Gemini routes cannot produce new history. Keep all measured readings available as an archive.
+        if not gemini_legacy:
+            history = history[-300:]
         if len(history) != len(raw_history):
             dirty = True
         account = {
@@ -952,7 +1028,7 @@ class TokenStore:
         threshold = library.get("warningThreshold")
         if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 5 <= float(threshold) <= 50:
             raise AppError("不兼容或无效的存档。")
-        identities = [item["id"] for item in library["accounts"]]
+        identities = [_credential_identity(item["id"]) for item in library["accounts"]]
         if len(identities) != len(set(identities)):
             raise AppError("不兼容或无效的存档。")
         now = self.now()
@@ -976,19 +1052,22 @@ class TokenStore:
         if accounts is None:
             accounts = self.library["accounts"]
         for account in accounts:
-            account["history"] = (account.get("history") or [])[-300:]
+            if not is_legacy_gemini_connection(account["provider"], account["connection"]):
+                account["history"] = (account.get("history") or [])[-300:]
         _atomic_json(self.library_path, self._library_payload(accounts))
         self.persisted = True
 
     def _library_payload(self, accounts: list[dict]) -> dict:
         payload = {
             "schema": self.library["schema"],
-            "accounts": accounts,
+            "accounts": [*accounts, *self._unsupported_accounts],
             "refreshMinutes": self.library["refreshMinutes"],
             "warningThreshold": self.library["warningThreshold"],
             "autoRefresh": self.library["autoRefresh"],
         }
         payload.update(self.extras)
+        if self._legacy_credential_cleanup:
+            payload[LEGACY_CREDENTIAL_CLEANUP] = self._legacy_credential_cleanup
         return payload
 
     def _write_settings(self) -> None:
@@ -1006,7 +1085,9 @@ class TokenStore:
         if not self.settings_path.exists():
             return
         try:
-            raw = json.loads(self.settings_path.read_text(encoding="utf-8"))
+            raw = json.loads(self.settings_path.read_text(encoding="utf-8-sig"))
+            if not isinstance(raw, dict):
+                raise ValueError("settings must be an object")
             if isinstance(raw, dict):
                 self.settings.update({key: raw[key] for key in default_settings() if key in raw})
                 self.zone = ZoneInfo(self.settings.get("timeZone") or "Asia/Shanghai")
@@ -1022,6 +1103,8 @@ class TokenStore:
                         self.settings[key] = ""
         except Exception:
             self.settings = default_settings()
+            self.settings_failed = True
+            self.notice = "设置文件无法读取，原文件已保留。请修复后重新启动。"
 
     def _load_alerts(self) -> None:
         if not self.alerts_path.exists():
@@ -1056,6 +1139,10 @@ class TokenStore:
         else:
             accounts.append(account)
         return accounts
+
+
+def _credential_identity(account_id: str) -> str:
+    return account_id.replace("/", "").replace("\\", "").casefold()
 
 
 def _same_source(left: dict, right: dict) -> bool:

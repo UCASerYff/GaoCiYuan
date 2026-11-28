@@ -1,7 +1,9 @@
 import json
 import sqlite3
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -162,6 +164,208 @@ def test_archive_merge_csv_and_validation_are_idempotent(tmp_path):
     with pytest.raises(AppError, match="用量包"):
         other.import_archive(package)
     assert other.dashboard("all", NOW, ZONE)["total"]["totalTokens"] == 9
+
+
+def mac_usage_package(extra=False):
+    def amounts(tokens, messages=1, cost=None):
+        result = {"input": tokens, "output": 0, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0, "messageCount": messages}
+        if cost is not None:
+            result["costUSD"] = cost
+        return result
+
+    def row(session_id, model, counters):
+        return {"client": "antigravity", "sessionID": session_id, "model": model, "amounts": counters}
+
+    def day(row):
+        return {**row, "day": "2026-09-01"}
+
+    def session(row, timed_tokens, duration):
+        return {**row, "firstActive": STAMP, "lastActive": STAMP, "timedTokens": timed_tokens, "timedDurationMS": duration}
+
+    event_id = "a" * 64
+    known = row("known-session", "gemini-3.8-flash", amounts(10, cost=0.01))
+    legacy = row("legacy-session", "unknown", amounts(23))
+    captured = {**known, "eventID": event_id, "timestamp": STAMP, "durationMS": 1000,
+                "projectKey": "b" * 64, "projectLabel": "Synthetic project"}
+    events = [captured]
+    if extra:
+        events.append({**captured, "eventID": "c" * 64, "amounts": amounts(5, cost=0.01)})
+        known = {**known, "amounts": amounts(15, messages=2, cost=0.02)}
+    coverage = {**known, "model": "unknown"}
+    legacy_overlap = {**legacy, "amounts": amounts(3, messages=0)}
+    legacy_residual = {**legacy, "amounts": amounts(20)}
+    duration = 2000 if extra else 1000
+    return {"format": 4, "exportedAt": STAMP, "devices": [{
+        "id": "FA825567-2B25-431E-8A41-453FF1969142", "name": "Fixture Mac",
+        "days": [day(known), day(legacy_residual)],
+        "sessions": [{**session(known, known["amounts"]["input"], duration), "projectKey": captured["projectKey"],
+                      "projectLabel": captured["projectLabel"]}, session(legacy_residual, 0, 0)],
+        "cursorEvents": [],
+        "localUsage": {"clients": ["antigravity"], "events": events,
+                       "coverageDays": [day(coverage), day(legacy_overlap)],
+                       "coverageSessions": [session(coverage, 0, 0), session(legacy_overlap, 0, 0)],
+                       "baselineDays": [day(legacy)], "baselineSessions": [session(legacy, 0, 0)],
+                       "retainedUnknownEventIDs": [event_id]},
+    }]}
+
+
+def test_mac_archive_keeps_source_events_and_monotonic_totals_after_round_trip(tmp_path):
+    directory = tmp_path / "relay"
+    service = LocalUsageService(directory, allow_default_paths=False)
+    package = mac_usage_package()
+    original_mac = package["devices"][0]
+    # A previous Windows reader may already have imported these same aggregate
+    # rows without their provenance. Adopting the source does not add them twice.
+    legacy = deepcopy(package)
+    legacy["format"] = 2
+    legacy["devices"][0].pop("localUsage")
+    legacy["devices"][0]["id"] = original_mac["id"].lower()
+    service.import_archive(legacy)
+    service.import_archive(package)
+    service.import_archive(package)
+    service.import_archive(legacy)
+    assert service.dashboard("all", NOW, ZONE)["total"]["totalTokens"] == 30
+    assert service.dashboard("all", NOW, ZONE)["sessions"]["totalCount"] == 2
+
+    reopened = LocalUsageService(directory, allow_default_paths=False)
+    exported = json.loads(reopened.export_json(NOW))
+    assert exported["format"] == 4
+    mac = next(device for device in exported["devices"] if device["id"] == original_mac["id"])
+    assert mac["localUsage"] == original_mac["localUsage"]
+    assert sum(row["amounts"]["input"] for row in mac["days"]) == 30
+    second_relay = LocalUsageService(tmp_path / "next-host", allow_default_paths=False)
+    second_relay.import_archive(exported)
+    assert second_relay.dashboard("all", NOW, ZONE)["total"]["totalTokens"] == 30
+
+    newer = mac_usage_package(extra=True)
+    reopened.import_archive(newer)
+    reopened.import_archive(package)
+    assert reopened.dashboard("all", NOW, ZONE)["total"]["totalTokens"] == 35
+    new_export = json.loads(reopened.export_json(NOW))
+    mac = next(device for device in new_export["devices"] if device["id"] == original_mac["id"])
+    assert mac["localUsage"] == newer["devices"][0]["localUsage"]
+
+
+def test_mac_archive_conflict_does_not_change_records_or_strip_provenance(tmp_path):
+    service = LocalUsageService(tmp_path / "data", allow_default_paths=False)
+    package = mac_usage_package()
+    service.import_archive(package)
+    before = json.loads(service.export_json(NOW))
+    other_device = {"id": "adbe2426-eb74-43e4-9db8-87ac6ffdb910", "name": "Other fixture", "days": [], "sessions": []}
+
+    different_event = deepcopy(package)
+    event = different_event["devices"][0]["localUsage"]["events"][0]
+    changed_id = "d" * 64
+    event["eventID"] = changed_id
+    different_event["devices"][0]["localUsage"]["retainedUnknownEventIDs"] = [changed_id]
+    different_event["devices"].insert(0, other_device)
+    with pytest.raises(AppError, match="无法安全合并"):
+        service.import_archive(different_event)
+
+    legacy = deepcopy(package)
+    legacy["format"] = 2
+    legacy["devices"][0].pop("localUsage")
+    legacy["devices"][0]["days"][0]["amounts"]["input"] = 20
+    with pytest.raises(AppError, match="无法安全合并"):
+        service.import_archive(legacy)
+    assert json.loads(service.export_json(NOW)) == before
+
+
+@pytest.mark.parametrize("failure", ["older-format-marker", "missing-event", "unsupported-field", "inflated-projection", "ambiguous-baseline", "subsecond-event"])
+def test_invalid_mac_archive_is_rejected_before_opening_database(tmp_path, failure):
+    service = LocalUsageService(tmp_path / failure, allow_default_paths=False)
+    package = mac_usage_package()
+    device = package["devices"][0]
+    usage = device["localUsage"]
+    if failure == "older-format-marker":
+        package["format"] = 3
+    elif failure == "missing-event":
+        usage["retainedUnknownEventIDs"] = ["d" * 64]
+    elif failure == "unsupported-field":
+        usage["unsupported"] = "Fixture"
+    elif failure == "inflated-projection":
+        row = device["days"][0]
+        row["amounts"] = {**row["amounts"], "input": 20}
+    elif failure == "ambiguous-baseline":
+        usage["baselineDays"].append({**usage["coverageDays"][0]})
+    elif failure == "subsecond-event":
+        usage["events"][0]["timestamp"] = STAMP.replace("Z", ".0000001Z")
+    with pytest.raises(AppError, match="用量包"):
+        service.import_archive(package)
+    assert not service.path.exists()
+
+
+def test_mac_archive_round_trip_through_desktop_import_export_routes(tmp_path):
+    from gaociyuan.store import TokenStore
+    from gaociyuan.web import serve
+
+    directory = tmp_path / "loopback"
+    store = TokenStore(directory, now=lambda: NOW)
+    service = LocalUsageService(directory, allow_default_paths=False)
+    server = serve(store, open_browser=False, start_timer=False, local_usage=service)
+    package = mac_usage_package()
+    fixture = package["devices"][0]
+    headers = {"X-Gao-Token": server.token, "Content-Type": "application/json"}
+    try:
+        for _ in range(2):
+            request = Request(server.url + "api/usage/import", json.dumps(package).encode("utf-8"), headers)
+            with urlopen(request, timeout=5) as response:
+                assert json.load(response)["result"]["deviceCount"] == 1
+        with urlopen(Request(server.url + "api/usage?range=all", headers=headers), timeout=5) as response:
+            assert json.load(response)["total"]["totalTokens"] == 30
+        with urlopen(Request(server.url + "api/export/local-usage.json", headers=headers), timeout=5) as response:
+            exported = json.load(response)
+        assert exported["format"] == 4
+        foreign = next(device for device in exported["devices"] if device["id"] == fixture["id"])
+        assert foreign["localUsage"] == fixture["localUsage"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize("original", [b"{", b'{"authorized":"true"}', b'{"automaticExportPath":[]}',
+                                     b'{"automaticExportPath":"relative-folder"}', b'{"engine":{"unsupported":true}}'])
+def test_malformed_usage_settings_are_preserved_across_scan_save_and_archive_import(tmp_path, original):
+    directory = tmp_path / "locked-settings"
+    directory.mkdir()
+    path = directory / "windows-usage-settings.json"
+    path.write_bytes(original)
+    service = LocalUsageService(directory, allow_default_paths=False)
+    assert service.settings_state()["error"]
+    with pytest.raises(AppError, match="原文件已保留"):
+        service.save_settings({"refreshMinutes": 10})
+    with pytest.raises(AppError, match="原文件已保留"):
+        service.scan(NOW, ZONE)
+    assert service.scan(NOW, ZONE, automatic=True)["skipped"]
+    assert not service.path.exists()
+    service.import_archive(mac_usage_package())
+    assert service.dashboard("all", NOW, ZONE)["total"]["totalTokens"] == 30
+    assert path.read_bytes() == original
+
+
+def test_temporarily_unavailable_usage_export_path_is_preserved_without_disabling_scan(tmp_path):
+    directory = tmp_path / "unavailable-export"
+    directory.mkdir()
+    path = directory / "windows-usage-settings.json"
+    export_path = str(tmp_path / "missing-destination")
+    original = json.dumps({"authorized": True, "engine": {"enabledClientIDs": []}, "automaticExportPath": export_path}).encode("utf-8")
+    path.write_bytes(original)
+    service = LocalUsageService(directory, allow_default_paths=False)
+    assert service.settings_state()["error"] is None
+    assert service.settings_state()["automaticExportPath"] == export_path
+    assert any("自动导出的文件夹不可用" in warning for warning in service.scan(NOW, ZONE)["warnings"])
+    assert path.read_bytes() == original
+
+
+def test_usage_save_does_not_replace_a_file_corrupted_after_startup(tmp_path):
+    service = LocalUsageService(tmp_path / "changed-settings", allow_default_paths=False)
+    service.save_settings({"refreshMinutes": 10})
+    changed = b'{"authorized":'
+    service.settings_path.write_bytes(changed)
+    with pytest.raises(AppError, match="原文件已保留"):
+        service.save_settings({"refreshMinutes": 15})
+    assert service.settings_state()["refreshMinutes"] == 10
+    assert service.settings_path.read_bytes() == changed
 
 
 def test_default_paths_are_opt_in_and_isolation_can_disable_them(tmp_path, monkeypatch):

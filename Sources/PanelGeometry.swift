@@ -418,10 +418,12 @@ enum CardLayout {
         var h: CGFloat = 56 // 头部
         let quotas = account.displayQuotas.count
         h += CGFloat(max(quotas, 1)) * 46
-        if let report = account.historicalAntigravityReport ?? account.unassignedLegacyAntigravityReport {
+        let archived = account.legacyAntigravityHistory
+        if let report = account.historicalAntigravityReport ?? archived.first {
             if quotas == 0 { h -= 46 }
             h += 58 + CGFloat(report.historicalChartQuotas.count) * 46
         }
+        if !archived.isEmpty { h += 23 }
         if let s = account.snapshot, !s.balances.isEmpty { h += CGFloat(s.balances.count) * 23 }
         if account.stale(), account.snapshot != nil { h += 16 }
         if account.error != nil && !account.usesAntigravityReport { h += 28 }

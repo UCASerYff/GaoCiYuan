@@ -119,9 +119,41 @@ elif name=='pluginkit':
         check(result.returncode != 0 and version() == ('4.13', '14'), name + ' incorrectly permitted replacement')
         check(not (project / 'rollback.noindex').exists(), name + ' created a backup')
 
+    # A stale application or framework with the same marketing version must fail
+    # before packaging can remove an existing release. Stop matched fixtures at rm.
+    package = (project_root / 'scripts/package.sh').read_text()
+    for name, app_build, framework_build in [
+        ('old-app', '14', '15'),
+        ('old-framework', '15', '14'),
+        ('matched', '15', '15'),
+    ]:
+        project, _, source, _, _ = case('package-' + name)
+        (project / 'scripts/package.sh').write_text(package)
+        app_info = source / 'Contents/Info.plist'
+        app = plistlib.loads(app_info.read_bytes())
+        app_info.write_bytes(plistlib.dumps(dict(app, CFBundleVersion=app_build)))
+        framework_info = source / 'Contents/Frameworks/Token.framework/Versions/A/Resources/Info.plist'
+        framework_info.parent.mkdir(parents=True)
+        framework_info.write_bytes(plistlib.dumps(dict(app, CFBundleVersion=framework_build)))
+        published = project / 'dist/GaoCiYuan-4.13.zip'
+        published.parent.mkdir()
+        published.write_bytes(b'existing package fixture')
+        stop = project / 'preflight-bin'
+        stop.mkdir()
+        rm = stop / 'rm'
+        rm.write_text('#!/bin/sh\nexit 42\n')
+        rm.chmod(0o700)
+        env = dict(os.environ, PATH=os.pathsep.join([str(stop), str(stub), os.environ['PATH']]), GAO_PACKAGE_APP=str(source))
+        result = subprocess.run(['zsh', str(project / 'scripts/package.sh')], env=env, text=True, capture_output=True)
+        if name == 'matched':
+            check(result.returncode == 42, 'matching package did not reach the first staging action: ' + result.stderr)
+        else:
+            check(result.returncode == 1 and 'CFBundleVersion' in result.stderr, 'stale package did not fail version preflight')
+        check(published.read_bytes() == b'existing package fixture', 'package guard changed the existing release')
+
 with (project_root / 'Info.plist').open('rb') as handle:
     release = plistlib.load(handle)
-check((release['CFBundleShortVersionString'], release['CFBundleVersion']) == ('4.15', '17'), 'release version is not 4.15 / 17')
+check((release['CFBundleShortVersionString'], release['CFBundleVersion']) == ('4.16', '18'), 'release version is not 4.16 / 18')
 for forbidden in ['--rollback', 'rollback.noindex', 'application.zip', 'receipt.json']:
     check(forbidden not in original, 'obsolete installer surface remains: ' + forbidden)
 print('No-backup installer regression passed: isolated install, no rollback/archive/receipt, failure stops without restoration, exact preflight and owned staging cleanup. No real app or user data touched.')

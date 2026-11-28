@@ -27,7 +27,11 @@ enum KeyVault {
         guard status == errSecSuccess else { throw MonitorError.message("密钥保存失败（\(status)）。") }
     }
     static func delete(_ id: UUID) {
-        SecItemDelete([kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:id.uuidString] as CFDictionary)
+        _ = deleteMigratedCredential(id)
+    }
+    static func deleteMigratedCredential(_ id: UUID) -> Bool {
+        let status = SecItemDelete([kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:id.uuidString] as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 }
 // Reject redirects: credentials must only go to the fixed official endpoint.
@@ -41,10 +45,14 @@ enum Connectors {
     }()
     static func fetch(_ account: Account, userInitiated: Bool = false, keyOverride: String? = nil) async throws -> ConnectorResult {
         try Task.checkCancellation()
+        guard account.kind == .agent, account.provider != .custom,
+              account.provider.integration?.kind != .llm else {
+            throw MonitorError.message("搞词元仅记录 Agent 软件，不支持 API 账户。")
+        }
         return try await HTTPPolicyContext.$userInitiated.withValue(userInitiated) {
             try await HTTPPolicyContext.$trigger.withValue(userInitiated ? "quota.manual" : "quota.automatic") {
                 try await HTTPPolicyContext.$operationIdentity.withValue(UUID().uuidString) {
-                    let route = account.id.uuidString + account.connection.rawValue + account.filePath + (account.scopeID ?? "") + (account.region ?? "") + String(describing:account.customConfig)
+                    let route = account.id.uuidString + account.connection.rawValue + account.filePath + (account.scopeID ?? "") + (account.region ?? "")
                     let fingerprint = SHA256.hash(data:Data(route.utf8)).map { String(format:"%02x",$0) }.joined()
                     return try await HTTPPolicyContext.$credentialIdentity.withValue(fingerprint) {
                         let result = try await fetchImpl(account, userInitiated: userInitiated, keyOverride: keyOverride)
@@ -62,23 +70,17 @@ enum Connectors {
             try snapshot.validate()
             return .snapshot(snapshot)
         }
-        if account.connection.integration != nil {
+        switch account.connection {
+        case .traeQuota:
             let key = try suppliedKey(account, override: keyOverride)
-            let snapshot: UsageSnapshot
-            switch account.connection {
-            case .openRouterQuota: snapshot = try await OpenRouterBridge.fetch(key: key)
-            case .typeSafeQuota: snapshot = try await TypeSafeBridge.fetch(cookie: key)
-            case .traeQuota: snapshot = try await TraeCNBridge.fetch(token: key, deviceID: account.scopeID ?? "")
-            case .alibabaPlan: snapshot = try await AlibabaTokenPlanBridge.fetch(cookie: key, variant: account.region ?? "cn")
-            case .stepFunQuota: snapshot = try await StepFunBridge.fetch(token: key)
-            case .newAPIQuota: snapshot = try await ThirdPartyQuotaBridge.fetch(adapter: "newapi", baseURL: account.filePath, credential: key, userID: account.scopeID, tokenMode: account.region != "account")
-            case .sub2APIQuota: snapshot = try await ThirdPartyQuotaBridge.fetch(adapter: "sub2api", baseURL: account.filePath, credential: key)
-            default: throw schemaError
-            }
+            let snapshot = try await TraeCNBridge.fetch(token: key, deviceID: account.scopeID ?? "")
             try snapshot.validate()
             return .snapshot(snapshot)
-        }
-        switch account.connection {
+        case .alibabaPlan:
+            let key = try suppliedKey(account, override: keyOverride)
+            let snapshot = try await AlibabaTokenPlanBridge.fetch(cookie: key, variant: account.region ?? "cn")
+            try snapshot.validate()
+            return .snapshot(snapshot)
         case .agentLocal:
             if account.usesAntigravityReport { return try await antigravityQuota(account) }
             return try await AgentBridge.fetch(account, userInitiated: userInitiated)
@@ -96,8 +98,6 @@ enum Connectors {
             return try await DshBridge.fetch(account, userInitiated: userInitiated)
         case .workbuddyLocal:
             return try await WorkBuddyBridge.fetch(account, userInitiated: userInitiated)
-        case .customAPI:
-            return try await CustomBridge.fetch(account, userInitiated: userInitiated, keyOverride: keyOverride)
         case .grokAccount:
             return .snapshot(try await GrokAccountBridge.fetch())
         case .devinApp:
@@ -111,45 +111,21 @@ enum Connectors {
             let snapshot = try JSONCoding.decoder.decode(UsageSnapshot.self, from:Data(contentsOf:url))
             try snapshot.validate()
             return .snapshot(snapshot)
-        default:
+        case .commandCode:
             // Command Code：粘贴 key 优先，钥匙串无存时回落本机 CLI 保存的登录（不读环境变量）。
-            if account.connection == .commandCode {
-                let entered = keyOverride.flatMap { $0.isEmpty ? nil : $0 } ?? (try? KeyVault.read(account.id))
-                return .snapshot(try await CommandCodeBridge.fetch(enteredKey: entered))
-            }
+            let entered = keyOverride.flatMap { $0.isEmpty ? nil : $0 } ?? (try? KeyVault.read(account.id))
+            return .snapshot(try await CommandCodeBridge.fetch(enteredKey: entered))
+        case .devinApi, .ollamaCloud, .minimax, .glm, .kimiCoding, .xai, .aliyun, .volc, .volcArk, .mimoCoding, .copilot:
             let key: String
             if let override = keyOverride, !override.isEmpty { key = override } else { key = try KeyVault.read(account.id) }
             if account.connection == .devinApi { return .snapshot(try await DevinBridge.fetchAPI(pasted: key)) }
             if account.connection == .ollamaCloud { return .snapshot(try await OllamaBridge.fetch(cookieHeader: key)) }
-            if [.minimax,.glm,.kimiCoding,.xai,.aliyun,.volc,.volcArk,.mimoCoding].contains(account.connection) { return .snapshot(try await OfficialExtras.fetch(account,key:key)) }
-            if account.connection == .deepseek {
-                let data = try await get("https://api.deepseek.com/user/balance", key:key)
-                return .snapshot(try parseDeepSeek(data))
-            }
-            if account.connection == .moonshot {
-                let data = try await get("https://api.moonshot.cn/v1/users/me/balance", key:key)
-                guard data["status"] as? Bool == true, number(data["code"]) == 0, let body = data["data"] as? [String:Any], let amount = number(body["available_balance"]) else { throw schemaError }
-                var s = UsageSnapshot.empty(source:"Kimi 官方 API"); s.balances = [.init(currency:"CNY",value:amount)]; s.note = "余额不代表累计消费；此接口不提供 Token 用量。"; return .snapshot(s)
-            }
             if account.connection == .copilot {
                 return .snapshot(try await CopilotBridge.fetch(token: key))
             }
-            var cal = Calendar(identifier:.gregorian); cal.timeZone = TimeZone(secondsFromGMT:0)!
-            let now = Date(), start = cal.date(from:cal.dateComponents([.year,.month],from:Date()))!
-            var s = UsageSnapshot.empty(source:"官方 API"); s.periodStart = start; s.periodEnd = now
-            if account.connection == .openai {
-                let q = "start_time=\(Int(start.timeIntervalSince1970))&end_time=\(Int(now.timeIntervalSince1970))&bucket_width=1d&limit=31"
-                let usage = try await pages("https://api.openai.com/v1/organization/usage/completions?\(q)", key:key)
-                let costs = try await pages("https://api.openai.com/v1/organization/costs?\(q)", key:key)
-                s = try parseReports(usage:usage,costs:costs,anthropic:false,start:start,end:now)
-            } else {
-                let f = ISO8601DateFormatter()
-                let q = "starting_at=\(f.string(from:start))&ending_at=\(f.string(from:now))&limit=31"
-                let usage = try await pages("https://api.anthropic.com/v1/organizations/usage_report/messages?\(q)&bucket_width=1d", key:key,anthropic:true)
-                let costs = try await pages("https://api.anthropic.com/v1/organizations/cost_report?\(q)",key:key,anthropic:true)
-                s = try parseReports(usage:usage,costs:costs,anthropic:true,start:start,end:now)
-            }
-            try s.validate(); return .snapshot(s)
+            return .snapshot(try await OfficialExtras.fetch(account, key: key))
+        default:
+            throw MonitorError.message("此连接方式已不支持 Agent 软件。")
         }
     }
     private static func antigravityQuota(_ account: Account) async throws -> ConnectorResult {
@@ -181,16 +157,12 @@ enum Connectors {
         if let n = value as? NSNumber { return n.doubleValue.isFinite ? n.doubleValue : nil }
         if let str = value as? String, let n = Double(str), n.isFinite { return n }; return nil
     }
-    static func integer(_ value: Any?) throws -> Int64 {
-        guard let n = number(value), n >= 0, n < Double(Int64.max / 4), n.rounded() == n else { throw schemaError }; return Int64(n)
-    }
-    static func get(_ path: String, key: String, anthropic: Bool = false, rawAuth: Bool = false, timeout: TimeInterval = 25, category: HTTPBudgetKind = .quota) async throws -> [String:Any] {
-        guard let url = URL(string:path), url.scheme == "https", ["api.openai.com","api.anthropic.com","api.deepseek.com","api.moonshot.cn","api.kimi.com","www.minimaxi.com","www.minimax.io","open.bigmodel.cn","api.z.ai","management-api.x.ai"].contains(url.host ?? "") else { throw schemaError }
-        var r = URLRequest(url:url); r.httpMethod = "GET"; r.timeoutInterval = timeout
+    static func get(_ path: String, key: String, rawAuth: Bool = false) async throws -> [String:Any] {
+        guard let url = URL(string:path), url.scheme == "https", ["api.kimi.com","www.minimaxi.com","www.minimax.io","open.bigmodel.cn","api.z.ai","management-api.x.ai"].contains(url.host ?? "") else { throw schemaError }
+        var r = URLRequest(url:url); r.httpMethod = "GET"; r.timeoutInterval = 25
         r.setValue("application/json", forHTTPHeaderField:"Accept")
-        if anthropic { r.setValue(key,forHTTPHeaderField:"x-api-key"); r.setValue("2023-06-01",forHTTPHeaderField:"anthropic-version") }
-        else { r.setValue(rawAuth ? key : "Bearer \(key)",forHTTPHeaderField:"Authorization") }
-        return try await send(r, category: category)
+        r.setValue(rawAuth ? key : "Bearer \(key)",forHTTPHeaderField:"Authorization")
+        return try await send(r)
     }
     static func send(_ r: URLRequest, category: HTTPBudgetKind = .quota) async throws -> [String:Any] {
         let (data, response): (Data, URLResponse)
@@ -204,7 +176,7 @@ enum Connectors {
             let hint: String
             switch http.statusCode {
             case 401: hint = "密钥无效或登录已过期"
-            case 403: hint = "权限不足；管理接口需要组织 Admin Key"
+            case 403: hint = "权限不足"
             case 429: hint = "平台限流，请稍后刷新"
             default: hint = "服务不可用"
             }
@@ -226,60 +198,6 @@ enum Connectors {
         return (data, http)
     }
 
-    static func pages(_ path: String, key: String, anthropic: Bool = false) async throws -> [[String:Any]] {
-        var items: [[String:Any]] = [], next: String? = nil, seen = Set<String>()
-        let started = Date()
-        for _ in 0..<64 {
-            try Task.checkCancellation()
-            guard Date().timeIntervalSince(started) < 90 else { throw HTTPBudgetError.deadline }
-            var url = URLComponents(string:path)!
-            if let next { var q = url.queryItems ?? []; q.append(.init(name:"page",value:next)); url.queryItems = q; url.percentEncodedQuery = url.percentEncodedQuery?.replacingOccurrences(of:"+",with:"%2B") }
-            let response = try await get(url.url!.absoluteString,key:key,anthropic:anthropic,timeout:min(25,max(0.01,90-Date().timeIntervalSince(started))),category:.history)
-            guard let buckets = response["data"] as? [[String:Any]] else { throw schemaError }
-            for bucket in buckets { guard let results = bucket["results"] as? [[String:Any]] else { throw schemaError }; guard items.count <= 200_000 - results.count else { throw HTTPBudgetError.responseTooLarge }; items += results }
-            guard let more = response["has_more"] as? Bool else { throw schemaError }
-            if !more { return items }
-            guard let cursor = response["next_page"] as? String, !cursor.isEmpty, seen.insert(cursor).inserted else { throw schemaError }; next = cursor
-        }
-        throw MonitorError.message("报告页数超出安全上限，未保存不完整统计。")
-    }
-    static func parseDeepSeek(_ data: [String:Any]) throws -> UsageSnapshot {
-        guard let balances = data["balance_infos"] as? [[String:Any]], !balances.isEmpty else { throw schemaError }
-        var s = UsageSnapshot.empty(source:"DeepSeek 官方 API")
-        s.balances = try balances.map { r in guard let c = r["currency"] as? String, let amount = number(r["total_balance"]) else { throw schemaError }; return Money(currency:c,value:amount) }
-        s.note = "余额包含有效赠金与充值余额；此接口不提供 Token 和累计费用。"; try s.validate(); return s
-    }
-    static func parseReports(usage: [[String:Any]], costs: [[String:Any]], anthropic: Bool, start: Date, end: Date) throws -> UsageSnapshot {
-        var input: Int64 = 0, output: Int64 = 0, totals: [String:Double] = [:]
-        for row in usage {
-            var n: Int64 = 0
-            if anthropic {
-                n += try integer(row["uncached_input_tokens"])
-                n += try integer(row["cache_read_input_tokens"])
-                if let creation = row["cache_creation"] as? [String:Any] {
-                    n += try integer(creation["ephemeral_1h_input_tokens"])
-                    n += try integer(creation["ephemeral_5m_input_tokens"])
-                } else if let flat = row["cache_creation_input_tokens"] { n += try integer(flat) }
-                else { throw schemaError }
-            } else { n = try integer(row["input_tokens"]) } // cached tokens are already included
-            let out = try integer(row["output_tokens"])
-            guard input <= Int64.max / 2 - n, output <= Int64.max / 2 - out else { throw schemaError }
-            input += n; output += out
-        }
-        for row in costs {
-            if anthropic {
-                guard let n = number(row["amount"]), let c = row["currency"] as? String else { throw schemaError }; totals[c.uppercased(),default:0] += n / 100 // Anthropic reports cents
-            } else {
-                guard let amount = row["amount"] as? [String:Any], let n = number(amount["value"]), let c = amount["currency"] as? String else { throw schemaError }; totals[c.uppercased(),default:0] += n
-            }
-        }
-        if costs.isEmpty { totals["USD"] = 0 }
-        var s = UsageSnapshot.empty(source:anthropic ? "Claude 官方管理 API" : "OpenAI 官方管理 API")
-        s.periodStart = start; s.periodEnd = end; s.inputTokens = input; s.outputTokens = output
-        s.costs = totals.sorted(by: { $0.key < $1.key }).map { Money(currency:$0.key,value:$0.value) }
-        s.note = anthropic ? "UTC 本月组织级报告；含缓存读写，Priority Tier 费用不在官方成本接口内。" : "UTC 本月组织级报告；Token 为 completions 类别，费用来自独立 Costs 报告。缓存输入不重复累加。"
-        return s
-    }
 }
 
 enum CodexBridge {

@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 enum TokenBundle { static let bundle = Bundle.main }
 enum AlertRules {
@@ -31,22 +32,30 @@ enum AlertRules {
         }
 
         let standalone = try snapshot(["Signed in as OWNER@Example.com"] + lines)
-        let embedded = try snapshot(["当前 Google 账号：", email] + lines,
-                                    title: "Antigravity 模型额度", route: .embedded)
         precondition(standalone.source == Desktop.Route.standalone.snapshotSource)
-        precondition(embedded.source == Desktop.Route.embedded.snapshotSource)
-        precondition(standalone.quotas == embedded.quotas)
         precondition(standalone.observedAt == date && standalone.isFreshObservation(at: date))
         precondition(standalone.quotas.map(\.usedPercent) == [24.5, 40, 20, 100])
         precondition(standalone.quotas.map(\.windowSeconds) == [604_800, 18_000, 604_800, 604_800])
         precondition(standalone.quotas.allSatisfy { $0.resetsAt == nil })
-        precondition(Desktop.Route(.file) == nil && Desktop.Route(.geminiApp) == .embedded)
+        precondition(Desktop.Route(.file) == nil && Desktop.Route(.geminiApp) == .embedded && Desktop.Route(.agentLocal) == .standalone)
         precondition(Desktop.Route.standalone.bundleIdentifier == "com.google.antigravity")
         precondition(Desktop.Route.embedded.bundleIdentifier == "com.google.GeminiMacOS")
+        for route in [Desktop.Route.embedded, .standalone] {
+            var requirement: SecRequirement?
+            let rule = route.signingRequirement
+            precondition(SecRequirementCreateWithString(rule as CFString, [], &requirement) == errSecSuccess && requirement != nil)
+            precondition(rule.contains("identifier \"\(route.bundleIdentifier)\""))
+            precondition(rule.contains("certificate leaf[subject.OU] = \"EQHXZ8M8AV\""))
+        }
+        precondition(Desktop.Route.embedded.signingRequirement != Desktop.Route.standalone.signingRequirement)
+        rejects(.paneNotAvailable) {
+            try snapshot(["当前 Google 账号：", email] + lines, title: "Antigravity 模型额度", route: .embedded)
+        }
 
         let compact = "Gemini Models Weekly limit 67% left Resets in 5d 11h 5h limit 100% left"
         let compactReading = try snapshot(["Signed in as \(email)", "Usage", compact],
                                           title: "Antigravity Usage", route: .embedded)
+        precondition(compactReading.source == Desktop.Route.embedded.snapshotSource)
         precondition(compactReading.quotas.map(\.id) == ["gemini-models-weekly", "gemini-models-5h"])
         precondition(compactReading.quotas.map(\.remaining) == [67, 100])
         precondition(compactReading.quotas.map(\.windowSeconds) == [604_800, 18_000])

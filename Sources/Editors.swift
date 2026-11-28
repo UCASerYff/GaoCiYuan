@@ -50,7 +50,7 @@ struct AccountEditor: View {
                         Text(L("点「登录 GitHub」后代码已复制到剪贴板并打开授权页，输入代码即完成；只索取 read:user 权限（读不了代码仓库），令牌仅存本机钥匙串，与 gh CLI 的凭证无关。授权页会显示 VS Code Copilot 插件的名字——这是它公开的客户端，不是官方集成。")).font(.caption).foregroundStyle(.secondary)
                     } else {
                         SecureField(L(account.connection.credentialLabel ?? ([.aliyun,.volc,.volcArk].contains(account.connection) ? "AccessKey Secret" : account.connection == .xai ? "Management Key" : account.connection == .kimiCoding ? "Kimi Code Key" : "API 密钥")),text:$key,prompt:Text(L("留空保留已存密钥")))
-                        Text(L(account.connection.integration != nil ? "凭据仅保存在本机钥匙串，查询失败会保留上次数据；内部控制台接口可能随平台升级而变动。" : account.connection == .kimiCoding ? "使用 Kimi Code 订阅专用 Key（kimi.com 控制台获取，通常 sk-kimi- 开头），与 Moonshot 开放平台按量 Key 互不通用。密钥仅保存在本机钥匙串。" : account.connection == .openai || account.connection == .anthropic ? "需要组织 Admin Key，普通模型调用 Key 无法读取组织账单。密钥仅保存在本机钥匙串。" : "使用对应套餐或云平台的查询凭据；云余额接口需要财务只读权限，普通模型 Key 不适用。密钥仅保存在本机钥匙串。")).font(.caption).foregroundStyle(.secondary)
+                        Text(L(account.connection.integration != nil ? "凭据仅保存在本机钥匙串，查询失败会保留上次数据；内部控制台接口可能随平台升级而变动。" : account.connection == .kimiCoding ? "使用 Kimi Code 订阅专用 Key（kimi.com 控制台获取，通常 sk-kimi- 开头），与 Moonshot 开放平台按量 Key 互不通用。密钥仅保存在本机钥匙串。" : "使用对应套餐或云平台的查询凭据；云余额接口需要财务只读权限，普通模型 Key 不适用。密钥仅保存在本机钥匙串。")).font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 if account.connection == .file {
@@ -110,20 +110,6 @@ struct AccountEditor: View {
                 }
                 if account.connection == .workbuddyLocal {
                     Text(L("经辅助功能只读读取本机 WorkBuddy 桌面端左下角账户弹层的积分余额（积分制：1000 积分满环，低于按比例）。后台读取 + 5 分钟节流，前台使用中不打扰，读完按 Escape 关闭弹层；零网络、零凭证，积分值不写日志。需在系统设置中授予辅助功能权限。")).font(.callout).foregroundStyle(.secondary)
-                }
-                if account.connection == .customAPI {
-                    let cfg = Binding<CustomAPIConfig>(get: { account.customConfig ?? CustomAPIConfig() }, set: { account.customConfig = $0 })
-                    TextField(L("余额查询 URL（GET）"),text:cfg.url,prompt:Text(L("https://…/balance")))
-                    Picker(L("鉴权方式"),selection:cfg.auth) { Text(L("无")).tag("none"); Text(L("Bearer Token")).tag("bearer"); Text(L("自定义请求头")).tag("header") }
-                    if cfg.wrappedValue.auth == "header" { TextField(L("请求头名"),text:cfg.headerName,prompt:Text(L("如 x-api-key"))) }
-                    if cfg.wrappedValue.auth != "none" {
-                        SecureField(L(cfg.wrappedValue.auth == "bearer" ? "Token" : "请求头值"),text:$key,prompt:Text(L("留空保留已存凭证")))
-                        Text(L("凭证仅保存在本机钥匙串，只在查询请求头中使用，不写日志。")).font(.caption).foregroundStyle(.secondary)
-                    }
-                    TextField(L("余额字段路径"),text:cfg.fieldPath,prompt:Text(L("如 data.balance 或 data.list[0].balance")))
-                    HStack { TextField(L("满环基准值"),value:cfg.baseline,format:.number); TextField(L("单位符号"),text:cfg.unit,prompt:Text(L("¥、$、积分、tokens…"))) }
-                    TextField(L("赠送/第二字段路径（选填）"),text:cfg.secondPath)
-                    Text(L("GET 该地址读取 JSON，按点分路径（支持 [0] 数组下标）取余额；悬浮条圆环填充 = min(余额/基准, 1)，轮询 5 分钟，失败保留上次数据。")).font(.caption).foregroundStyle(.secondary)
                 }
                 if account.provider == .claude && account.connection == .agentLocal {
                     Text(L("自动链：官方 OAuth 接口（本机登录凭证）→ 状态栏推送（可在设置中一键连接）→ 本地记录。登录过期时建议在设置中连接状态栏推送。")).font(.callout).foregroundStyle(.secondary)
@@ -205,13 +191,6 @@ struct AccountEditor: View {
             }
             if account.connection == .traeQuota { TextField("Device ID（选填）", text: scopeBinding) }
             if account.connection == .kiroQuota { TextField("kiro-cli 路径（选填）", text: scopeBinding, prompt: Text("默认查找本机安装")) }
-            if [.newAPIQuota, .sub2APIQuota].contains(account.connection) {
-                TextField("服务地址", text: $account.filePath, prompt: Text("https://你的服务地址"))
-            }
-            if account.connection == .newAPIQuota {
-                Picker("查询对象", selection: regionBinding("api-key")) { Text("API Key 额度").tag("api-key"); Text("账户总额度").tag("account") }
-                if account.region == "account" { TextField("用户 ID", text: scopeBinding) }
-            }
             Text(integration.help).font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -330,15 +309,24 @@ struct AccountEditor: View {
             confirm.messageText = L("确认报告归属")
             let destination = L("目标账户") + " 「\(saved.name)」"
             let mode = L("记录方式") + " 「\(L(snapshot.source))」"
+            let identity: String?
+            if let email = saved.antigravityEmail {
+                identity = L("已登录的 Google 账号邮箱") + " 「\(email)」"
+            } else if store.library.accounts.contains(where: { $0.id != saved.id && $0.name == saved.name && $0.connection == saved.connection }) {
+                identity = L("搞词元账户 ID") + " " + saved.id.uuidString
+            } else {
+                identity = nil
+            }
             let explanation = L("请确认额度来自你选择的应用及 Google 账号。来源、账号和观测时间未经应用核验，记录仅供历史参考。")
-            confirm.informativeText = [destination, mode, "", explanation].joined(separator: "\n")
+            confirm.informativeText = [destination, mode, identity, "", explanation].compactMap { $0 }.joined(separator: "\n")
             confirm.addButton(withTitle: L("确认并保存"))
             confirm.addButton(withTitle: L("取消"))
             confirm.buttons[0].keyEquivalent = ""
             confirm.buttons[1].keyEquivalent = "\u{1b}"
             guard confirm.runModal() == .alertFirstButtonReturn else { return }
             guard let current = savedAntigravityAccount, current.id == saved.id,
-                  current.connection == saved.connection, current.name == saved.name else {
+                  current.connection == saved.connection, current.name == saved.name,
+                  current.antigravityEmail == saved.antigravityEmail else {
                 throw MonitorError.message("账户已变更，请重新选择报告并确认归属。")
             }
             try store.importAntigravityReport(snapshot, for: saved.id)
@@ -377,10 +365,7 @@ struct AccountEditor: View {
         if account.connection.needsKey && old.connection != account.connection {
             throw MonitorError.message("切换连接方式后，请填写该连接的凭据。")
         }
-        if [.newAPIQuota, .sub2APIQuota].contains(account.connection), old.filePath != account.filePath {
-            throw MonitorError.message("更换服务地址后，请重新填写对应服务的凭据。")
-        }
-        let defaults: [Connection: String] = [.qoderQuota: "global", .alibabaPlan: "cn", .openCodeQuota: "zen", .newAPIQuota: "api-key"]
+        let defaults: [Connection: String] = [.qoderQuota: "global", .alibabaPlan: "cn", .openCodeQuota: "zen"]
         if let fallback = defaults[account.connection], (old.region ?? fallback) != (account.region ?? fallback) {
             throw MonitorError.message("切换服务地区、套餐或凭据类型后，请重新填写对应凭据。")
         }
@@ -436,12 +421,6 @@ struct AccountEditor: View {
     func save() {
         do {
             try validateDestinationChange()
-            if [.newAPIQuota, .sub2APIQuota].contains(account.connection) {
-                guard let u = URL(string: account.filePath), u.scheme == "https", u.host != nil, u.user == nil, u.password == nil, u.query == nil, u.fragment == nil else { throw MonitorError.message("请填写不含密码、查询参数或片段的 HTTPS 服务地址。") }
-                if account.connection == .newAPIQuota && account.region == "account" {
-                    guard let id = account.scopeID, !id.isEmpty, id.allSatisfy(\.isNumber) else { throw MonitorError.message("账户模式需填写数字用户 ID。") }
-                }
-            }
             account.name = account.name.trimmingCharacters(in:.whitespacesAndNewlines)
             if !budget.isEmpty { guard let n = Double(budget), n.isFinite, n > 0 else { throw MonitorError.message("预算请输入大于 0 的数字。") }; account.budget = n } else { account.budget = nil }
             if account.connection == .file && !FileManager.default.fileExists(atPath:account.filePath) { throw MonitorError.message("请选择可读取的 JSON 文件。") }
@@ -449,15 +428,6 @@ struct AccountEditor: View {
                 guard let scope = account.scopeID?.trimmingCharacters(in:.whitespacesAndNewlines), !scope.isEmpty, scope.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }) else { throw MonitorError.message("请填写有效的 Team ID 或 AccessKey ID。") }; account.scopeID = scope
             }
             if account.connection.needsKey && key.isEmpty { _ = try KeyVault.read(account.id) }
-            if account.connection == .customAPI {
-                guard let cfg = account.customConfig else { throw MonitorError.message("请完善自定义 API 配置。") }
-                guard let u = URL(string: cfg.url.trimmingCharacters(in:.whitespacesAndNewlines)), ["https","http"].contains(u.scheme ?? ""), u.host != nil else { throw MonitorError.message("余额查询 URL 无效（需 http/https 地址）。") }
-                _ = try CustomBridge.parsePath(cfg.fieldPath)
-                if !cfg.secondPath.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty { _ = try CustomBridge.parsePath(cfg.secondPath) }
-                guard cfg.baseline.isFinite && cfg.baseline > 0 else { throw MonitorError.message("满环基准值需为大于 0 的数字。") }
-                if cfg.auth == "header" && cfg.headerName.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty { throw MonitorError.message("自定义请求头需填写头名。") }
-                if cfg.auth != "none" && key.isEmpty { _ = try KeyVault.read(account.id) }
-            }
             if let old = store.library.accounts.first(where:{$0.id == account.id}), old.connection != account.connection || old.filePath != account.filePath {
                 account.snapshot = nil; account.error = nil; account.lastAttempt = nil
             }
@@ -480,7 +450,6 @@ private struct AccountEditorFields: Equatable {
     let budget: String
     let currency: String
     let balanceBasis: String
-    let customConfig: CustomAPIConfig?
     let showInRail: Bool
     let antigravitySyncMethod: AntigravitySyncMethod?
     let antigravityEmail: String?
@@ -498,7 +467,6 @@ private struct AccountEditorFields: Equatable {
         self.budget = budget
         currency = account.currency
         balanceBasis = account.balanceBasis ?? "sinceTopUp"
-        customConfig = account.customConfig
         showInRail = account.showInRail
         antigravitySyncMethod = account.antigravitySyncMethod
         antigravityEmail = account.antigravityEmail

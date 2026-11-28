@@ -113,19 +113,19 @@ func displayDate(_ date: Date, time: Bool = true) -> String { "" }
         try require(positional.quotaForecastHistory == nil && QuotaForecast.evaluate(account: positional, now: clock).windows.isEmpty,
                     "A positional Antigravity fallback identity cannot supply forecast evidence")
 
-        let retiredSources: [(String, Connection?)] = [
-            ("Gemini App 中的 Antigravity", .geminiApp), ("Gemini App 中的 Antigravity · /usage", .geminiApp),
-            ("Antigravity /usage 手动报告", nil), ("Antigravity 本机服务", .agentLocal),
+        let retiredSources = [
+            "Gemini App 中的 Antigravity", "Gemini App 中的 Antigravity · /usage",
+            "Antigravity /usage 手动报告", "Antigravity 本机服务",
+            "Gemini 内置 Antigravity · 本机窗口", "Antigravity 独立版 · 本机窗口",
         ]
-        for (source, sourceRoute) in retiredSources {
+        for source in retiredSources {
             var historical = sample(-2, 100)
             historical.source = source
             for route in [Connection.geminiApp, .agentLocal] {
                 var account = Account(provider: .gemini, kind: .agent, name: "Historical Gemini fixture", connection: route)
                 record(historical, into: &account)
-                let belongsToRoute = sourceRoute == route
-                try require(account.historicalAntigravityReport == (belongsToRoute ? historical : nil)
-                            && account.unassignedLegacyAntigravityReport == (belongsToRoute ? nil : historical)
+                try require(account.historicalAntigravityReport == nil
+                            && account.legacyAntigravityHistory == [historical]
                             && account.snapshot == historical, "A legacy report was relabeled, lost or shown under another route")
                 try require(historical.isHistoricalAntigravityReading && !historical.isFreshObservation(at: clock)
                             && account.stale(at: clock) && account.displayQuotas.isEmpty,
@@ -138,17 +138,24 @@ func displayDate(_ date: Date, time: Bool = true) -> String { "" }
         var misfiled = sample(-2, 90)
         misfiled.source = UsageSnapshot.standaloneAntigravityManualSource
         mixed.antigravityReports = [Connection.geminiApp.rawValue: misfiled]
-        try require(mixed.historicalAntigravityReport == nil && mixed.unassignedLegacyAntigravityReport == misfiled,
+        try require(mixed.historicalAntigravityReport == nil && mixed.legacyAntigravityHistory == [misfiled],
                     "A previously misfiled report must stay archived")
         var standaloneJSON = sample(-2, 100)
         standaloneJSON.source = UsageSnapshot.standaloneAntigravityJSONSource
         mixed.antigravityReports = [Connection.geminiApp.rawValue: standaloneJSON]
-        try require(mixed.historicalAntigravityReport == nil && mixed.unassignedLegacyAntigravityReport == standaloneJSON,
+        try require(mixed.historicalAntigravityReport == nil && mixed.legacyAntigravityHistory == [standaloneJSON],
                     "A standalone JSON label must not appear as an embedded report")
         record(standaloneJSON, into: &mixed)
         try require(standaloneJSON.isHistoricalAntigravityReading && !standaloneJSON.isFreshObservation(at: clock)
                     && mixed.quotaForecastHistory == nil && QuotaForecast.evaluate(account: mixed, now: clock).windows.isEmpty,
                     "The standalone JSON source must not become a live sample even without the optional historical flag")
+        mixed.history = [standaloneJSON]
+        try require(mixed.moveLegacyAntigravityHistoryToArchive() && mixed.history.isEmpty,
+                    "Historical samples were left in the bounded live history")
+        mixed.preserveLegacyAntigravitySnapshot()
+        mixed.snapshot = nil
+        try require(mixed.archivedAntigravitySnapshots == [standaloneJSON] && mixed.legacyAntigravityHistory == [standaloneJSON],
+                    "Replacing a legacy current reading lost or duplicated its persistent history")
         try checkHistoricalNotifications(standaloneJSON)
         var flaggedReport = sample(-2, 100)
         flaggedReport.isUnverifiedAntigravityReport = true

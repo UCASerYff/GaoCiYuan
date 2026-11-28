@@ -76,9 +76,7 @@ private struct UsageLedgerArchive: Codable {
 /// aggregate high-water mark. Within a session, token buckets are monotonic observations;
 /// source truncation or a partial rescan never reduces an already observed total.
 actor UsageLedger {
-    static let didRestoreNotification = Notification.Name("GaoSeries.token.usage.didRestore")
     private static let gate = NSRecursiveLock()
-    private static var restoreEpoch: UInt64 = 0
     private let directory: URL
     let deviceID: String
     let deviceName: String
@@ -99,22 +97,18 @@ actor UsageLedger {
             let value = UUID().uuidString.lowercased(); defaults.set(value, forKey: key); return value
         }
     }
-    /// DataTransfer shares this gate for a complete restore; no SQLite handle survives a call.
+    /// Serialize database access and device identity initialization across ledger instances.
     nonisolated static func withExclusiveAccess<T>(_ body: () throws -> T) rethrows -> T {
         gate.lock(); defer { gate.unlock() }; return try body()
     }
 
-    nonisolated static func restoreGeneration() -> UInt64 {withExclusiveAccess {restoreEpoch}}
-    nonisolated static func invalidateScans() {withExclusiveAccess {restoreEpoch &+= 1}}
-
-    func ingest(_ scan: UsageEngineScan, expectedGeneration: UInt64? = nil) throws {
+    func ingest(_ scan: UsageEngineScan) throws {
         try Self.validateDevice(id: deviceID, name: deviceName)
         guard scan.capturedAt.timeIntervalSince1970.isFinite, scan.capturedAt.timeIntervalSince1970 >= 0, scan.capturedAt <= Date().addingTimeInterval(300) else { throw UsageLedgerError.invalid("采集时间无效。") }
         try Self.validate(days: scan.days, sessions: scan.sessions)
         try Self.validateCursorEvents(scan.cursorEvents ?? [])
         if let batch = scan.localUsage {try Self.validateLocalUsage(batch)}
         try withDB { db in
-            guard expectedGeneration.map({$0 == Self.restoreEpoch}) ?? true else {throw UsageLedgerError.invalid("数据目录已变化，请重新扫描本机用量。")}
             try Self.transaction(db) {
                 try Self.writeDevice(db, id: deviceID, name: deviceName, at: scan.capturedAt)
                 let eventClients = Set(scan.localUsage?.clients ?? [])

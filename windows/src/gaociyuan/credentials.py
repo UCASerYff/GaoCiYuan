@@ -214,4 +214,7 @@ def _cred_read(account_id: str) -> bytes | None:
 def _cred_delete(account_id: str) -> None:
     import ctypes
 
-    ctypes.windll.advapi32.CredDeleteW(target_name(account_id), _credential_type(), 0)
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    if not advapi.CredDeleteW(target_name(account_id), _credential_type(), 0):
+        if ctypes.get_last_error() != 1168:  # ERROR_NOT_FOUND
+            raise AppError("无法从 Windows 凭据管理器移除凭据。", "credential")

@@ -390,10 +390,12 @@ def catalog_entries() -> list[dict]:
     return rows
 
 
-def normalize_kind(raw: str) -> str:
+def normalize_kind(raw: object) -> str | None:
+    if not isinstance(raw, str):
+        return None
     if raw in {"Agent", "agent", "会员额度", "membership"}:
         return "Agent"
-    return "LLM"
+    return "LLM" if raw in {"LLM", "llm"} else None
 
 
 _CONNECTION_ALIASES = {

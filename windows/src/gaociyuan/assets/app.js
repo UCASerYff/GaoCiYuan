@@ -169,6 +169,12 @@ const supplementalTranslations = {
   "历史报告": "Historical report",
   "macOS 旧版连接": "Legacy macOS connection",
   "旧连接历史资料": "Legacy connection history",
+  "条旧额度记录": "archived quota records",
+  "暂无旧额度记录。": "No archived quota readings.",
+  "历史记录时间": "Historical record time",
+  "记录中的重置时间": "Reset time in the record",
+  "记录中的剩余额度": "Remaining quota in the record",
+  "要同步独立 CLI 额度或导入 /usage 历史报告，请另建独立版账户。": "Add a standalone account to sync CLI quota or import a historical /usage report.",
   "原账户和历史资料保留在此。若要导入 Windows 的 CLI 报告，请另建独立版账户。": "The original account and history stay here. Add a separate standalone account to import Windows CLI reports.",
   "添加 Antigravity 独立版账户": "Add a standalone Antigravity account",
   "待导入报告": "Report needed",
@@ -553,8 +559,13 @@ function render() {
     return;
   }
   const contents = { overview: renderOverview, agents: renderAgents, analytics: renderUsage, catalog: renderCatalog };
+  const legacyDisclosures = new Map([...main.querySelectorAll("details[data-legacy-reading]")]
+    .map((item) => [item.dataset.legacyReading, item.open]));
   main.dataset.page = page;
   main.innerHTML = heading(routeDefinitions[page]) + contents[page]();
+  for (const item of main.querySelectorAll("details[data-legacy-reading]")) {
+    if (legacyDisclosures.has(item.dataset.legacyReading)) item.open = legacyDisclosures.get(item.dataset.legacyReading);
+  }
 }
 
 function metric(title, value, detail, glyph, tone = "") {
@@ -583,7 +594,7 @@ const healthDisplay = {
 
 function agentHealth(account) {
   if (account.enabled) {
-    if (antigravityLegacyAccount(account)) return "historical";
+    if (antigravityLegacyAccount(account)) return account.health === "historical" ? "historical" : "syncPaused";
     if (antigravityReportAccount(account) && !account.snapshot) {
       return account.antigravityReport && !account.antigravityEmail ? "historical" : "syncPaused";
     }
@@ -791,7 +802,51 @@ function renderAntigravityReport(account, inspector) {
 }
 
 function antigravityLegacyGuide() {
-  return `<p class="caption muted">${t("原账户和历史资料保留在此。若要导入 Windows 的 CLI 报告，请另建独立版账户。")}</p>`;
+  return `<p class="caption muted">${t("要同步独立 CLI 额度或导入 /usage 历史报告，请另建独立版账户。")}</p>`;
+}
+
+function antigravityLegacySnapshots(account) {
+  const history = Array.isArray(account.history) ? account.history : [];
+  const seen = new Set();
+  return [...history, account.snapshot].filter((reading) => {
+    if (!reading || typeof reading !== "object") return false;
+    const { source, observedAt, quotas, balances, costs, creditBalances } = reading;
+    const groups = [quotas, balances, costs, creditBalances];
+    if (!groups.some((rows) => Array.isArray(rows) && rows.length > 0)) return false;
+    const key = JSON.stringify([source, observedAt, ...groups.map((rows) => rows?.length ? rows : [])]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort((a, b) => (Date.parse(b.observedAt) || 0) - (Date.parse(a.observedAt) || 0));
+}
+
+function renderAntigravityLegacyHistory(account, inspector) {
+  const readings = antigravityLegacySnapshots(account);
+  const percentage = new Intl.NumberFormat(inEnglish() ? "en" : "zh-CN", { maximumFractionDigits: 6 });
+  const time = (stamp) => typeof stamp === "string" && Number.isFinite(Date.parse(stamp))
+    ? `<time datetime="${text(stamp)}">${text(displayDate(stamp, { year: "numeric", second: "2-digit", timeZoneName: "short" }))}</time>`
+    : t("—");
+  const report = (reading, index) => {
+    const quotaRows = (reading.quotas || []).filter((quota) => Number.isFinite(quota.usedPercent)).map((quota) =>
+      `<li><div class="spread antigravity-quota-values"><span>${t(quota.title)}</span>
+        <strong>${t("记录中的剩余额度")} ${text(percentage.format(100 - quota.usedPercent))}%</strong></div>
+        ${quota.resetsAt ? `<p class="caption muted">${t("记录中的重置时间")} ${time(quota.resetsAt)}</p>` : ""}</li>`);
+    const moneyRows = (rows, label) => (rows || []).map((row) =>
+      `<li class="spread antigravity-quota-values"><span>${t(label)}</span><strong>${text(money(row.value, row.currency))}</strong></li>`);
+    const creditRows = (reading.creditBalances || []).map((row) =>
+      `<li class="spread antigravity-quota-values"><span>${t(row.title)}</span><strong>${text(number(row.value))} ${text(row.unit)}</strong></li>`);
+    const stamp = `${t("历史记录时间")} ${time(reading.observedAt)}${reading.source ? " · " + t(reading.source) : ""}`;
+    const rows = `<ul class="antigravity-report-quotas">${[...quotaRows, ...moneyRows(reading.balances, "账户余额"), ...moneyRows(reading.costs, "统计期费用"), ...creditRows].join("")}</ul>`;
+    if (!inspector) return `<div><p class="caption muted">${stamp}</p>${rows}</div>`;
+    const recordID = text(`legacy-${account.id}-${index}`);
+    return `<details class="detail-note" data-legacy-reading="${recordID}"${index === 0 ? " open" : ""}>
+      <summary id="${recordID}">${stamp}</summary>${rows}</details>`;
+  };
+  return `<section class="antigravity-history"><h3>${t("旧连接历史资料")}</h3>
+    ${antigravityLegacyGuide()}
+    ${readings.length ? `<p class="caption muted">${text(readings.length)} ${t("条旧额度记录")}</p>` : `<p class="caption muted">${t("暂无旧额度记录。")}</p>`}
+    ${(inspector ? readings : readings.slice(0, 1)).map(report).join("")}
+  </section>`;
 }
 
 function quotaRow(quota, stale, keepExpired) {
@@ -902,11 +957,7 @@ function renderAccount(account, inspector = false) {
       ${inspector && currentReading ? `<h3>${t("实测额度")}</h3>` : ""}
       ${currentReading ? renderSnapshot(account) : ""}
       ${reportAccount ? renderAntigravityReport(account, inspector) : ""}
-      ${legacyAccount ? `<section class="antigravity-history">
-        <h3>${t("旧连接历史资料")}</h3>
-        ${antigravityLegacyGuide()}
-        ${account.snapshot ? renderSnapshot({ ...account, stale: true, keepsSnapshotOnError: true }) : ""}
-      </section>` : ""}
+      ${legacyAccount ? renderAntigravityLegacyHistory(account, inspector) : ""}
       ${status ? `<p class="info-row muted">${icon("info")}${t(status)}</p>` : ""}
       ${account.error ? `<p class="info-row amber">${icon("alert")}${t(account.error)}</p>` : ""}
     </div>
@@ -1225,6 +1276,7 @@ function openAntigravityImport(account) {
         <div class="antigravity-target">
           <p class="caption muted">${t("导入到账户")}</p>
           <p><strong>${text(account.name)}</strong>${account.plan ? " · " + text(account.plan) : ""}</p>
+          ${account.antigravityEmail ? `<p class="caption muted">${t("Antigravity CLI 登录邮箱")} ${text(account.antigravityEmail)}</p>` : ""}
           ${showID ? `<p class="caption muted">${t("搞词元账户 ID")} <code>${text(account.id)}</code></p>` : ""}
         </div>
         ${antigravityReportGuide()}

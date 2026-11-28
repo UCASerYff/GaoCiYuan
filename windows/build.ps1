@@ -46,8 +46,12 @@ $versionInfo = Join-Path $buildDir 'version.info'
 Check-Exit 'Windows resources'
 
 $stage = Join-Path $buildDir 'stage'
+$webViewStage = Join-Path $buildDir ('webview-' + [Guid]::NewGuid().ToString('N'))
+& $Python -B stage_webview.py $webViewStage
+Check-Exit 'Stage x64 WebView2 backend'
 $pyInstallerArgs = @(
     '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir', '--paths', 'src',
+    '--paths', $webViewStage,
     '--distpath', $stage, '--workpath', (Join-Path $buildDir 'obj'), '--specpath', $buildDir,
     '--icon', $icon, '--version-file', $versionInfo,
     '--add-data', "$(Join-Path $PSScriptRoot 'src\gaociyuan\assets');gaociyuan_assets",
@@ -56,13 +60,16 @@ $pyInstallerArgs = @(
     '--add-data', "$(Join-Path $resources 'Translations.tsv');gaociyuan_brand",
     '--add-data', "$(Join-Path $resources 'ProviderIcons');gaociyuan_brand\ProviderIcons",
     '--add-data', "$(Join-Path $resources 'PanelIcons\claude-native-white-flower.png');gaociyuan_brand\PanelIcons",
-    '--collect-all', 'tzdata', '--collect-all', 'webview', '--collect-all', 'pythonnet',
+    '--additional-hooks-dir', (Join-Path $PSScriptRoot 'hooks'),
+    '--collect-all', 'tzdata', '--collect-all', 'pythonnet',
     '--hidden-import', 'pystray._win32'
 )
 & $Python @pyInstallerArgs --name GaoCiYuan --windowed launch.py
 Check-Exit 'Desktop package'
 & $Python @pyInstallerArgs --name GaoCiYuan-cli --console launch_cli.py
 Check-Exit 'CLI package'
+& $Python -B verify_frozen_webview.py (Join-Path $stage 'GaoCiYuan\GaoCiYuan.exe') (Join-Path $stage 'GaoCiYuan-cli\GaoCiYuan-cli.exe')
+Check-Exit 'Validate frozen WebView2 payload'
 
 & $compiler "/DAppVersion=$version" "/DAppBuild=$build" "/DStageDir=$stage" "/DOutputDir=$distDir" "/DAppIcon=$icon" "/DBootstrapper=$bootstrapper" 'installer.iss'
 Check-Exit 'Installer'

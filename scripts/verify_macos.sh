@@ -17,8 +17,8 @@ framework="$app/Contents/Frameworks/Token.framework/Versions/A"
 [[ "$(/usr/bin/lipo -archs "$app/Contents/MacOS/GaoCiYuan")" == arm64 ]]
 [[ "$(/usr/bin/lipo -archs "$framework/Token")" == arm64 ]]
 for info in Info.plist "$app/Contents/Info.plist" "$framework/Resources/Info.plist"; do
-    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info")" == 4.15 ]]
-    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info")" == 17 ]]
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info")" == 4.16 ]]
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info")" == 18 ]]
 done
 [[ ! -e "$app/Contents/PlugIns/GaoCiYuanWidgets.appex" ]]
 python3 - "$app/Contents/MacOS/GaoCiYuan" <<'PY'
@@ -44,7 +44,7 @@ models=(Sources/{Models,AgentTables,ProviderIntegrations,GrokBotUsageReport,Quot
 
 "${compiler[@]}" "${models[@]}" Sources/{AntigravityDesktopQuota,GeminiEmbeddedAntigravityQuota,GeminiAntigravityAccountReader,AntigravityStatusLine,Log}.swift \
     Tests/AntigravityDesktopQuotaRegression.swift -framework AppKit -framework ApplicationServices \
-    -framework CryptoKit -o "$fixture/antigravity-desktop-quota"
+    -framework CryptoKit -framework Security -o "$fixture/antigravity-desktop-quota"
 "$fixture/antigravity-desktop-quota"
 
 "${compiler[@]}" Sources/TokenLifecycleWork.swift Tests/TokenLifecycleWorkRegression.swift -o "$fixture/lifecycle"

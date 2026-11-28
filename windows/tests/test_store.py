@@ -87,6 +87,78 @@ def test_migration_removes_llm_without_backup(tmp_path: Path):
     assert not any("bak" in name or "backup" in name for name in names)
 
 
+def test_legacy_credential_migration_persists_before_delete_and_retries(tmp_path, monkeypatch):
+    library_path = tmp_path / "library.json"
+    library_payload = {
+        "schema": 1,
+        "accounts": [
+            {"id": "Retired", "provider": "openai", "kind": "LLM", "name": "Legacy API", "connection": "OpenAI 管理 API"},
+            {"id": "retired", "provider": "next-version", "kind": "FutureAgent", "name": "Future fixture", "metadata": {"keep": [1, 2]}},
+            {"id": "Live-ID", "provider": "openai", "kind": "Agent", "name": "Active fixture", "connection": "本机 Codex"},
+            {"id": "live-id", "provider": "custom", "kind": "Agent", "name": "Removed collision"},
+            {"id": "Only-Old", "provider": "openai", "kind": "LLM", "name": "Remove only after save"},
+        ],
+    }
+    original = json.dumps(library_payload)
+    library_path.write_text(original, encoding="utf-8")
+    calls = []
+
+    class Vault(MemoryCredentialStore):
+        retry = False
+
+        def delete(self, account_id):
+            saved = json.loads(library_path.read_text(encoding="utf-8"))
+            assert saved["pendingLegacyCredentialIDs"] == ["Only-Old"]
+            assert {record["id"] for record in saved["accounts"]} == {"retired", "Live-ID"}
+            calls.append(account_id)
+            if not self.retry:
+                raise AppError("synthetic vault refusal", "credential")
+            super().delete(account_id)
+
+    vault = Vault()
+    for account_id in ("Retired", "Live-ID", "Only-Old"):
+        vault.put(account_id, f"synthetic-{account_id}")
+    with monkeypatch.context() as patch:
+        def block_replace(*args):
+            raise PermissionError("synthetic file write refusal")
+
+        patch.setattr("gaociyuan.store._atomic_json", block_replace)
+        failed = TokenStore(tmp_path, credentials=vault, now=clock)
+        assert failed.load_failed
+        assert not calls
+        assert library_path.read_text(encoding="utf-8") == original
+
+    loaded = TokenStore(tmp_path, credentials=vault, now=clock)
+    assert not loaded.load_failed
+    assert "下次启动" in loaded.notice
+    assert calls == ["Only-Old"]
+    assert vault.has("Only-Old")
+    vault.retry = True
+    reloaded = TokenStore(tmp_path, credentials=vault, now=clock)
+    assert calls == ["Only-Old", "Only-Old"]
+    assert not vault.has("Only-Old")
+    assert vault.has("Retired") and vault.has("Live-ID")
+    reloaded.update_settings({"refreshMinutes": 7})
+    saved = json.loads(library_path.read_text(encoding="utf-8"))
+    assert "pendingLegacyCredentialIDs" not in saved
+    assert next(item for item in saved["accounts"] if item["id"] == "retired") == library_payload["accounts"][1]
+    with pytest.raises(AppError, match="历史账户"):
+        reloaded.save_account({"id": "Retired", "provider": "openai", "connection": "本机 Codex"})
+
+
+@pytest.mark.parametrize("original", ['{"theme":', '[]', '{"timeZone": "invalid/Zone"}'])
+def test_corrupt_application_settings_remain_byte_identical(tmp_path, original):
+    settings = tmp_path / "settings.json"
+    settings.write_text(original, encoding="utf-8")
+    loaded = store(tmp_path)
+    before = loaded.settings.copy()
+    assert loaded.settings_failed and "原文件已保留" in loaded.notice
+    with pytest.raises(AppError, match="无法读取"):
+        loaded.update_settings({"theme": "light", "autoRefresh": False})
+    assert loaded.settings == before
+    assert settings.read_text(encoding="utf-8") == original
+
+
 def test_corrupt_library_is_not_overwritten(tmp_path: Path):
     original = "{not json"
     (tmp_path / "library.json").write_text(original, encoding="utf-8")

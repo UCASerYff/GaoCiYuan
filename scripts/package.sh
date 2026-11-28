@@ -8,7 +8,13 @@ SIGNING_IDENTITY=${GAO_SIGNING_IDENTITY:-A15B2B2D22B018CBC842063C9A8A58994664752
 codesign --verify --deep --strict "$APP"
 [[ ! -d "$APP/Contents/PlugIns/GaoCiYuanWidgets.appex" ]] || { echo '构建仍包含已移除的小组件，请重新构建';exit 1;}
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
-[[ "$VERSION" == "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT/Info.plist")" ]] || { echo '构建版本与源码版本不一致';exit 1;}
+for field in CFBundleShortVersionString CFBundleVersion; do
+    expected=$(/usr/libexec/PlistBuddy -c "Print :$field" "$ROOT/Info.plist")
+    for info in "$APP/Contents/Info.plist" "$APP/Contents/Frameworks/Token.framework/Versions/A/Resources/Info.plist"; do
+        actual=$(/usr/libexec/PlistBuddy -c "Print :$field" "$info")
+        [[ "$actual" == "$expected" ]] || { echo "构建版本与源码不一致（$field）：$info" >&2; exit 1; }
+    done
+done
 rm -rf "$STAGE"
 mkdir -p "$STAGE" "$ROOT/dist"
 # 发行目录只保留本次最新 ZIP 与摘要，不保留旧版安装包或备份。

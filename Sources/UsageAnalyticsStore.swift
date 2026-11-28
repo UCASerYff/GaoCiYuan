@@ -45,7 +45,6 @@ struct UsageAnalyticsPreferences: Codable {
     let directory: URL
     let ledger: UsageLedger
     private var timer: Timer?
-    private var restoreObserver: NSObjectProtocol?
     private var started = false
     private var revision = 0
     private var queryRevision = 0
@@ -72,22 +71,17 @@ struct UsageAnalyticsPreferences: Codable {
         ledger = UsageLedger(directory: directory)
         readPreferences()
         automaticExportPath = TokenBundle.defaults.string(forKey: "actualUsageAutoExportDirectory")
-        restoreObserver = NotificationCenter.default.addObserver(forName: UsageLedger.didRestoreNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                self.revision += 1; self.scanTask?.cancel(); self.pendingAutomaticScan = false
-                self.readPreferences()
-                // An imported backup must not silently authorize writes to an external folder.
-                self.disableAutomaticExport()
-                self.reload()
-            }
-        }
     }
     private func readPreferences() {
         guard FileManager.default.fileExists(atPath: settingsURL.path) else {
             preferences = UsageAnalyticsPreferences(); settingsFailed = false; return
         }
-        do { preferences = try JSONDecoder().decode(UsageAnalyticsPreferences.self, from: Data(contentsOf: settingsURL)); settingsFailed = false }
+        do {
+            let saved = try JSONDecoder().decode(UsageAnalyticsPreferences.self, from: Data(contentsOf: settingsURL))
+            guard (2...60).contains(saved.refreshMinutes) else { throw MonitorError.message("自动采集间隔应为 2–60 分钟。") }
+            preferences = saved
+            settingsFailed = false
+        }
         catch { settingsFailed = true; errorMessage = "用量采集设置读取失败，原文件已保留。请检查原文件后再试。" }
     }
     func start() {
@@ -134,7 +128,7 @@ struct UsageAnalyticsPreferences: Codable {
         guard !isRefreshing, !settingsFailed, !suspended, userInitiated || mayAutomaticallyScan else { return }
         lastAttemptAt = .now
         isRefreshing = true; errorMessage = nil; progressMessage = "正在检查本机用量日志…"
-        let version = revision; let generation = UsageLedger.restoreGeneration(); let configuration = preferences.engine
+        let version = revision; let configuration = preferences.engine
         let reindex = forceReindex || needsReindex, token = UUID()
         scanToken = token; scanIsAutomatic = !userInitiated
         scanTask = Task { [self] in
@@ -159,7 +153,7 @@ struct UsageAnalyticsPreferences: Codable {
                 let lifecycle = TokenLifecycleWork.shared
                 guard let write = lifecycle.beginWrite() else { return }
                 defer { lifecycle.endWrite(write) }
-                try await ledger.ingest(scan, expectedGeneration: generation)
+                try await ledger.ingest(scan)
                 try Task.checkCancellation()
                 guard version == revision else { return }
                 needsReindex = false
@@ -207,6 +201,7 @@ struct UsageAnalyticsPreferences: Codable {
         }
     }
     func savePreferences(_ candidate: UsageAnalyticsPreferences) {
+        guard !settingsFailed else { errorMessage = "用量采集设置读取失败，原文件已保留。请检查原文件后重新启动。"; return }
         guard (2...60).contains(candidate.refreshMinutes) else { errorMessage = "自动采集间隔应为 2–60 分钟。"; return }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

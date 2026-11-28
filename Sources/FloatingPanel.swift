@@ -414,8 +414,6 @@ struct PanelRingView: View {
             dshBadge
         } else if account.provider == .workbuddy {
             workbuddyBadge
-        } else if account.provider == .custom {
-            customBadge
         } else if GrokBotBridge.isUsageRoute(account) {
             grokRemainingRing
         } else {
@@ -459,41 +457,6 @@ struct PanelRingView: View {
                     .foregroundStyle(color)
                     .opacity(face.stale ? 0.45 : 1)
             }
-        }
-    }
-
-    /// 自定义 API 余额环（3.3）：与其他环完全同规格；弧 = min(余额/满环基准, 1)；
-    /// 中央首字符圆形徽章（稳定哈希色），环下数字带单位缩写（截断不四舍五入）。
-    /// 常态账户哈希色、<基准 10% 琥珀、归零珊瑚，陈旧灰。
-    private var customBadge: some View {
-        let balance = account.snapshot?.balances.first?.value
-        let baseline = account.customConfig?.baseline ?? 100
-        let unit = account.customConfig?.unit ?? "¥"
-        let stale = account.stale() && account.snapshot != nil
-        let color: Color = stale || balance == nil ? .secondary
-            : balance! <= 0 ? PanelTheme.warnDeep
-            : balance! < baseline * 0.1 ? PanelTheme.warn
-            : PanelTheme.customColor(account.id)
-        return VStack(spacing: RailGeometry.ringToText) {
-            ZStack {
-                Circle().stroke(Color.primary.opacity(0.10), lineWidth: 4)
-                if let balance {
-                    let fraction = max(0, min(1, balance / baseline))
-                    Circle().trim(from: 0, to: fraction)
-                        .stroke(AngularGradient(colors: [color.opacity(0.55), color], center: .center,
-                                                startAngle: .degrees(0), endAngle: .degrees(min(359.9, 360 * fraction))),
-                                style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .shadow(color: color.opacity(0.30), radius: 1.5)
-                }
-                CustomAccountMark(name: account.name, accountID: account.id, size: 18)
-            }
-            .frame(width: RailGeometry.ringDiameter, height: RailGeometry.ringDiameter)
-            .help(L("自定义 API 余额 · 满环基准 \(CustomBridge.unitText(unit, baseline))"))
-            Text(balance.map { CustomBridge.compactText(unit, $0) } ?? "—")
-                .font(.system(size: 10, weight: .semibold, design: .rounded)).monospacedDigit()
-                .foregroundStyle(color)
-                .opacity(stale ? 0.5 : 1)
         }
     }
 
@@ -622,9 +585,10 @@ struct PanelDetailCard: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { _ in
+            let archived = account.legacyAntigravityHistory
             VStack(alignment: .leading, spacing: 9) {
                 HStack(spacing: 8) {
-                    if account.provider == .custom { CustomAccountMark(name: account.name, accountID: account.id, size: 22) } else { PanelProviderMark(provider: account.provider, size: 22) }
+                    PanelProviderMark(provider: account.provider, size: 22)
                     Text(account.name).font(.callout.weight(.semibold)).lineLimit(1)
                     if activity.isWorking(AgentActivity.Subject(account: account)) {
                         Circle().fill(Theme.teal).frame(width: 7, height: 7)
@@ -657,20 +621,6 @@ struct PanelDetailCard: View {
                             }
                         }
                         ForEach(DshBridge.noteParts(s.note), id: \.self) { Text(L($0)).font(.caption).foregroundStyle(.secondary) }
-                    } else if account.provider == .custom {
-                        // custom 余额语义（3.3）：大号余额（单位自定）+ 附加字段行，无额度窗、无重置倒计时。
-                        let baseline = account.customConfig?.baseline ?? 100
-                        let unit = account.customConfig?.unit ?? "¥"
-                        if let b = s.balances.first {
-                            HStack {
-                                Text(L("账户余额")).font(.caption).foregroundStyle(.secondary)
-                                Spacer()
-                                Text(CustomBridge.unitText(unit, b.value))
-                                    .font(.system(size: 20, weight: .semibold, design: .rounded)).monospacedDigit()
-                                    .foregroundStyle(b.value <= 0 ? PanelTheme.warnDeep : b.value < baseline * 0.1 ? PanelTheme.warn : PanelTheme.customColor(account.id))
-                            }
-                        }
-                        ForEach(DshBridge.noteParts(s.note), id: \.self) { Text(L($0)).font(.caption).foregroundStyle(.secondary) }
                     } else {
                         if account.displayQuotas.isEmpty && !s.quotas.isEmpty {
                             Text(L("上一计费周期已结束，等待平台新读数。")).font(.caption).foregroundStyle(.secondary)
@@ -685,13 +635,21 @@ struct PanelDetailCard: View {
                     }
                 } else if account.errorIsCredential && !account.usesAntigravityReport {
                     Label(L("凭证已失效，重新连接前不展示旧读数。"), systemImage: "key.slash").font(.caption).foregroundStyle(.orange)
-                } else if account.historicalAntigravityReport == nil && account.unassignedLegacyAntigravityReport == nil {
+                } else if account.historicalAntigravityReport == nil && archived.isEmpty {
                     Text(L("尚未获取用量")).font(.caption).foregroundStyle(.secondary)
                 }
                 if let report = account.historicalAntigravityReport {
                     historicalAntigravitySection(report)
-                } else if let archived = account.unassignedLegacyAntigravityReport {
-                    historicalAntigravitySection(archived, archived: true)
+                } else if let latest = archived.first {
+                    historicalAntigravitySection(latest, archived: true)
+                }
+                if !archived.isEmpty {
+                    Button {
+                        NotificationCenter.default.post(name: .gaoOpenMainWindow, object: nil, userInfo: ["account": account.id.uuidString])
+                    } label: {
+                        Label(L("查看旧版额度记录") + " (\(archived.count))", systemImage: "clock.arrow.circlepath")
+                            .font(.caption)
+                    }.buttonStyle(.link)
                 }
                 if let status = GrokBotBridge.visibleStatus(account) { Text(L(status)).font(.system(size: 9)).foregroundStyle(.secondary) }
                 if let error = account.error, account.canRefreshQuota { Text(L(error)).font(.system(size: 9)).foregroundStyle(.orange).lineLimit(2) }

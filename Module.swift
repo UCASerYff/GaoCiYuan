@@ -73,12 +73,7 @@ public struct TokenModuleView: View {
     @ObservedObject private var activity = TokenRuntime.activity
     // 订阅 app 级语言键：值变化时本视图重渲染，.id/locale 随之按解析结果更新。
     @AppStorage(GQNSLanguage.key) private var appLanguage = "system"
-    private let route: URL?
-    private let routeRevision: Int
-    @State private var handledRevision = 0
-    public init(route: URL? = nil, routeRevision: Int = 0) {
-        self.route = route
-        self.routeRevision = routeRevision
+    public init() {
         // 旧版模块级语言偏好（Token 套件的 language 键）一次性迁移到 app 级 gqns.language。
         GQNSLanguage.migrateLegacy(defaults: TokenBundle.defaults, legacyKey: "language")
     }
@@ -90,17 +85,7 @@ public struct TokenModuleView: View {
             .environmentObject(activity)
             .environmentObject(TokenRuntime.analytics)
             .modifier(FloatingPanelSetup(store: store, activity: activity))
-            .onAppear(perform: handleRoute)
-            .onChange(of: routeRevision) { _, _ in handleRoute() }
             .onAppear { TokenRuntime.start() }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.token.csv"))) { _ in store.exportCSV() }
-    }
-    private func handleRoute() {
-        guard routeRevision > handledRevision, let route else { return }
-        handledRevision = routeRevision
-        if let page = TokenModuleRuntime.page(for: route) {
-            NotificationCenter.default.post(name: Notification.Name("gaociyuan.presentRequested"), object: nil, userInfo: ["page": page])
-        }
     }
 }
 

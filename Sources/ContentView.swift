@@ -240,7 +240,7 @@ struct ContentView: View {
     func card(_ a: Account) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                if a.provider == .custom { CustomAccountMark(name: a.name, accountID: a.id, size: 34) } else { ProviderMark(provider: a.provider, size: 34) }
+                ProviderMark(provider: a.provider, size: 34)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(a.name).font(.headline).lineLimit(1)
@@ -317,7 +317,7 @@ struct ContentView: View {
                 Text(L(a.stale() ? "数据截至 \(displayDate(s.observedAt)) · \(s.source)" : "\(s.source) · \(displayDate(s.observedAt))")).font(.caption2).foregroundStyle(.secondary)
             } else if a.errorIsCredential && !a.usesAntigravityReport {
                 Label(L("凭证已失效，重新连接前不展示旧读数。"), systemImage: "key.slash").font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-            } else if a.historicalAntigravityReport == nil && a.unassignedLegacyAntigravityReport == nil {
+            } else if a.historicalAntigravityReport == nil && a.legacyAntigravityHistory.isEmpty {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(L("—")).font(.system(size: 26, weight: .light)).foregroundStyle(.secondary)
                     Text(L("尚未获取额度")).font(.callout)
@@ -346,7 +346,7 @@ struct ContentView: View {
                     }.disabled(store.refreshing.contains(a.id) || !a.enabled).controlSize(.small)
                 }
                 Spacer()
-                if a.provider != .custom { Button(L("控制台 ↗")) { if let url = URL(string: a.dashboard) { NSWorkspace.shared.open(url) } }.buttonStyle(.plain).foregroundStyle(.secondary).font(.caption) }
+                Button(L("控制台 ↗")) { if let url = URL(string: a.dashboard) { NSWorkspace.shared.open(url) } }.buttonStyle(.plain).foregroundStyle(.secondary).font(.caption)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading).panel()
@@ -368,7 +368,18 @@ struct ContentView: View {
 
     @ViewBuilder private func antigravityReferences(_ account: Account) -> some View {
         if let report = account.historicalAntigravityReport { antigravityHistory(report) }
-        if let archived = account.unassignedLegacyAntigravityReport { antigravityHistory(archived, archived: true) }
+        let archive = account.legacyAntigravityHistory
+        if !archive.isEmpty {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array(archive.enumerated()), id: \.offset) { _, archived in
+                        antigravityHistory(archived, archived: true)
+                    }
+                }.padding(.top, 6)
+            } label: {
+                Text(L("旧版额度记录") + " (\(archive.count))").font(.caption.weight(.semibold))
+            }
+        }
     }
 
     private func antigravityHistory(_ report: UsageSnapshot, archived: Bool = false) -> some View {
@@ -391,9 +402,11 @@ struct AntigravityReportCaption: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(L(archived ? "旧版未归属报告" : "历史参考")).fontWeight(.semibold)
+            Text(L(archived ? "旧版额度记录" : "历史参考")).fontWeight(.semibold)
             Text(L(report.source))
-            if !archived && report.isUnverifiedAntigravityReport == true {
+            if archived {
+                Text(L("存档中的记录时间") + " " + displayDate(report.observedAt, time: true))
+            } else if report.isUnverifiedAntigravityReport == true {
                 Text(L("导入时间") + " " + displayDate(report.observedAt))
             }
             Text(L("来源、账号与观测时间未经核实"))
