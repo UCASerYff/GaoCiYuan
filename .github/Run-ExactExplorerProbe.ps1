@@ -73,10 +73,18 @@ $result = [ordered]@{
 
 function Get-TrayCallbacks {
     $n::Windows($app.Id) | Where-Object { $_.Class -cmatch '^com\.gaoseries\.GaoCiYuan[0-9]+SystemTrayIcon$' } | ForEach-Object {
-        $uid = [uint32]([UInt64]([regex]::Match($_.Class, '[0-9]+(?=SystemTrayIcon$)').Value) -band 0xffffffffL)
+        $classId = [uint32]([UInt64]([regex]::Match($_.Class, '[0-9]+(?=SystemTrayIcon$)').Value) -band 0xffffffffL)
+        # The pinned pystray data structure has a uID field. This exact package supplies
+        # hID instead, leaving the serialized uID at zero for both its add and delete calls.
+        $uid = [uint32]0
         $rect = [GaoCiYuan.Smoke.ExplorerProbeNative+Rectangle]::new()
         $status = $n::NotifyStatus($_.Handle, $uid, [ref]$rect)
-        [PSCustomObject]@{ Window = $_.Handle; Id = $uid; Status = ('0x{0:X8}' -f $status); Bounds = $rect }
+        $classBounds = [GaoCiYuan.Smoke.ExplorerProbeNative+Rectangle]::new()
+        $classStatus = $n::NotifyStatus($_.Handle, $classId, [ref]$classBounds)
+        [PSCustomObject]@{
+            Window = $_.Handle; Id = $uid; Status = ('0x{0:X8}' -f $status); Bounds = $rect
+            ClassId = $classId; ClassIdStatus = ('0x{0:X8}' -f $classStatus)
+        }
     }
 }
 
@@ -207,7 +215,7 @@ try {
     } 'The installed application did not initialize its ready WebView and tray callbacks.'
     $result.nativeReady = $native.ready
     $result.nativeTrayRegistered = $native.trayRegistered
-    $result.callbacksBeforeOverflow = @(Get-TrayCallbacks | Select-Object @{n='Window';e={$_.Window.ToInt64()}},Id,Status)
+    $result.callbacksBeforeOverflow = @(Get-TrayCallbacks | Select-Object @{n='Window';e={$_.Window.ToInt64()}},Id,Status,ClassId,ClassIdStatus)
     Assert-Probe ($native.trayRegistered) 'The actual packaged app reported no successful Shell_NotifyIcon registration.'
     $tray = Find-TrayRegistration
     if (-not $tray) {
@@ -242,7 +250,7 @@ try {
     }
     $newShellProcess = Get-Process -Id ($n::Owner($newShell))
     Assert-Probe ($newShellProcess.SessionId -eq $session -and $newShellProcess.Path -ieq $expectedShellPath) 'The restarted shell is not the hosted Windows Explorer.'
-    $result.callbacksAfterRestart = @(Get-TrayCallbacks | Select-Object @{n='Window';e={$_.Window.ToInt64()}},Id,Status)
+    $result.callbacksAfterRestart = @(Get-TrayCallbacks | Select-Object @{n='Window';e={$_.Window.ToInt64()}},Id,Status,ClassId,ClassIdStatus)
     $restored = Find-TrayRegistration
     if (-not $restored) {
         $result.overflowInvokedAfterRestart = Open-NotificationOverflow $newShell
