@@ -4,7 +4,7 @@ import CryptoKit
 // Standalone regression: only fixture HTTP and temporary files. No app/UI,
 // configured update source, keychain, or personal preferences are accessed.
 enum TokenBundle { static let defaults = UserDefaults(suiteName: "com.gaoseries.GaoCiYuan.test.UpdaterNetwork")! }
-enum AppInfo { static let version = "4.03" }
+enum AppInfo { static let version = "4.15"; static let build = "17" }
 func L(_ value: String) -> String { value }
 
 @main struct UpdaterNetworkRegression {
@@ -43,6 +43,56 @@ func L(_ value: String) -> String { value }
         do { try await operation() } catch { return }
         throw NSError(domain: "UpdaterNetworkRegression", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
+
+    @MainActor static func checkBuildOrdering(source: URL, remote: URL, cache: URL) async throws {
+        func enclosure(_ attrs: String = "") -> String {
+            "<enclosure url=\"\(remote.absoluteString)\" \(attrs)/>"
+        }
+        func feed(_ items: [String]) -> Data {
+            let entries = items.map { "<item>\($0)</item>" }.joined()
+            return Data("<rss xmlns:sparkle=\"http://www.andymatuschak.org/xml-namespaces/sparkle\"><channel>\(entries)</channel></rss>".utf8)
+        }
+        func latest(_ items: [String]) -> AppcastItem? {
+            latestAppcastUpdate(parseAppcast(feed(items)), marketingVersion: AppInfo.version, buildVersion: AppInfo.build)
+        }
+        func entry(_ display: String, _ build: String) -> String {
+            "<sparkle:shortVersionString>\(display)</sparkle:shortVersionString><sparkle:version>\(build)</sparkle:version>" + enclosure()
+        }
+
+        let legacy = "<title>Maintenance notes</title>" + enclosure("sparkle:version=\"18\" sparkle:shortVersionString=\"4.15\"")
+        let modern = "<title>Version 4.15 (maintenance)</title>" +
+            enclosure("sparkle:version=\"16\" sparkle:shortVersionString=\"4.14\"") +
+            "<sparkle:version> 19 </sparkle:version><sparkle:shortVersionString>4.15</sparkle:shortVersionString>"
+        let same = entry("4.15.0", "17.0")
+        let older = entry("4.15", "16")
+        let rollback = entry("4.14", "25")
+        let inconsistent = entry("4.16", "16")
+        let malformed = entry("4.15", "18beta")
+
+        try check(latest([legacy])?.versionLabel == "4.15 (18)", "Legacy enclosure attributes were masked by the title")
+        try check(latest([modern, entry("4.16", "18"), legacy, same, older, rollback])?.versionLabel == "4.15 (19)",
+                  "Child elements failed to override enclosure data or the highest compatible build was not selected")
+        try check(latest([same, older, rollback, inconsistent, malformed]) == nil,
+                  "A same, older, malformed or inconsistent build was offered")
+        try check(latest(["<title>Maintenance</title>" + enclosure("sparkle:version=\"18\"")])?.buildVersion == "18",
+                  "An internal-build-only feed was ignored")
+        try check(latest(["<title>V4.17</title>" + enclosure()])?.versionLabel == "V4.17" &&
+                  latest([enclosure("sparkle:version=\"4.18\"")])?.versionLabel == "4.18" &&
+                  latest(["<title>4.18</title>" + enclosure("sparkle:version=\"4.18\"")])?.versionLabel == "4.18",
+                  "A legacy display-only or title-only feed lost compatibility")
+
+        let mock = MockHTTP(metadata: feed([same, modern, legacy, rollback]), package: Data())
+        let checker = UpdateChecker(service: UpdateService(cacheDirectory: cache, fetcher: { try await mock.fetch($0, $1, $2, $3, $4) }))
+        await checker.checkNow(userInitiated: false)
+        try check(checker.availableVersion == "4.15 (19)" && !checker.downloading && checker.lastError == nil,
+                  "Scheduled updater did not offer a higher build of the installed marketing version")
+        let calls = await mock.calls()
+        try check(calls == (1, 0), "Same-version availability initiated a package download")
+        try check(!FileManager.default.fileExists(atPath: cache.path), "Metadata wrote to the download cache")
+        checker.stop()
+        try check(source.absoluteString == UpdateChecker.appcastURLString, "Fixture update source changed")
+    }
+
     @MainActor static func main() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("gaociyuan-updater-regression-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -131,6 +181,8 @@ func L(_ value: String) -> String { value }
         try check(!FileManager.default.fileExists(atPath: root.appendingPathComponent("limited").path), "over-budget download cached partial data")
         try check(parseAppcast(Data("<!DOCTYPE rss [<!ENTITY x SYSTEM 'file:///private/fixture'>]><rss>&x;</rss>".utf8)).isEmpty, "appcast external entity was allowed")
         try check(allowedAppcastURL("http://updates.fixture.invalid/a") == nil && allowedAppcastURL("https://user:secret@updates.fixture.invalid/a") == nil, "unsafe update URL allowed")
+        try await checkBuildOrdering(source: source, remote: remote, cache: root.appendingPathComponent("same-marketing"))
         print("PASS updater MockHTTP: metadata-only checks, TTL, same-version single-flight/persistent verified cache, tamper rejection, key/signature/declared-size preflight, failure cooldown, cancellation without retry, unknown-length budgets, no app/UI or real requests")
+        print("PASS updater appcast: Sparkle child and enclosure build ordering, legacy display feeds, downgrade rejection, same marketing metadata without a download")
     }
 }
