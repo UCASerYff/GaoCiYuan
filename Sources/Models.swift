@@ -592,6 +592,10 @@ struct CustomAPIConfig: Codable, Equatable {
     /// 赠送/第二字段路径（选填）：读到就在账户卡/详情卡多显示一行。
     var secondPath: String = ""
 }
+enum AntigravitySyncMethod: String, Codable, CaseIterable {
+    case statusLine, desktop
+}
+
 struct Account: Codable, Identifiable {
     var id = UUID()
     var provider: Provider
@@ -624,11 +628,13 @@ struct Account: Codable, Identifiable {
     var grokBotManualReading: GrokBotUsageReport.ManualReading? = nil
     // Keep one separate reference per Gemini route, keyed by the persisted connection value.
     var antigravityReports: [String: UsageSnapshot]? = nil
+    var antigravitySyncMethod: AntigravitySyncMethod? = nil
+    var antigravityEmail: String? = nil
     /// Source-verified percentage observations, separate from the quota change history.
     var quotaForecastHistory: QuotaForecastHistory? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, provider, kind, name, plan, connection, filePath, scopeID, region, enabled, budget, currency, snapshot, lastAttempt, error, statusNote, balanceBasis, baselines, history, lastQuotaChangedAt, customConfig, showInRail, autoDiscovered, grokBotManualReading, quotaForecastHistory, antigravityReports
+        case id, provider, kind, name, plan, connection, filePath, scopeID, region, enabled, budget, currency, snapshot, lastAttempt, error, statusNote, balanceBasis, baselines, history, lastQuotaChangedAt, customConfig, showInRail, autoDiscovered, grokBotManualReading, quotaForecastHistory, antigravityReports, antigravitySyncMethod, antigravityEmail
     }
 
     init(id: UUID = UUID(), provider: Provider, kind: AccountKind, name: String, plan: String = "", connection: Connection, filePath: String = "", scopeID: String? = nil, region: String? = nil, enabled: Bool = true, budget: Double? = nil, currency: String = "USD", snapshot: UsageSnapshot? = nil, lastAttempt: Date? = nil, error: String? = nil, statusNote: String? = nil, history: [UsageSnapshot] = []) {
@@ -678,6 +684,8 @@ struct Account: Codable, Identifiable {
         autoDiscovered = try container.decodeIfPresent(Bool.self, forKey: .autoDiscovered) ?? false
         grokBotManualReading = try container.decodeIfPresent(GrokBotUsageReport.ManualReading.self, forKey: .grokBotManualReading)
         antigravityReports = try container.decodeIfPresent([String: UsageSnapshot].self, forKey: .antigravityReports)
+        antigravitySyncMethod = try? container.decode(AntigravitySyncMethod.self, forKey: .antigravitySyncMethod)
+        antigravityEmail = try container.decodeIfPresent(String.self, forKey: .antigravityEmail)
         if var evidence = try? container.decode(QuotaForecastHistory.self, forKey: .quotaForecastHistory) {
             evidence.observations = Array(evidence.observations.suffix(QuotaForecast.maxObservations))
             quotaForecastHistory = evidence
@@ -687,6 +695,15 @@ struct Account: Codable, Identifiable {
     var dashboard: String { kind == .agent ? provider.memberURL : provider.apiURL }
     var usesGrokBotQuota: Bool { provider == .grok && kind == .agent && connection == .agentLocal }
     var usesAntigravityReport: Bool { antigravityManualSource != nil }
+    var antigravitySyncOptions: [AntigravitySyncMethod] {
+        guard usesAntigravityReport else { return [] }
+        return connection == .geminiApp ? [.desktop] : [.statusLine, .desktop]
+    }
+    var canRefreshQuota: Bool {
+        guard usesAntigravityReport else { return true }
+        guard let method = antigravitySyncMethod, antigravityEmail?.isEmpty == false else { return false }
+        return antigravitySyncOptions.contains(method)
+    }
     var antigravityManualSource: String? {
         guard provider == .gemini, kind == .agent else { return nil }
         switch connection {

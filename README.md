@@ -1,4 +1,4 @@
-# 搞词元 V4.14
+# 搞词元 V4.15
 
 独立 macOS Agent 软件额度与用量管理应用，包含紧凑总览、Agent 软件管理、用量分析、平台接入和悬浮窗。运行不依赖其他搞系列应用；第三方数据读取需要对应软件及本机现有登录状态。
 
@@ -11,7 +11,7 @@
 3. 如果 macOS 拦截打开，请先确认软件来源，再进入“系统设置 → 隐私与安全性”，允许该应用打开。发行包使用 Apple Development 签名，未做 Apple 公证。
 4. 安装后运行一次，真实 Agent 账户、用量分析数据库及悬浮窗设置会继续沿用。旧 LLM 与自定义 API 账户会永久删除；桌面和通知中心小组件不再提供。
 
-下载后可在文件所在目录运行 `shasum -a 256 -c GaoCiYuan-4.14.zip.sha256` 核验安装包，请使用与所下载 ZIP 对应的版本号。
+下载后可在文件所在目录运行 `shasum -a 256 -c GaoCiYuan-4.15.zip.sha256` 核验安装包，请使用与所下载 ZIP 对应的版本号。
 
 ## 功能
 
@@ -57,6 +57,12 @@
 - `Tests/`：离线及隔离回归验证。
 
 在 GitHub 托管的 `macos-15` arm64 runner 可从干净检出运行 `bash scripts/verify_macos.sh`。它编译 Token.framework 和原生宿主，核对架构和版本，再运行模型、调度、界面源码和安装前置回归。签名由构建脚本以验证用 ad hoc 身份完成。
+
+## V4.15 / build 17
+
+- 账户设置中启用 Antigravity 自动同步并填写对应的 Google 登录邮箱。macOS 的 Gemini 内置版和独立版分开建账户。独立版可选 CLI 状态栏推送或桌面额度面板，Gemini 内置版使用桌面额度面板。
+- 独立 CLI 只需一次设置。复制应用内的状态栏配置，加入 Antigravity CLI 的 `~/.gemini/antigravity-cli/settings.json`，并在已登录的正常 CLI 会话中使用。已有自定义状态栏时，将接收命令合并进原脚本，并让两个命令分别收到同一份标准输入。搞词元不会改写 CLI 设置。CLI 状态变化时推送已登录邮箱和各额度窗。搞词元仅保存本地额度数据，匹配邮箱后自动更新。CLI 静默时按上次观测时间显示。 [Google 官方状态栏说明](https://antigravity.google/docs/cli/statusline/)
+- 桌面读取经 macOS 辅助功能授权。在对应客户端打开额度面板并保持窗口可见。搞词元只在面板本身包含可匹配的登录邮箱和额度时更新。两种客户端的实际辅助功能树仍需用签名实机核对。 [Gemini 内置 Antigravity](https://support.google.com/gemini/answer/18755601) · [独立版额度面板](https://antigravity.google/docs/models#select-a-model)
 
 ## V4.14 / build 16
 

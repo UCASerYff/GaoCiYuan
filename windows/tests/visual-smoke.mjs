@@ -19,7 +19,9 @@ const scratch = await mkdtemp(path.join(build, 'visual-smoke-'));
 const dataDir = path.join(scratch, 'fixture data');
 const profile = path.join(scratch, 'edge-profile');
 const edgeExe = path.join(process.env['ProgramFiles(x86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe');
-const testAntigravity = Number(expectedVersion.split('+')[1]) >= 7;
+const [marketingVersion, buildNumber] = expectedVersion.split('+');
+const testAntigravitySync = Number(marketingVersion) >= 4.15;
+const testAntigravity = testAntigravitySync || (marketingVersion === '4.14' && Number(buildNumber) >= 7);
 const legacyAntigravityID = '0c7814a8-4f46-4d73-93b8-e5e2747d2bef';
 const legacyAntigravityConnection = 'Gemini App 中的 Antigravity';
 const antigravityConnection = 'Antigravity 独立版 /usage 报告';
@@ -319,6 +321,40 @@ try {
     assert.equal(preserved.history.length, 1);
     assert.equal(accounts.find(account => account.id === standalone.id).snapshot, null);
     await capture('10-antigravity-history-dark-150', route, 760, 620, 1.5);
+    if (testAntigravitySync) {
+      await devtools.evaluate('document.querySelector(\'#agent-inspector [data-action="edit"]\').click()');
+      const email = 'private-fixture@example.invalid';
+      await devtools.evaluate(`document.querySelector('[name="antigravityEmail"]').value = ${JSON.stringify(email)};
+        document.querySelector('#account-editor button[type="submit"]').click()`);
+      const key = await retry(async () => {
+        const linked = (await api('/api/state')).accounts.find(account => account.id === standalone.id);
+        return linked.antigravityEmail === email && !linked.snapshot && linked.antigravityStatusAccount;
+      }, 'Standalone account did not bind the fixture CLI email.');
+      assert.match(key, /^[a-f0-9]{64}$/);
+      await retry(() => devtools.evaluate('!document.querySelector("#dialog").open'), 'Antigravity editor did not save.');
+      await devtools.evaluate('document.querySelector(\'#agent-inspector [data-action="edit"]\').click()');
+      const configuration = await devtools.evaluate('JSON.parse(document.querySelector("#antigravity-setup-code").textContent)');
+      assert.equal(configuration.statusLine.stack_with_default, true);
+      assert.ok(configuration.statusLine.command.endsWith('--capture-antigravity-status --antigravity-account ' + key));
+      assert.doesNotMatch(configuration.statusLine.command, /private-fixture@/);
+      await devtools.evaluate('document.querySelector(\'#dialog [data-action="close-dialog"]\').click()');
+      const push = spawn(path.resolve(cliPath), ['--data-dir', dataDir, '--capture-antigravity-status', '--antigravity-account', key],
+        { windowsHide: true, signal: AbortSignal.timeout(12000), stdio: ['pipe', 'ignore', 'pipe'] });
+      const pushed = once(push, 'close');
+      push.stdin.end(JSON.stringify({
+        product: 'antigravity', email, agent_state: 'idle',
+        quota: { 'gemini-weekly': { remaining_fraction: .725, reset_time: instant(12) } },
+      }));
+      assert.equal((await pushed)[0], 0, 'Installed capture command did not accept the status line payload.');
+      await api('/api/settings', { autoRefresh: true });
+      assert.deepEqual((await api('/api/refresh-due', {})).result.ids.filter(id => id === standalone.id), [standalone.id]);
+      const linked = (await api('/api/state')).accounts.find(account => account.id === standalone.id);
+      assert.equal(linked.snapshot.source, 'Antigravity 独立 CLI 状态栏同步');
+      assert.equal(linked.snapshot.quotas[0].usedPercent, 27.5);
+      assert.equal(linked.antigravityReport.quotas.length, 4);
+      await capture('11-antigravity-statusline-dark-150', route, 760, 620, 1.5);
+      assert.match(await devtools.evaluate('document.querySelector("#agent-inspector .account-reading").innerText'), /实测额度/);
+    }
   }
   assert.deepEqual(devtools.errors, []);
 } finally {

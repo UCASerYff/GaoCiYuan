@@ -159,7 +159,7 @@ function updateItem(button, account) {
   const reportOnly = connection?.mode === 'antigravity-report' && !account.snapshot;
   const ring = legacy || reportOnly ? { label: '—', color: 'secondary', showsDash: true } : account.ring;
   const status = legacy ? 'macOS 旧版连接'
-    : reportOnly ? (account.antigravityReport ? '历史报告 · 采集时间未验证' : '待导入报告')
+    : reportOnly ? (account.antigravityEmail ? '待 CLI 推送' : account.antigravityReport ? '历史报告 · 采集时间未验证' : '待导入报告')
     : ring.stale ? '历史读数' : (ring.showsDash ? '尚未获取额度' : '剩余 ' + ring.label);
   button.dataset.state = ring.stale ? 'stale' : (ring.showsDash ? 'empty' : 'current');
   button.title = account.name + ' · ' + status;
@@ -420,7 +420,11 @@ function renderDetails(account) {
   if (connection?.legacy) {
     area.append(blank('macOS 旧版连接', '原账户和历史资料已保留，可在账户明细查看。'));
   } else if (connection?.mode === 'antigravity-report' && !account.snapshot) {
-    area.append(blank(account.antigravityReport ? '历史报告 · 采集时间未验证' : '待导入报告', '可在账户明细导入或查看历史报告。'));
+    if (account.antigravityEmail) {
+      area.append(blank('待 CLI 推送', account.statusNote || '请在账户设置中配置独立 Antigravity CLI 状态栏。'));
+    } else {
+      area.append(blank(account.antigravityReport ? '历史报告 · 采集时间未验证' : '待导入报告', '可在账户明细导入或查看历史报告。'));
+    }
   } else if (grok) renderGrok(account, area);
   else renderSnapshot(account, area);
 

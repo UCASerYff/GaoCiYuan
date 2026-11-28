@@ -8,6 +8,7 @@ import sys
 import threading
 from pathlib import Path
 
+from gaociyuan.antigravity_statusline import ACCOUNT_KEY, capture_antigravity_statusline
 from gaociyuan.credentials import open_credential_store
 from gaociyuan.errors import AppError
 from gaociyuan.local_usage import LocalUsageService
@@ -29,18 +30,32 @@ def main(argv: list[str] | None = None, *, console: bool = False) -> int:
     parser.add_argument("--create-empty", action="store_true")
     parser.add_argument("--inspect", action="store_true")
     parser.add_argument("--no-refresh", action="store_true")
-    parser.add_argument('--capture-claude-status', action='store_true')
+    capture = parser.add_mutually_exclusive_group()
+    capture.add_argument('--capture-claude-status', action='store_true')
+    capture.add_argument('--capture-antigravity-status', action='store_true')
+    parser.add_argument('--antigravity-account')
     parser.add_argument('--desktop-hidden', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('link', nargs='?')
     args = parser.parse_args(argv)
     if args.version:
         print(VERSION_LABEL)
         return 0
+    if args.capture_antigravity_status and not ACCOUNT_KEY.fullmatch(args.antigravity_account or ""):
+        parser.error('--capture-antigravity-status requires --antigravity-account with the linked account fingerprint')
+    if args.antigravity_account and not args.capture_antigravity_status:
+        parser.error('--antigravity-account requires --capture-antigravity-status')
     if console and not any((args.serve, args.no_browser, args.create_empty, args.inspect,
-                            args.capture_claude_status, args.desktop_hidden)):
+                            args.capture_claude_status, args.capture_antigravity_status, args.desktop_hidden)):
         parser.print_help()
         return 0
     directory = (default_data_dir() if not args.data_dir else Path(args.data_dir)).resolve()
+    if args.capture_antigravity_status:
+        try:
+            capture_antigravity_statusline(sys.stdin.buffer, directory, utcnow(), args.antigravity_account)
+            return 0
+        except OSError:
+            print("无法保存 Antigravity 状态栏读数。", file=sys.stderr)
+            return 2
     if args.capture_claude_status:
         try:
             summary = capture_claude_statusline(sys.stdin.buffer, directory, utcnow())

@@ -80,6 +80,7 @@ enum Connectors {
         }
         switch account.connection {
         case .agentLocal:
+            if account.usesAntigravityReport { return try await antigravityQuota(account) }
             return try await AgentBridge.fetch(account, userInitiated: userInitiated)
         case .codex:
             return .snapshot(try await CodexBridge.fetch())
@@ -88,7 +89,7 @@ enum Connectors {
         case .claudeDesktop:
             return try await ClaudeBridge.fetch(account, userInitiated: userInitiated)
         case .geminiApp:
-            return .status(AntigravityUsageReport.manualHint)
+            return try await antigravityQuota(account)
         case .cursor:
             return .snapshot(try await CursorBridge.fetch())
         case .dshHarness:
@@ -151,6 +152,25 @@ enum Connectors {
             try s.validate(); return .snapshot(s)
         }
     }
+    private static func antigravityQuota(_ account: Account) async throws -> ConnectorResult {
+        guard account.canRefreshQuota, let method = account.antigravitySyncMethod,
+              let email = account.antigravityEmail.flatMap(AntigravityStatusLine.canonicalEmail) else {
+            return .status(AntigravityUsageReport.manualHint)
+        }
+        switch method {
+        case .statusLine:
+            guard account.connection == .agentLocal else { return .status(AntigravityUsageReport.manualHint) }
+            if let sample = AntigravityStatusLine.snapshot(email: email) { return .snapshot(sample) }
+            return .status(AntigravityStatusLine.waiting)
+        case .desktop:
+            do {
+                return .snapshot(try await AntigravityDesktopQuota.read(connection: account.connection, expectedEmail: email))
+            } catch let error as AntigravityDesktopQuota.Failure {
+                return .status(error.localizedDescription)
+            }
+        }
+    }
+
     private static func suppliedKey(_ account: Account, override: String?) throws -> String {
         if let override, !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return override }
         return try KeyVault.read(account.id)

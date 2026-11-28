@@ -349,6 +349,47 @@ actor UsageLedger {
         store.stop()
     }
 
+    @MainActor static func checkAntigravityAutoSync(in directory: URL) async throws {
+        var fetched: [Connection] = []
+        let store = MonitorStore(directory: directory, fetch: { account, _ in
+            fetched.append(account.connection)
+            var reading = UsageSnapshot.empty(source: account.connection.rawValue + " fixture")
+            reading.quotas = [.init(id: "weekly", title: "Fixture weekly limit", usedPercent: 42, resetsAt: nil)]
+            return .snapshot(reading)
+        })
+        var embedded = Account(provider: .gemini, kind: .agent, name: "Gemini", connection: .geminiApp)
+        embedded.antigravitySyncMethod = .statusLine
+        embedded.antigravityEmail = "monitor@example.com"
+        var rejected = false
+        do { try store.upsert(embedded) } catch { rejected = true }
+        try check(rejected && store.library.accounts.isEmpty, "CLI status line appeared on the Gemini route")
+
+        embedded.antigravitySyncMethod = .desktop
+        try store.upsert(embedded)
+        var standalone = Account(provider: .gemini, kind: .agent, name: "Antigravity", connection: .agentLocal)
+        standalone.antigravitySyncMethod = .statusLine
+        standalone.antigravityEmail = " Monitor@Example.com "
+        try store.upsert(standalone)
+        await store.refreshAll()
+        try check(fetched.count == 2 && fetched.contains(.geminiApp) && fetched.contains(.agentLocal),
+                  "Both opted-in routes must use the ordinary automatic refresh")
+        let saved = store.library.accounts.first { $0.id == standalone.id }
+        try check(saved?.antigravityEmail == "monitor@example.com" && saved?.snapshot?.quotas.first?.remaining == 58,
+                  "The canonical bound email or automatic reading was lost")
+
+        standalone.antigravityEmail = "other@example.com"
+        rejected = false
+        do { try store.upsert(standalone) } catch { rejected = true }
+        try check(rejected && store.library.accounts.first(where: { $0.id == standalone.id })?.snapshot == saved?.snapshot,
+                  "Rebinding an active account must not transfer the earlier observations")
+        standalone.antigravityEmail = "monitor@example.com"
+        standalone.antigravitySyncMethod = nil
+        try store.upsert(standalone)
+        await store.refresh(standalone.id, userInitiated: true)
+        try check(fetched.count == 2, "Turning off automatic sync must also stop this account's refresh endpoint")
+        store.stop()
+    }
+
     @MainActor static func main() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("RefreshSchedulingRegression-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -510,6 +551,7 @@ actor UsageLedger {
         try check(historyIO.calls == 3, "History settings queued an unauthorized reindex")
         history.stop(); store.stop()
         try await checkAntigravityHistoricalImport(in: root.appendingPathComponent("antigravity-import"))
+        try await checkAntigravityAutoSync(in: root.appendingPathComponent("antigravity-auto"))
         print("Refresh scheduling regression passed: quota evidence provenance and persistence, historical Antigravity import and atomic save failure, disabled gates, manual override, single-flight, cancellation, concurrency and history policy. Synthetic data only.")
     }
 }

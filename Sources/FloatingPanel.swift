@@ -694,7 +694,7 @@ struct PanelDetailCard: View {
                     historicalAntigravitySection(archived, archived: true)
                 }
                 if let status = GrokBotBridge.visibleStatus(account) { Text(L(status)).font(.system(size: 9)).foregroundStyle(.secondary) }
-                if let error = account.error, !account.usesAntigravityReport { Text(L(error)).font(.system(size: 9)).foregroundStyle(.orange).lineLimit(2) }
+                if let error = account.error, account.canRefreshQuota { Text(L(error)).font(.system(size: 9)).foregroundStyle(.orange).lineLimit(2) }
                 HStack {
                     quotaAction
                     if account.provider == .dsh {
@@ -741,7 +741,7 @@ struct PanelDetailCard: View {
     }
 
     private var quotaAction: some View {
-        let manual = account.usesAntigravityReport
+        let manual = !account.canRefreshQuota
         let unavailable = !manual && (store.refreshing.contains(account.id) || !account.enabled)
         return Button {
             if manual {
@@ -750,7 +750,7 @@ struct PanelDetailCard: View {
                 Task { await store.refresh(account.id, userInitiated: true) }
             }
         } label: {
-            Label(L(manual ? (account.connection == .geminiApp ? "在主窗口记录" : "在主窗口导入") : syncTitle(account)), systemImage: manual ? "doc.badge.plus" : "arrow.clockwise")
+            Label(L(manual ? "设置自动同步…" : syncTitle(account)), systemImage: manual ? "slider.horizontal.3" : "arrow.clockwise")
                 .font(.caption.weight(.medium))
                 .padding(.horizontal, 10).padding(.vertical, 3)
                 .foregroundStyle(PanelTheme.iris)
@@ -1055,7 +1055,7 @@ final class FloatingPanelController {
                 return
             }
             let account = accounts[index]
-            if account.usesAntigravityReport {
+            if !account.canRefreshQuota {
                 NotificationCenter.default.post(name: .gaoOpenMainWindow, object: nil, userInfo: ["account": account.id.uuidString])
             } else {
                 Task { await store.refresh(account.id, userInitiated: true) }

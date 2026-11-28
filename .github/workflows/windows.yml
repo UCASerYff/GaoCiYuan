@@ -53,8 +53,8 @@ jobs:
         run: ./smoke-installed.ps1 -HeadlessServerOnly -Verbose
       - uses: actions/upload-artifact@v4
         with:
-          name: GaoCiYuan-Windows-4.14-build7-x64
+          name: GaoCiYuan-Windows-4.15-build1-x64
           if-no-files-found: error
           path: |
-            windows/dist/GaoCiYuan-Windows-4.14-build7-x64-Setup.exe
-            windows/dist/GaoCiYuan-Windows-4.14-build7-x64-Setup.exe.sha256
+            windows/dist/GaoCiYuan-Windows-4.15-build1-x64-Setup.exe
+            windows/dist/GaoCiYuan-Windows-4.15-build1-x64-Setup.exe.sha256

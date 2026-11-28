@@ -12,6 +12,7 @@ const localConnection = "本机软件自动读取";
 const antigravityReportConnection = "Antigravity 独立版 /usage 报告";
 const antigravityCLIURL = "https://antigravity.google/docs/getting-started?tab=cli";
 const antigravityUsageURL = "https://antigravity.google/docs/cli/commands/usage";
+const antigravityStatuslineURL = "https://antigravity.google/docs/cli/statusline/";
 const antigravityJSONReleaseURL = "https://antigravity.google/changelog?tab=cli#v1111";
 const antigravityFAQURL = "https://antigravity.google/docs/faq";
 const antigravityReportMaxBytes = 64 * 1024;
@@ -138,6 +139,23 @@ const supplementalTranslations = {
   "本机额度连接": "Client quota connection",
   "手动读取额度": "Manual quota read",
   "Antigravity 独立版 /usage 报告": "Standalone Antigravity /usage report",
+  "Antigravity 独立版": "Standalone Antigravity",
+  "Antigravity 独立 CLI 状态栏同步": "Standalone Antigravity CLI status line",
+  "关联已登录的 Antigravity CLI 邮箱并配置官方 statusLine 后自动同步额度。/usage 报告仍可作为历史导入。": "Link the email signed into Antigravity CLI and configure its official status line to sync quotas automatically. You can still import /usage reports as history.",
+  "Antigravity CLI 登录邮箱": "Antigravity CLI sign-in email",
+  "填写 CLI 中显示的登录邮箱可启用自动同步。留空时仍可导入历史报告。": "Enter the sign-in email shown in the CLI to enable sync. You can still import historical reports without linking an email.",
+  "保存邮箱后，重新打开账户设置并复制状态栏配置。": "Save the email, then reopen account settings to copy the status line setup.",
+  "此账户已绑定该邮箱。要同步其他 Google 账户，请另建独立版账户。": "This email is linked. Add a standalone account to sync a different Google account.",
+  "把示例的 statusLine 合并到 Antigravity CLI 的用户设置。已有自定义状态栏时，在现有脚本中把同一份标准输入传给搞词元。": "Merge this statusLine into your Antigravity CLI settings. If you use a custom status line, pass the same standard input to GaoCiYuan in your existing script.",
+  "打开已登录的独立 CLI 后，它会在状态变化时自动推送。此设置适用于 CLI。": "The signed-in standalone CLI sends updates as its state changes. This setting applies to the CLI.",
+  "官方状态栏配置 ↗": "Official status line setup ↗",
+  "待 CLI 推送": "Waiting for CLI data",
+  "等待独立 Antigravity CLI 推送。请核对 CLI 登录邮箱及账户中的状态栏配置。": "Waiting for standalone Antigravity CLI. Check its sign-in email and this account's status line setup.",
+  "独立 Antigravity CLI 推送已过期，等待新读数。": "The standalone Antigravity CLI reading expired. Waiting for a new update.",
+  "独立 Antigravity CLI 推送暂不可读，保留上次额度。": "The standalone Antigravity CLI reading is unavailable. The prior reading is kept.",
+  "请填写 Antigravity CLI 中已登录的有效邮箱。": "Enter a valid email signed into Antigravity CLI.",
+  "此账户已绑定 Antigravity CLI 邮箱。请为其他邮箱另建独立账户。": "This account is already linked to an Antigravity CLI email. Add a separate account for another email.",
+  "此 Antigravity CLI 邮箱已绑定其他账户。": "This Antigravity CLI email is already linked to another account.",
   "安装官方独立 CLI ↗": "Install the official standalone CLI ↗",
   "官方 /usage 说明 ↗": "Official /usage guide ↗",
   "CLI 1.1.11 发布说明 ↗": "CLI 1.1.11 release notes ↗",
@@ -566,7 +584,7 @@ function agentHealth(account) {
   if (account.enabled) {
     if (antigravityLegacyAccount(account)) return "historical";
     if (antigravityReportAccount(account) && !account.snapshot) {
-      return account.antigravityReport ? "historical" : "syncPaused";
+      return account.antigravityReport && !account.antigravityEmail ? "historical" : "syncPaused";
     }
   }
   return account.enabled ? (Object.hasOwn(healthDisplay, account.health) ? account.health : "ok") : "paused";
@@ -580,7 +598,7 @@ function statusMark(level) {
 function accountStatusMark(account) {
   if (antigravityLegacyAccount(account)) return tag("macOS 旧版连接", "secondary");
   return antigravityReportAccount(account) && !account.snapshot && account.enabled
-    ? tag(account.antigravityReport ? "历史报告" : "待导入报告", "secondary")
+    ? tag(account.antigravityEmail ? "待 CLI 推送" : account.antigravityReport ? "历史报告" : "待导入报告", "secondary")
     : statusMark(agentHealth(account));
 }
 
@@ -845,14 +863,13 @@ function renderAccount(account, inspector = false) {
   const id = text(account.id);
   const syncing = state?.refreshing?.includes(account.id);
   const reportAccount = antigravityReportAccount(account);
+  const automaticAntigravity = reportAccount && Boolean(account.antigravityEmail);
   const legacyAccount = antigravityLegacyAccount(account);
   const currentReading = !legacyAccount && (!reportAccount || account.snapshot);
   let accountAction = "";
   if (inspector && legacyAccount) {
     accountAction = button("添加 Antigravity 独立版账户", "add-antigravity", { glyph: "plus" });
-  } else if (inspector && reportAccount) {
-    accountAction = button("导入额度报告", "antigravity-import", { value: account.id, glyph: "upload" });
-  } else if (!reportAccount && !legacyAccount) {
+  } else if (automaticAntigravity || (!reportAccount && !legacyAccount)) {
     accountAction = button(syncing ? "同步中…" : grokManual(account) ? "读取本机额度" : "立即同步", grokManual(account) ? "grok" : "refresh", {
       value: account.id, glyph: "refresh", disabled: !account.enabled || syncing,
     });
@@ -896,6 +913,7 @@ function renderAccount(account, inspector = false) {
     <div class="spread account-foot">
       <div class="cluster">
         ${accountAction}
+        ${inspector && reportAccount ? button("导入额度报告", "antigravity-import", { value: account.id, glyph: "upload" }) : ""}
         ${inspector ? button("账户设置", "edit", { value: account.id }) : ""}
       </div>
       ${detailsAction || ""}
@@ -942,10 +960,10 @@ function providerCards() {
   });
   const found = entries.filter(([item, route]) =>
     (catalogFilter === "all" || catalogFilter === route
-      || (catalogFilter === "direct" && (route === "connector" || route === "grokbot")))
+      || (catalogFilter === "direct" && (route === "connector" || route === "grokbot" || route === "report")))
     && `${item.name} ${item.agent} ${item.company} ${item.id}`.toLocaleLowerCase().includes(needle));
   const assigned = new Set(accounts().filter((account) => account.provider !== "gemini" || antigravityReportAccount(account)).map((account) => account.provider));
-  const labels = { connector: "本机额度连接", grokbot: "手动读取额度", report: "导入额度报告", snapshot: "快照文件" };
+  const labels = { connector: "本机额度连接", grokbot: "手动读取额度", report: "自动同步", snapshot: "快照文件" };
   return `<section class="panel catalog-list" id="catalog-providers" aria-label="${t("Agent 平台")}">
     <div class="section-heading"><div class="stacked"><h2>${t("Agent 平台")}</h2><p class="muted caption">${t("选择一个平台，查看 Windows 支持的连接方式。")}</p></div><span class="muted caption">${text(countText(found.length, "个平台", "platforms"))}</span></div>
     ${found.length ? found.map(([item, route]) => `<article class="catalog-row">
@@ -1035,7 +1053,7 @@ function editorHeading(title, kicker = "") {
 function publicAccount(account) {
   return Object.fromEntries([
     "id", "provider", "connection", "name", "plan", "filePath", "enabled", "budget",
-    "currency", "showInRail", "scopeID", "region", "autoDiscovered", "balanceBasis", "baselines",
+    "currency", "showInRail", "scopeID", "region", "autoDiscovered", "balanceBasis", "baselines", "antigravityEmail",
   ].map((key) => [key, account[key]]));
 }
 
@@ -1094,7 +1112,10 @@ function openEditor(account, defaultProvider, overrideConnection) {
               ${isFile ? button("选择…", "pick-snapshot", { glyph: "folder" }) : ""}</div>` : ""}
             ${current.help && !isAntigravityReport && !isAntigravityLegacy ? `<p class="caption muted connection-help">${t(current.help)}</p>` : ""}
             ${isClaudeStatus ? claudeSetupMarkup() : ""}
-            ${isAntigravityReport ? `${antigravityReportGuide()}<p class="caption muted">${t("先保存账户，再从账户明细导入报告。")}</p>` : ""}
+            ${isAntigravityReport ? `
+              ${editorField("Antigravity CLI 登录邮箱", `<input name="antigravityEmail" type="email" maxlength="254" autocomplete="off" value="${text(draft.antigravityEmail)}"${original?.antigravityEmail ? " readonly" : ""}>`)}
+              <p class="caption muted">${t(original?.antigravityEmail ? "此账户已绑定该邮箱。要同步其他 Google 账户，请另建独立版账户。" : "填写 CLI 中显示的登录邮箱可启用自动同步。留空时仍可导入历史报告。")}</p>
+              ${antigravitySetupMarkup(original?.antigravityStatusAccount)}` : ""}
             ${isAntigravityLegacy ? antigravityLegacyGuide() : ""}
             ${isFile ? `<p class="caption muted">${t("读取标准 JSON 快照，不是任意平台原始账单。格式示例见设置页，可由外部脚本持续更新。")}</p>` : ""}
             ${isAntigravityReport || isAntigravityLegacy ? "" : `<div class="editor-test">${button("测试连接", "test-account", { glyph: "link", disabled: current.mode === "unsupported" || current.mode === "grokbot" })}<p id="editor-result" class="caption" role="status"></p></div>`}
@@ -1134,7 +1155,7 @@ function openEditor(account, defaultProvider, overrideConnection) {
         try {
           const outgoing = readDraft(form);
           const { result } = await api("/api/accounts/save", outgoing);
-          if (outgoing.enabled && outgoing.connection === fileConnection) {
+          if (outgoing.enabled && (outgoing.connection === fileConnection || outgoing.antigravityEmail)) {
             await api("/api/accounts/refresh", { id: result.id });
           }
           if (result?.id && page === "agents") {
@@ -1171,6 +1192,7 @@ function openEditor(account, defaultProvider, overrideConnection) {
       showInRail: elements.showInRail.checked,
     };
     if (elements.secret?.value.trim()) accountDraft.secret = elements.secret.value;
+    if (elements.antigravityEmail) accountDraft.antigravityEmail = elements.antigravityEmail.value.trim();
     return accountDraft;
   }
   dialog.editorDraft = readDraft;
@@ -1266,6 +1288,25 @@ function claudeSetupMarkup() {
     ${button("复制配置示例", "copy-claude")}</details>`;
 }
 
+function antigravitySetupMarkup(accountKey) {
+  if (!accountKey) {
+    return `<div class="antigravity-links">
+      <p class="caption muted">${t("保存邮箱后，重新打开账户设置并复制状态栏配置。")}</p>
+      ${externalLink(antigravityStatuslineURL, "官方状态栏配置 ↗")}</div>`;
+  }
+  const executable = nativeInterface?.cliPath || "GaoCiYuan-cli.exe";
+  const configuration = JSON.stringify({
+    statusLine: { type: "command", command: '"' + executable + '" --capture-antigravity-status --antigravity-account ' + accountKey,
+      stack_with_default: true },
+  }, null, 2);
+  return `<details class="disclosure claude-setup" open><summary>${t("状态栏配置示例")}</summary>
+    <p class="caption muted">${t("把示例的 statusLine 合并到 Antigravity CLI 的用户设置。已有自定义状态栏时，在现有脚本中把同一份标准输入传给搞词元。")}</p>
+    <p class="caption"><code>%USERPROFILE%\\.gemini\\antigravity-cli\\settings.json</code></p>
+    <pre id="antigravity-setup-code">${text(configuration)}</pre>
+    <p class="caption muted">${t("打开已登录的独立 CLI 后，它会在状态变化时自动推送。此设置适用于 CLI。")}</p>
+    <div class="cluster antigravity-links">${button("复制配置示例", "copy-antigravity")}${externalLink(antigravityStatuslineURL, "官方状态栏配置 ↗")}</div></details>`;
+}
+
 action("page", (button) => go(button.dataset.value));
 action("settings", () => openSettings());
 action("close-dialog", closeDialog);
@@ -1273,6 +1314,10 @@ action("dismiss-message", () => showMessage());
 action("open-data", () => api("/api/open/data", {}));
 action("copy-claude", async () => {
   const configuration = dialog.querySelector("#claude-setup-code");
+  if (configuration) await navigator.clipboard.writeText(configuration.textContent);
+});
+action("copy-antigravity", async () => {
+  const configuration = dialog.querySelector("#antigravity-setup-code");
   if (configuration) await navigator.clipboard.writeText(configuration.textContent);
 });
 action("edit", (button) => {

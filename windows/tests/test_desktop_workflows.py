@@ -20,7 +20,8 @@ from gaociyuan.web import serve
 NOW = datetime(2026, 11, 27, 8, tzinfo=timezone.utc)
 
 
-def test_platform_filtered_updates_require_explicit_verified_download(tmp_path):
+def test_platform_filtered_updates_require_explicit_verified_download(tmp_path, monkeypatch):
+    monkeypatch.setattr("gaociyuan.updates.MARKETING_VERSION", "4.14")
     update = tmp_path / 'GaoCiYuan-Windows-4.15-x64-Setup.exe'
     original = b'synthetic build only'
     update.write_bytes(original)

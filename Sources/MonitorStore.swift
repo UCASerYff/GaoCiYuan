@@ -137,14 +137,16 @@ import UniformTypeIdentifiers
     }
     nonisolated private static func sameSource(_ lhs: Account, _ rhs: Account) -> Bool {
         lhs.provider == rhs.provider && lhs.kind == rhs.kind && lhs.connection == rhs.connection &&
-        lhs.filePath == rhs.filePath && lhs.scopeID == rhs.scopeID && lhs.region == rhs.region && lhs.customConfig == rhs.customConfig
+        lhs.filePath == rhs.filePath && lhs.scopeID == rhs.scopeID && lhs.region == rhs.region && lhs.customConfig == rhs.customConfig &&
+        lhs.antigravitySyncMethod == rhs.antigravitySyncMethod && lhs.antigravityEmail == rhs.antigravityEmail
     }
     nonisolated private static func quotaSourceIdentity(_ account: Account) -> String {
         let customConfig = account.customConfig.map { String(reflecting: $0) }
         let fields: [String?] = [account.id.uuidString, account.provider.rawValue, account.kind.rawValue,
                                  account.connection.rawValue, account.filePath, account.scopeID,
                                  account.region, account.plan, account.currency, customConfig]
-        let key = fields.map { $0.map { "\($0.utf8.count):\($0)" } ?? "-" }.joined(separator: ";")
+        let antigravityFields = account.usesAntigravityReport ? [account.antigravitySyncMethod?.rawValue, account.antigravityEmail] : []
+        let key = (fields + antigravityFields).map { $0.map { "\($0.utf8.count):\($0)" } ?? "-" }.joined(separator: ";")
         return quotaSourceDigest(key)
     }
     nonisolated private static func quotaSourceDigest(_ value: String) -> String {
@@ -224,10 +226,27 @@ import UniformTypeIdentifiers
             throw MonitorError.message("上次保存未完成，请重新填写该连接的凭据后保存。")
         }
     }
-    func upsert(_ account: Account, key: String = "") throws {
+    func upsert(_ draft: Account, key: String = "") throws {
+        var account = draft
         guard !loadFailed else { throw MonitorError.message("数据文件不可写，请检查原文件后再试。") }
         guard account.kind == .agent, account.provider != .custom else { throw MonitorError.message("搞词元仅记录 Agent 软件，不支持 API 账户。") }
         let existingIndex = library.accounts.firstIndex { $0.id == account.id }
+        let existing = existingIndex.map { library.accounts[$0] }
+        if let previous = existing, let email = previous.antigravityEmail {
+            guard account.connection == previous.connection, account.provider == previous.provider,
+                  account.antigravityEmail.flatMap(AntigravityStatusLine.canonicalEmail) == email else {
+                throw MonitorError.message("这个 Antigravity 账户已绑定来源和邮箱。切换 Google 账户或来源时请新建账户。")
+            }
+        }
+        if let method = account.antigravitySyncMethod {
+            guard account.antigravitySyncOptions.contains(method),
+                  let email = account.antigravityEmail.flatMap(AntigravityStatusLine.canonicalEmail) else {
+                throw MonitorError.message("请为所选的 Antigravity 自动同步方式填写有效的 Google 账号邮箱。")
+            }
+            account.antigravityEmail = email
+        } else {
+            account.antigravityEmail = existing?.antigravityEmail
+        }
         if account.provider == .gemini && account.connection == .file {
             guard let existingIndex, library.accounts[existingIndex].provider == .gemini,
                   library.accounts[existingIndex].kind == account.kind, library.accounts[existingIndex].connection == .file else {
@@ -362,7 +381,7 @@ import UniformTypeIdentifiers
         guard !Task.isCancelled, !loadFailed, !suspended, userInitiated || library.autoRefresh,
               !incompleteCredentialSaves.contains(id), !refreshing.contains(id),
               let a = library.accounts.first(where: { $0.id == id }), a.kind == .agent, a.provider != .custom, a.enabled,
-              !a.usesAntigravityReport else { return }
+              a.canRefreshQuota else { return }
         if userInitiated { lastUserActions[id] = Date() }
         let revision = revisions[id, default: 0], token = UUID()
         refreshing.insert(id)
@@ -464,15 +483,24 @@ import UniformTypeIdentifiers
     }
     func refreshAll(userInitiated: Bool = false) async {
         guard !suspended, userInitiated || library.autoRefresh else { return }
-        await refreshGroup(active.filter { !$0.usesAntigravityReport }.map(\.id), userInitiated: userInitiated)
+        await refreshGroup(active.filter(\.canRefreshQuota).map(\.id), userInitiated: userInitiated)
     }
     func refreshDue() async {
         guard !suspended, library.autoRefresh else { return }
         // 固定/自适应是用户偏好，存 UserDefaults，不进 Library schema（保持存档兼容）。
         let fixed = TokenBundle.defaults.bool(forKey: "refreshFixedInterval")
-        let ids = Self.dueIDs(accounts: active.filter { !$0.usesAntigravityReport }, fixed: fixed,
+        let accounts = active.filter(\.canRefreshQuota)
+        let due = Self.dueIDs(accounts: accounts, fixed: fixed,
                               refreshMinutes: library.refreshMinutes, changes: lastChanges, actions: lastUserActions)
-        await refreshGroup(ids, userInitiated: false)
+        let scheduled = Set(due)
+        // A CLI callback can arrive during the adaptive wait. The existing one-minute tick checks
+        // for newer local observations without launching the CLI or changing the other schedules.
+        let pushed = accounts.filter { account in
+            guard account.antigravitySyncMethod == .statusLine, !scheduled.contains(account.id),
+                  let email = account.antigravityEmail, let sample = AntigravityStatusLine.snapshot(email: email) else { return false }
+            return sample.observedAt > (account.snapshot?.observedAt ?? .distantPast)
+        }
+        await refreshGroup(due + pushed.map(\.id), userInitiated: false)
     }
     var active: [Account] { library.accounts.filter { $0.enabled && $0.kind == .agent && $0.provider != .custom } }
     /// 3.2：按「最近一次额度/余额/积分变化时间」倒序（刚消耗的排最上）。
@@ -491,6 +519,7 @@ import UniformTypeIdentifiers
     func health(of a: Account) -> AccountHealth {
         if !a.warnings(threshold: library.warningThreshold).isEmpty { return .needsAction }
         if a.usesAntigravityReport && a.snapshot?.isHistoricalAntigravityReading != false {
+            if a.canRefreshQuota && a.enabled && a.statusNote != nil { return .syncPaused }
             return a.historicalAntigravityReport != nil || a.unassignedLegacyAntigravityReport != nil ? .historical : .ok
         }
         if a.error != nil {

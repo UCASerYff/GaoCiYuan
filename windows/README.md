@@ -1,6 +1,6 @@
-# 搞词元 Windows 4.14
+# 搞词元 Windows 4.15
 
-Windows 10（2004 及更新版本）和 Windows 11 的 x64 当前用户安装包。营销版本为 **4.14**，Windows 构建号为 **7**。发行文件为 `GaoCiYuan-Windows-4.14-build7-x64-Setup.exe` 和同名 `.sha256`，核对 SHA-256 后运行安装程序。已有 Windows 版时，从通知区域退出应用，再沿用原安装目录升级。安装程序创建开始菜单入口，注册 `gaociyuan://analytics`，并在缺少 WebView2 时调用 Microsoft 签名的引导程序。卸载移除程序、快捷方式和协议注册，保留用户资料和凭据。此 Windows 发布包目前没有 Authenticode 签名。
+Windows 10（2004 及更新版本）和 Windows 11 的 x64 当前用户安装包。营销版本为 **4.15**，Windows 构建号为 **1**。发行文件为 `GaoCiYuan-Windows-4.15-build1-x64-Setup.exe` 和同名 `.sha256`，核对 SHA-256 后运行安装程序。已有 Windows 版时，从通知区域退出应用，再沿用原安装目录升级。安装程序创建开始菜单入口，注册 `gaociyuan://analytics`，并在缺少 WebView2 时调用 Microsoft 签名的引导程序。卸载移除程序、快捷方式和协议注册，保留用户资料和凭据。此 Windows 发布包目前没有 Authenticode 签名。
 
 ## 使用
 
@@ -19,12 +19,19 @@ Windows 10（2004 及更新版本）和 Windows 11 的 x64 当前用户安装包
 | --- | --- |
 | Codex | 从用户已登录的官方 Codex CLI 读取本机 app-server 的账户额度，执行首次手动刷新后才开始周期读取。 [Codex app-server](https://learn.chatgpt.com/docs/app-server) |
 | Claude Code | 用户在 Claude Code 启用官方 `statusLine`，调用已安装的 `GaoCiYuan-cli.exe --capture-claude-status`。账户编辑器提供完整命令，随后读取系统回传的额度快照。 [Claude Code status line](https://code.claude.com/docs/en/statusline) |
+| Antigravity | 用户关联独立 CLI 中登录的 Google 邮箱，并在 CLI 启用一次官方 `statusLine`。之后 CLI 会把模型组额度推送到搞词元。 [Antigravity 状态栏数据](https://antigravity.google/docs/cli/statusline/) |
 | 小米 MiMo | 用户在 Agent 套餐连接中提供个人 Token Plan 密钥，按选择的大陆、新加坡或欧洲服务区读官方额度。团队密钥不适用于此个人接口。 [MiMo Token Plan](https://mimo.mi.com/docs/zh-CN/api/asset/credits-get) |
 | MiniMax | 使用已安装并授权的官方 `mmx` CLI 执行只读额度查询。 [MiniMax CLI](https://github.com/MiniMax-AI/cli/blob/main/src/commands/quota/show.ts) |
 | OpenCode Go | 使用 Go 计划的独立密钥读取官方用量。 [OpenCode Go](https://opencode.ai/docs/console/go/#usage) |
 | 阿里云百炼 | 使用用户授权登录的官方 `bl` CLI 读取个人 Token Plan 或 Coding Plan。 [百炼 CLI](https://help.aliyun.com/zh/model-studio/cli/usage-quota) |
 
-Antigravity 独立版支持手动导入官方 CLI 的历史额度。在「平台接入」添加 Antigravity，选「Antigravity 独立版 /usage 报告」并保存。随后从「Agent 软件」选中接收报告的搞词元账户，在账户明细点击「导入额度报告」，选择 UTF-8 `.json` 或 `.txt` 文件（最多 64 KiB），核对目标账户并确认。 [官方 CLI 安装指南](https://antigravity.google/docs/getting-started?tab=cli) [官方额度说明](https://antigravity.google/docs/cli/commands/usage)
+### Antigravity 自动同步
+
+在「平台接入」添加或打开现有「Antigravity 独立版」账户，填入并保存官方独立 CLI 显示的登录邮箱。从账户设置复制配置示例，将 `statusLine` 合并到 `%USERPROFILE%\.gemini\antigravity-cli\settings.json`。示例包含安装目录中的接收命令、当前邮箱的账户指纹，并以 `stack_with_default` 保留默认状态栏。如果已有自定义状态栏，把接收命令加入现有脚本，并将同一份标准输入传给它。搞词元不会修改该设置文件。 [官方 CLI 安装指南](https://antigravity.google/docs/getting-started?tab=cli) · [官方状态栏配置](https://antigravity.google/docs/cli/statusline/)
+
+打开已登录的独立 CLI 后，它会在状态变化时推送。启用自动同步时，搞词元每分钟从本地缓存读取一次，只接收和配置指纹匹配的登录邮箱。切换 Google 账户后需要选用相应账户的状态栏配置。15 分钟未收到同邮箱的新读数会显示历史状态。没有推送的窗口或比例不填猜测值。该路径由正在运行的 CLI 提供读数，独立桌面应用和 Gemini 内置版不提供此回调。
+
+历史报告仍可从「Agent 软件」的账户明细导入。选择 UTF-8 `.json` 或 `.txt` 文件（最多 64 KiB），核对目标账户并确认。 [官方额度说明](https://antigravity.google/docs/cli/commands/usage)
 
 在自己的终端中确认已登录目标账户、`agy --version` 为 1.1.11 或较新版本，并且当前生效的 `disableSlashCommands` 为 `false`，再使用下列 PowerShell 命令导出。无法确认条件时，在交互界面直接运行 `/usage`，将额度面板内容保存为 UTF-8 `.txt` 文件。搞词元仅读取你选中的报告文件。 [CLI 1.1.11 发布说明](https://antigravity.google/changelog?tab=cli#v1111) [Google Antigravity 常见问题](https://antigravity.google/docs/faq)
 
@@ -37,7 +44,7 @@ if ($LASTEXITCODE -eq 0) {
 
 总览和账户明细会标明历史报告、导入方式、导入时间和报告记录的剩余百分比。JSON 文件中如有可读的重置时间，会标在相应额度旁。两种格式均无法验证文件来源、所属账号或采集时间。报告单独留作历史参考，不参与实时额度、重置倒计时、预测或提醒。现有通用 JSON 快照连接仍可用。
 
-Windows 自动发现仅识别独立版 Antigravity，旧的 Gemini 内置连接保留为 macOS 旧版连接。旧账户与历史资料仍可查看。如需导入 Windows CLI 报告，请另建独立版账户。Windows 不会将旧连接改标为独立版。
+Windows 自动发现仅识别独立版 Antigravity。旧的 Gemini 内置账户与历史资料可在其原位置查看。新建独立版账户即可配置 CLI 同步和导入独立版报告。
 
 其余平台仍可建立 Agent 记录、查看接入说明并使用快照文件。Windows 实时读取目前未覆盖 Cursor、Copilot 个人额度、Grok 在线账户、Kimi、豆包、WorkBuddy、Zcode/GLM、DeepSeek Harness、Devin、Ollama Cloud、Command Code、OpenCode Zen、Cline、Factory、Zed、Kiro、Qoder 和 Trae，也未迁移 macOS 的辅助功能或登录态读取方式。
 
@@ -63,8 +70,8 @@ py -3.12 -m venv .build-venv
 ./smoke-installed.ps1
 ```
 
-安装冒烟使用单独资料目录与合成凭据。已有正式 Windows 安装时，冒烟脚本会停止。在干净的 Windows 测试环境可通过 `-PreviousInstallerPath` 提供 4.13+5 或 4.14+6 安装包路径，按顺序安装两个构建并验证资料。直接运行 `GaoCiYuan-cli.exe` 会显示命令帮助，标准输出和错误输出使用 UTF-8。可用 `python launch.py --serve --no-browser --data-dir <隔离目录> --no-refresh` 运行只监听本机的测试入口。已构建 CLI 与 Edge 可通过 `node tests/visual-smoke.mjs <CLI 路径> 4.14+7 <截图目录>` 验证代表性页面与高 DPI 布局。
+安装冒烟使用单独资料目录与合成凭据。已有正式 Windows 安装时，冒烟脚本会停止。在干净的 Windows 测试环境可通过 `-PreviousInstallerPath` 提供 4.13+5、4.14+6 或 4.14+7 安装包路径，按顺序安装两个构建并验证资料。直接运行 `GaoCiYuan-cli.exe` 会显示命令帮助，标准输出和错误输出使用 UTF-8。可用 `python launch.py --serve --no-browser --data-dir <隔离目录> --no-refresh` 运行只监听本机的测试入口。已构建 CLI 与 Edge 可通过 `node tests/visual-smoke.mjs <CLI 路径> 4.15+1 <截图目录>` 验证代表性页面与高 DPI 布局。
 
-可用 PowerShell 7 运行 `./tests/smoke-tray.ps1 -Executable <已安装程序路径> -ExpectedFileVersion 4.14.7.0`，在独立 Windows 桌面与合成资料中验证托盘和退出行为。加 `-ProbeExplorer` 可在当前桌面用隐藏测试窗口核验 Windows Shell 的图标注册和删除。
+可用 PowerShell 7 运行 `./tests/smoke-tray.ps1 -Executable <已安装程序路径> -ExpectedFileVersion 4.15.1.0`，在独立 Windows 桌面与合成资料中验证托盘和退出行为。加 `-ProbeExplorer` 可在当前桌面用隐藏测试窗口核验 Windows Shell 的图标注册和删除。
 
 v4.13 Windows 的附带差异包括原生窗口边框、字体与部分图标、部分平台提示的英文译文，以及悬浮窗视觉效果。Mac 专属的 WidgetKit、Dock/菜单栏集成、CLI 活跃指示点和网络诊断导出未迁移。安装、卸载、更新签名和核心交互在隔离资料下验收；未使用实际 Agent 订阅账户或 macOS 真机。

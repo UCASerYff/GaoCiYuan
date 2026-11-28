@@ -340,7 +340,8 @@ def connection_details(provider: str, connection: str) -> dict:
     elif mode == "grokbot":
         details.update(label="Grok Bot 本机用量", help="只有点击「读取本机额度」才读取应用资料里的 grokbot-usage.json。")
     elif mode == "antigravity-report":
-        details.update(help="在官方 Antigravity CLI 中导出目标账户的 /usage JSON 或 UTF-8 文本。报告账户及采集时间未经验证，仅作历史参考。")
+        details.update(label="Antigravity 独立版",
+                       help="关联已登录的 Antigravity CLI 邮箱并配置官方 statusLine 后自动同步额度。/usage 报告仍可作为历史导入。")
     elif mode == "unsupported":
         details.update(help=_WINDOWS_LIMITS.get(provider, "此连接在 Windows 暂无经验证的读取方式。可从官方页面查看，或选择本地快照。"))
         if is_legacy_gemini_connection(provider, connection):

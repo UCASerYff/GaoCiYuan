@@ -11,6 +11,10 @@ enum TokenBundle {
 
 public enum TokenStatusLineBridge {
     public static func runIfRequested() -> Bool {
+        if CommandLine.arguments.contains(AntigravityStatusLine.modeArgument) {
+            AntigravityStatusLine.run(arguments: CommandLine.arguments)
+            return true
+        }
         guard CommandLine.arguments.contains(ClaudeStatusLine.modeArgument) else { return false }
         ClaudeStatusLine.runAsStatusLine()
         return true

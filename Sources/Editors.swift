@@ -32,6 +32,7 @@ struct AccountEditor: View {
                 TextField(L("账户名称"),text:$account.name)
                 TextField(L("套餐 / 组织备注"),text:$account.plan,prompt:Text(account.kind == .agent ? L("如 Plus、Pro、Max、Coding Plan") : L("如组织名称或项目名")))
                 Picker(L("连接方式"),selection:$account.connection) { ForEach(connectionOptions,id:\.self) { Text(L($0 == .kimiDesktop ? "Kimi 桌面订阅页（推荐 · 免 Key）" : ($0 == .agentLocal && account.provider == .gemini ? "Antigravity 独立版" : $0.rawValue))).tag($0) } }
+                    .disabled(savedAntigravityAccount?.antigravityEmail != nil)
                 integrationSettings
                 if account.connection.needsKey {
                     if [.aliyun,.volc,.xai,.volcArk].contains(account.connection) {
@@ -65,7 +66,8 @@ struct AccountEditor: View {
                     Text(L("DeepSeek 余额接口不含百分比。「充值以来峰值」以本机观测到的余额峰值为分母，余额上升视为充值重新计满；「我的预算」以上方本月预算数字为分母。")).font(.caption).foregroundStyle(.secondary)
                 }
                 if account.usesAntigravityReport {
-                    antigravityImportSettings
+                    antigravitySyncSettings
+                    DisclosureGroup(L("历史额度记录")) { antigravityImportSettings }
                 } else if account.connection == .agentLocal {
                     if account.provider == .grok {
                         Text(L("只读读取 Grok Bot 左下角头像栏目的套餐和已用百分比，悬浮窗显示剩余量。手动点击立即读取；非前台自动同步并做 5 分钟导航节流，前台使用中不打扰。没有可用读数时不显示百分比，也不读取 Grok 账号额度。")).font(.callout).foregroundStyle(.secondary)
@@ -136,7 +138,7 @@ struct AccountEditor: View {
                 Toggle(L("启用此账户"),isOn:$account.enabled)
             }.formStyle(.grouped)
             HStack(spacing:12) {
-                if !account.usesAntigravityReport {
+                if account.canRefreshQuota {
                     Button(L(testing ? "测试中…" : "测试连接")) { test() }.disabled(testing)
                 }
                 if let testResult { Text(L(testResult)).font(.caption).foregroundStyle(testResult.hasPrefix("连接失败") ? .red : Theme.teal).fixedSize(horizontal:false,vertical:true) }
@@ -154,6 +156,11 @@ struct AccountEditor: View {
             .onChange(of:account.kind) { _, k in
                 account.name = k == .agent ? account.provider.defaultAgentName : account.provider.defaultLLMName
                 account.connection = Connection.creationOptions(account.provider,k)[0]
+            }
+            .onChange(of: account.connection) { _, _ in
+                if let method = account.antigravitySyncMethod, !account.antigravitySyncOptions.contains(method) {
+                    account.antigravitySyncMethod = nil
+                }
             }
     }
 
@@ -213,6 +220,41 @@ struct AccountEditor: View {
 
     private var savedAntigravityAccount: Account? {
         store.library.accounts.first { $0.id == account.id && $0.usesAntigravityReport && $0.connection == account.connection }
+    }
+
+    @ViewBuilder private var antigravitySyncSettings: some View {
+        Picker(L("Antigravity 自动同步"), selection: $account.antigravitySyncMethod) {
+            Text(L("关闭")).tag(nil as AntigravitySyncMethod?)
+            ForEach(account.antigravitySyncOptions, id: \.self) { method in
+                Text(L(method == .desktop ? "桌面额度面板（需辅助功能授权）" : "独立 CLI 状态栏推送")).tag(Optional(method))
+            }
+        }
+        if let method = account.antigravitySyncMethod {
+            let email = Binding(get: { account.antigravityEmail ?? "" }, set: { account.antigravityEmail = $0 })
+            TextField(L("已登录的 Google 账号邮箱"), text: email)
+                .disabled(savedAntigravityAccount?.antigravityEmail != nil)
+            Text(L("同一来源只读取所绑定邮箱的额度。切换账号请新建账户。")).font(.caption).foregroundStyle(.secondary)
+            if method == .statusLine {
+                Text(L("在独立 Antigravity CLI 配置一次状态栏命令。CLI 会在会话状态变化时推送额度，搞词元自动刷新。已有自定义状态栏时，请把接收命令合并到现有脚本。"))
+                    .font(.callout).foregroundStyle(.secondary)
+                HStack {
+                    if let path = Bundle.main.executableURL?.path, let address = account.antigravityEmail,
+                       let setup = AntigravityStatusLine.configuration(executable: path, email: address) {
+                        Button(L("复制状态栏配置")) {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(setup, forType: .string)
+                        }
+                    }
+                    if let guide = URL(string: AntigravityStatusLine.guide) { Link(L("查看 Google 官方说明 ↗"), destination: guide) }
+                }
+            } else {
+                Text(L("在对应桌面应用打开额度面板。授权后，搞词元会自动读取可确认账号的可见额度。内置版面板需在实际 Mac 上验证。"))
+                    .font(.callout).foregroundStyle(.secondary)
+                Button(L("打开系统设置授权 ↗")) {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") { NSWorkspace.shared.open(url) }
+                }
+            }
+        }
     }
 
     @ViewBuilder private var antigravityImportSettings: some View {
@@ -418,7 +460,7 @@ struct AccountEditor: View {
                 account.snapshot = nil; account.error = nil; account.lastAttempt = nil
             }
             try store.upsert(account,key:key); dismiss()
-            if account.enabled && !account.usesAntigravityReport { let id = account.id; Task { await store.refresh(id, userInitiated: true) } }
+            if account.enabled && account.canRefreshQuota { let id = account.id; Task { await store.refresh(id, userInitiated: true) } }
         } catch { self.error = error.localizedDescription }
     }
 }
@@ -438,6 +480,8 @@ private struct AccountEditorFields: Equatable {
     let balanceBasis: String
     let customConfig: CustomAPIConfig?
     let showInRail: Bool
+    let antigravitySyncMethod: AntigravitySyncMethod?
+    let antigravityEmail: String?
 
     init(_ account: Account, budget: String) {
         provider = account.provider
@@ -454,6 +498,8 @@ private struct AccountEditorFields: Equatable {
         balanceBasis = account.balanceBasis ?? "sinceTopUp"
         customConfig = account.customConfig
         showInRail = account.showInRail
+        antigravitySyncMethod = account.antigravitySyncMethod
+        antigravityEmail = account.antigravityEmail
     }
 }
 struct SettingsPanel: View {

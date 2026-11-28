@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$InstallerPath = (Join-Path $PSScriptRoot 'dist\GaoCiYuan-Windows-4.14-build7-x64-Setup.exe'),
+    [string]$InstallerPath = (Join-Path $PSScriptRoot 'dist\GaoCiYuan-Windows-4.15-build1-x64-Setup.exe'),
     [string]$PreviousInstallerPath,
     [switch]$HeadlessServerOnly,
     [switch]$KeepArtifacts
@@ -9,11 +9,12 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$expectedVersion = '4.14+7'
-$expectedFileVersion = '4.14.7.0'
+$expectedVersion = '4.15+1'
+$expectedFileVersion = '4.15.1.0'
 $previousVersions = @{
     '4.13.5.0' = '4.13+5'
     '4.14.6.0' = '4.14+6'
+    '4.14.7.0' = '4.14+7'
 }
 $productName = ConvertFrom-Json '"\u641e\u8bcd\u5143"'
 $fileConnection = ConvertFrom-Json '"\u81ea\u52a8\u8bfb\u53d6\u5feb\u7167\u6587\u4ef6"'
@@ -92,7 +93,8 @@ function Assert-InstalledCliHelp([string]$Executable, [string]$DataDirectory) {
         $helpText = $output.GetAwaiter().GetResult()
         $errorText = $errors.GetAwaiter().GetResult()
         $description = ConvertFrom-Json '"\u641e\u8bcd\u5143 Windows \u7248"'
-        Assert-Test ($process.ExitCode -eq 0 -and $helpText -match 'usage:' -and $helpText.Contains($description) -and -not $errorText) (
+        Assert-Test ($process.ExitCode -eq 0 -and $helpText -match 'usage:' -and $helpText.Contains($description) -and
+            $helpText.Contains('--capture-antigravity-status') -and -not $errorText) (
             "The installed CLI did not return UTF-8 command help. Exit code $($process.ExitCode). $errorText"
         )
     } finally {

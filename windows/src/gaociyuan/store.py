@@ -21,6 +21,7 @@ from gaociyuan.antigravity_report import (
     parse_report,
     public_report,
 )
+from gaociyuan.antigravity_statusline import EMAIL_FIELD, account_key, canonical_email, read_antigravity_statusline
 from gaociyuan.catalog import (
     AGENT_LOCAL,
     ANTIGRAVITY_REPORT,
@@ -95,6 +96,7 @@ ACCOUNT_KEYS = {
     "quotaForecast",
     FORECAST_HISTORY,
     REPORT_FIELD,
+    EMAIL_FIELD,
 }
 SECRET_FIELDS = {"secret", "apiKey", "token", "password", "credential"}
 UNSUPPORTED = "Windows 版不调用这条连接的在线接口或辅助功能，也不会写入百分比。可改用「快照文件」导入真实读数。上次数据已保留。"
@@ -206,7 +208,18 @@ class TokenStore:
         ):
             raise AppError("请另建 Antigravity 独立版账户。旧 Gemini 连接和历史记录会保留。", "legacy_connection")
         if connection == ANTIGRAVITY_REPORT and new_credential:
-            raise AppError("Antigravity 手动报告不需要凭据。")
+            raise AppError("Antigravity 状态栏同步与手动报告不需要凭据。")
+        linked_email = existing.get(EMAIL_FIELD) if existing else None
+        entered_email = payload.get(EMAIL_FIELD, linked_email)
+        email = canonical_email(entered_email)
+        if new_route == ("gemini", ANTIGRAVITY_REPORT) and entered_email not in (None, "") and email is None:
+            raise AppError("请填写 Antigravity CLI 中已登录的有效邮箱。")
+        if linked_email and (email != linked_email or new_route != current_route):
+            raise AppError("此账户已绑定 Antigravity CLI 邮箱。请为其他邮箱另建独立账户。")
+        if email and new_route == ("gemini", ANTIGRAVITY_REPORT) and any(
+            item["id"] != account_id and item.get(EMAIL_FIELD) == email for item in self.library["accounts"]
+        ):
+            raise AppError("此 Antigravity CLI 邮箱已绑定其他账户。")
         name = str(payload.get("name") or default_agent_name(provider)).strip()
         if not name:
             raise AppError("账户设置无效。")
@@ -243,14 +256,16 @@ class TokenStore:
             "connectorAuthorized": False,
             "grokBotManualReading": None,
         }
+        if new_route == ("gemini", ANTIGRAVITY_REPORT) and email:
+            account[EMAIL_FIELD] = email
         if existing:
             account["autoDiscovered"] = existing.get("autoDiscovered", False)
             account["history"] = existing.get("history") or []
             same = _same_source(existing, account)
+            if current_route == new_route == ("gemini", ANTIGRAVITY_REPORT) and REPORT_FIELD in existing:
+                account[REPORT_FIELD] = existing[REPORT_FIELD]
             if same:
                 account["connectorAuthorized"] = existing.get("connectorAuthorized", False)
-                if connection == ANTIGRAVITY_REPORT and REPORT_FIELD in existing:
-                    account[REPORT_FIELD] = existing[REPORT_FIELD]
             if same and not new_credential:
                 for key in ("snapshot", "lastAttempt", "error", "statusNote", "grokBotManualReading", "lastQuotaChangedAt"):
                     account[key] = existing.get(key)
@@ -408,7 +423,11 @@ class TokenStore:
                     self.read_grokbot(account_id)
                 return
             mode = windows_read_mode(account["provider"], account["connection"])
-            if mode == "antigravity-report" or is_legacy_gemini_connection(account["provider"], account["connection"]):
+            if is_legacy_gemini_connection(account["provider"], account["connection"]):
+                return
+            if mode == "antigravity-report":
+                if account.get(EMAIL_FIELD):
+                    self._refresh_antigravity_status(account, self.now())
                 return
             now = self.now()
             if user_initiated:
@@ -455,6 +474,9 @@ class TokenStore:
         if is_grok_bot_route(draft):
             raise AppError("请保存账户，再用「读取本机额度」读取 Grok Bot。")
         if mode == "antigravity-report":
+            email = canonical_email(draft.get(EMAIL_FIELD))
+            if email:
+                return {"snapshot": read_antigravity_statusline(self.directory, email, self.now())}
             raise AppError(IMPORT_HELP, "manual_report")
         now = self.now()
         if mode == "file":
@@ -474,11 +496,30 @@ class TokenStore:
     def refresh_all(self) -> list[str]:
         with self.lock:
             account_ids = [item["id"] for item in self.library["accounts"]
-                           if item.get("enabled") and not is_grok_bot_route(item) and item["connection"] != ANTIGRAVITY_REPORT
+                           if item.get("enabled") and not is_grok_bot_route(item)
+                           and (item["connection"] != ANTIGRAVITY_REPORT or item.get(EMAIL_FIELD))
                            and not is_legacy_gemini_connection(item["provider"], item["connection"])]
         for account_id in account_ids:
             self.refresh(account_id, user_initiated=True)
         return account_ids
+
+    def _refresh_antigravity_status(self, account: dict, now: datetime) -> None:
+        try:
+            snapshot = read_antigravity_statusline(self.directory, account[EMAIL_FIELD], now)
+        except AppError as error:
+            if account.get("statusNote") != error.message or account.get("error"):
+                self._set_status(account, error.message, now)
+            return
+        current = account.get("snapshot")
+        if current:
+            captured = parse_instant(snapshot["observedAt"])
+            previous = parse_instant(current.get("observedAt"))
+            if previous and captured and previous > captured:
+                return
+            if previous == captured and same_observation(current, snapshot) and not account.get("statusNote"):
+                return
+        source_key = _quota_source_key(account, snapshot["source"])
+        self._apply_snapshot(account, snapshot, now, source_key)
 
     def import_antigravity_report(self, payload: dict) -> dict:
         with self.lock:
@@ -539,6 +580,9 @@ class TokenStore:
                 if is_grok_bot_route(account) or not account.get("enabled", True):
                     continue
                 mode = windows_read_mode(account["provider"], account["connection"])
+                if mode == "antigravity-report" and account.get(EMAIL_FIELD):
+                    due.append(account["id"])
+                    continue
                 if mode != "file" and not (mode == "connector" and account.get("connectorAuthorized")):
                     continue
                 account_id = account["id"]
@@ -582,6 +626,8 @@ class TokenStore:
         legacy_gemini = is_legacy_gemini_connection(account["provider"], account["connection"])
         if account["connection"] == ANTIGRAVITY_REPORT:
             view[REPORT_FIELD] = public_report(account.get(REPORT_FIELD))
+            if account.get(EMAIL_FIELD):
+                view["antigravityStatusAccount"] = account_key(account[EMAIL_FIELD])
         if include_forecast and not legacy_gemini:
             view["quotaForecast"] = quota_forecast(account, now)
         view["hasCredential"] = not legacy_gemini and account["connection"] != ANTIGRAVITY_REPORT and self.credentials.has(account["id"])
@@ -859,6 +905,10 @@ class TokenStore:
             "connectorAuthorized": raw.get("connectorAuthorized") is True,
             "grokBotManualReading": raw.get("grokBotManualReading") if isinstance(raw.get("grokBotManualReading"), dict) else None,
         }
+        if provider == "gemini" and connection == ANTIGRAVITY_REPORT:
+            email = canonical_email(raw.get(EMAIL_FIELD))
+            if email:
+                account[EMAIL_FIELD] = email
         forecast = raw.get(FORECAST_HISTORY)
         if (isinstance(forecast, dict) and isinstance(forecast.get("source"), str)
                 and forecast["source"].startswith(_quota_account_key(account) + ":")
@@ -981,11 +1031,14 @@ class TokenStore:
 
 
 def _same_source(left: dict, right: dict) -> bool:
-    return all(left.get(key) == right.get(key) for key in SOURCE_FIELDS)
+    return all(left.get(key) == right.get(key) for key in (*SOURCE_FIELDS, EMAIL_FIELD))
 
 
 def _quota_account_key(account: dict) -> str:
-    return _source_digest([account.get(key) for key in ("id", *SOURCE_FIELDS, "plan")])
+    identity = [account.get(key) for key in ("id", *SOURCE_FIELDS, "plan")]
+    if account.get(EMAIL_FIELD):
+        identity.append(account[EMAIL_FIELD])
+    return _source_digest(identity)
 
 
 def _quota_source_key(account: dict, origin: str | None) -> str:

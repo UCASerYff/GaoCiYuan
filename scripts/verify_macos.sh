@@ -17,10 +17,16 @@ framework="$app/Contents/Frameworks/Token.framework/Versions/A"
 [[ "$(/usr/bin/lipo -archs "$app/Contents/MacOS/GaoCiYuan")" == arm64 ]]
 [[ "$(/usr/bin/lipo -archs "$framework/Token")" == arm64 ]]
 for info in Info.plist "$app/Contents/Info.plist" "$framework/Resources/Info.plist"; do
-    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info")" == 4.14 ]]
-    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info")" == 16 ]]
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info")" == 4.15 ]]
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info")" == 17 ]]
 done
 [[ ! -e "$app/Contents/PlugIns/GaoCiYuanWidgets.appex" ]]
+python3 - "$app/Contents/MacOS/GaoCiYuan" <<'PY'
+import subprocess
+import sys
+
+subprocess.run([sys.argv[1], "--capture-antigravity-status"], input=b"{}", check=True, timeout=15)
+PY
 
 compiler=(xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0)
 models=(Sources/{Models,AgentTables,ProviderIntegrations,GrokBotUsageReport,QuotaForecast}.swift)
@@ -32,11 +38,20 @@ models=(Sources/{Models,AgentTables,ProviderIntegrations,GrokBotUsageReport,Quot
 "${compiler[@]}" "${models[@]}" Sources/{AntigravityUsageReport,Log}.swift Tests/AntigravityUsageReportRegression.swift -o "$fixture/antigravity-report"
 "$fixture/antigravity-report"
 
+"${compiler[@]}" "${models[@]}" Sources/{AntigravityStatusLine,Log}.swift Tests/AntigravityStatusLineRegression.swift \
+    -framework CryptoKit -o "$fixture/antigravity-statusline"
+"$fixture/antigravity-statusline"
+
+"${compiler[@]}" "${models[@]}" Sources/{AntigravityDesktopQuota,AntigravityStatusLine,Log}.swift \
+    Tests/AntigravityDesktopQuotaRegression.swift -framework AppKit -framework ApplicationServices \
+    -framework CryptoKit -o "$fixture/antigravity-desktop-quota"
+"$fixture/antigravity-desktop-quota"
+
 "${compiler[@]}" Sources/TokenLifecycleWork.swift Tests/TokenLifecycleWorkRegression.swift -o "$fixture/lifecycle"
 "$fixture/lifecycle"
 
 "${compiler[@]}" "${models[@]}" \
-    Sources/{Pacing,RefreshCoordinator,MonitorStore,LegacyAccountMigration,UsageAnalyticsStore,TokenLifecycleWork}.swift \
+    Sources/{Pacing,RefreshCoordinator,MonitorStore,LegacyAccountMigration,UsageAnalyticsStore,TokenLifecycleWork,AntigravityStatusLine}.swift \
     Tests/RefreshSchedulingRegression.swift -framework SwiftUI -framework AppKit \
     -framework UniformTypeIdentifiers -framework CryptoKit -lsqlite3 -o "$fixture/refresh"
 "$fixture/refresh"

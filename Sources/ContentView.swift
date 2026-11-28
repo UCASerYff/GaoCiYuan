@@ -321,7 +321,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(L("—")).font(.system(size: 26, weight: .light)).foregroundStyle(.secondary)
                     Text(L("尚未获取额度")).font(.callout)
-                    Text(L(a.usesAntigravityReport ? AntigravityUsageReport.manualHint : "连接后读取真实数据，不预填额度。")).font(.caption).foregroundStyle(.secondary)
+                    Text(L(a.usesAntigravityReport ? "在账户设置选择 Antigravity 自动同步方式。" : "连接后读取真实数据，不预填额度。")).font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
             }
             antigravityReferences(a)
@@ -329,16 +329,16 @@ struct ContentView: View {
                 Button(L("打开系统设置授权 ↗")) { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!) }.buttonStyle(.borderedProminent).controlSize(.small).font(.caption)
             }
             if let status = GrokBotBridge.visibleStatus(a) { Label(L(status), systemImage: "info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
-            if let error = a.error, !a.usesAntigravityReport { Label(L(error), systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
+            if let error = a.error, a.canRefreshQuota { Label(L(error), systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 QuotaForecastAccountEntry(forecast: QuotaForecast.evaluate(account: a, now: context.date)) {
                     forecastSelection = QuotaForecastSelection(accountID: a.id)
                 }
             }
             HStack {
-                if a.usesAntigravityReport {
+                if !a.canRefreshQuota {
                     Button { edit = a } label: {
-                        Label(L(a.connection == .geminiApp ? "手工记录额度…" : "导入额度报告…"), systemImage: "doc.badge.plus")
+                        Label(L("设置自动同步…"), systemImage: "slider.horizontal.3")
                     }.controlSize(.small)
                 } else {
                     Button { Task { await store.refresh(a.id, userInitiated: true) } } label: {
