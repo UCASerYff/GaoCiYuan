@@ -1,0 +1,19 @@
+name: macOS fixes validation
+on:
+  push:
+    branches: ['codex/macos-fixes-20261128-3dc9f91a8f-full']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Compile and run isolated checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/verify_macos.sh
