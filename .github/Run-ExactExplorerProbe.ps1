@@ -130,37 +130,50 @@ function Open-NotificationOverflow([IntPtr]$ShellWindow) {
     }
 }
 
-function Get-ShellTrayElement($Registration) {
-    Add-Type -AssemblyName UIAutomationClient
-    Add-Type -AssemblyName UIAutomationTypes
-    Add-Type -AssemblyName WindowsBase
-    $bounds = $Registration.Bounds
-    $location = [Windows.Point]::new(($bounds.Left + $bounds.Right) / 2, ($bounds.Top + $bounds.Bottom) / 2)
-    $item = [Windows.Automation.AutomationElement]::FromPoint($location)
-    $walker = [Windows.Automation.TreeWalker]::ControlViewWalker
-    for ($depth = 0; $item -and $depth -lt 5; $depth++) {
-        if ($item.Current.Name -match '^搞词元(?:$|\s)' -and -not $item.Current.IsOffscreen) { return $item }
-        $item = $walker.GetParent($item)
+function Confirm-ExactTrayPixels($Bounds, [IntPtr]$ShellWindow) {
+    if (-not (Write-NotificationCrop $Bounds 'tray-verified-item')) { return $false }
+    $size = $n::ExpectedIcon($n::Dpi($ShellWindow), $true)
+    $iconPath = Join-Path (Split-Path -Parent $Executable) '_internal/gaociyuan_brand/GaoCiYuan.ico'
+    $capture = [Drawing.Bitmap]::new((Join-Path $evidence 'tray-verified-item.png'))
+    $icon = [Drawing.Icon]::new($iconPath, $size[0], $size[1])
+    $frame = $icon.ToBitmap()
+    try {
+        $left = [int][Math]::Floor(($capture.Width - $frame.Width) / 2)
+        $top = [int][Math]::Floor(($capture.Height - $frame.Height) / 2)
+        if ($left -lt 0 -or $top -lt 0) { return $false }
+        $background = $capture.GetPixel(0,0)
+        $mismatched = 0
+        for ($y = 0; $y -lt $frame.Height; $y++) {
+            for ($x = 0; $x -lt $frame.Width; $x++) {
+                $expected = $frame.GetPixel($x,$y)
+                $seen = $capture.GetPixel($left + $x, $top + $y)
+                $alpha = $expected.A / 255.0
+                foreach ($name in 'R','G','B') {
+                    $channel = [Math]::Round($alpha * $expected.$name + (1.0 - $alpha) * $background.$name)
+                    if ([Math]::Abs($channel - $seen.$name) -gt 2) { $mismatched++; break }
+                }
+            }
+        }
+        $total = $frame.Width * $frame.Height
+        $result.actualTrayItem = @{ width = $Bounds.width; height = $Bounds.height; pixels = $total; mismatched = $mismatched }
+        # Verify actual custom colors and glyph, and tolerate a small alpha rounding difference.
+        return ($mismatched -le $total * 0.05)
+    } finally {
+        $frame.Dispose()
+        $icon.Dispose()
+        $capture.Dispose()
     }
 }
 
 function Invoke-ActualTrayExit($Registration, [IntPtr]$ShellWindow) {
-    $icon = Get-ShellTrayElement $Registration
-    if (-not $icon) {
-        $null = Open-NotificationOverflow $ShellWindow
-        $icon = Wait-Probe {
-            $known = Find-TrayRegistration
-            if ($known) { Get-ShellTrayElement $known }
-        } 'The actual branded notification-area item was not accessible at its Explorer bounds.' 5
-    }
-    $target = $icon.Current.BoundingRectangle
-    $result.actualTrayItem = @{ name = $icon.Current.Name; width = $target.Width; height = $target.Height }
-    Assert-Probe ($target.Width -gt 0 -and $target.Width -lt 128 -and $target.Height -gt 0 -and $target.Height -lt 128) 'The accessible notification item did not have an icon-sized rectangle.'
-    $result.actualTrayCropSaved = Write-NotificationCrop @{ left = [int]$target.Left; top = [int]$target.Top; width = [int]$target.Width; height = [int]$target.Height } 'tray-verified-item'
-    Assert-Probe ($n::PointerClick([int]($target.Left + $target.Width/2), [int]($target.Top + $target.Height/2), $true)) 'The hosted desktop rejected the test right-click.'
+    $target = Add-Bounds $Registration.Bounds
+    Assert-Probe (Confirm-ExactTrayPixels $target $ShellWindow) 'The pixels at the exact registered rectangle did not match the packaged tray icon.'
+    Assert-Probe ($n::PointerClick([int]($target.left + $target.width/2), [int]($target.top + $target.height/2), $true)) 'The hosted desktop rejected the test right-click.'
     $popup = Wait-Probe {
         $n::Windows($app.Id) | Where-Object { $_.Class -eq '#32768' -and $_.Visible } | Select-Object -First 1
     } 'The right-click did not display the exact application menu.' 5
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
     $root = [Windows.Automation.AutomationElement]::FromHandle($popup.Handle)
     $exitName = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, '退出搞词元')
     $item = Wait-Probe { $root.FindFirst([Windows.Automation.TreeScope]::Descendants, $exitName) } 'The active menu did not expose its own Exit item.' 5
