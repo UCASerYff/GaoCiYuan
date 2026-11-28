@@ -1,5 +1,11 @@
 import Foundation
 
+// Keep the report fixture independent of the application's alert and bundle services.
+enum TokenBundle { static let bundle = Bundle.main }
+enum AlertRules {
+    static func attention(_ account: Account, threshold: Double, at: Date) -> [String] { [] }
+}
+
 @main struct AntigravityUsageReportRegression {
     static func main() throws {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
