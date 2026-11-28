@@ -1,5 +1,10 @@
 import Foundation
 
+enum TokenBundle { static let bundle = Bundle.main }
+enum AlertRules {
+    static func attention(_ account: Account, threshold: Double, at: Date) -> [String] { [] }
+}
+
 @main struct AntigravityStatusLineRegression {
     static func main() throws {
         let manager = FileManager.default
