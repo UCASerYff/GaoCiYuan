@@ -81,6 +81,23 @@ func L(_ value: String) -> String { value }
                   latest(["<title>4.18</title>" + enclosure("sparkle:version=\"4.18\"")])?.versionLabel == "4.18",
                   "A legacy display-only or title-only feed lost compatibility")
 
+        let windows = "<enclosure url=\"https://updates.fixture.invalid/windows.zip\" sparkle:os=\"windows\" " +
+            "sparkle:version=\"99\" sparkle:shortVersionString=\"9.99\" sparkle:edSignature=\"windows-fixture\" length=\"1024\"/>"
+        let unlabeledWindows = "<enclosure url=\"https://updates.fixture.invalid/GaoCiYuan-Windows-x64-Setup.exe\" " +
+            "sparkle:version=\"99\" sparkle:edSignature=\"windows-fixture\" length=\"1024\"/>"
+        let mac = enclosure("sparkle:os=\"macos\" sparkle:version=\"20\" sparkle:shortVersionString=\"4.15\" " +
+            "sparkle:edSignature=\"mac-fixture\" length=\"2048\"")
+        let itemHeading = "<title>Version 4.15 (cross-platform)</title>"
+        for combined in [mac + windows + unlabeledWindows, windows + unlabeledWindows + mac] {
+            let candidate = latest([itemHeading + combined, "<title>Version 9.99</title>" + windows])
+            try check(candidate?.versionLabel == "4.15 (20)" && candidate?.url == remote &&
+                      candidate?.signatureBase64 == "mac-fixture" && candidate?.expectedLength == 2048,
+                      "A mixed appcast failed to keep the Mac enclosure tuple together")
+        }
+        try check(latest(["<title>Version 9.99</title>" + windows, "<title>Version 9.99</title>" + unlabeledWindows,
+                          "<sparkle:os>windows</sparkle:os><title>Version 9.99</title>" + enclosure()]) == nil,
+                  "A Windows-only item was offered to macOS")
+
         let mock = MockHTTP(metadata: feed([same, modern, legacy, rollback]), package: Data())
         let checker = UpdateChecker(service: UpdateService(cacheDirectory: cache, fetcher: { try await mock.fetch($0, $1, $2, $3, $4) }))
         await checker.checkNow(userInitiated: false)
@@ -183,6 +200,6 @@ func L(_ value: String) -> String { value }
         try check(allowedAppcastURL("http://updates.fixture.invalid/a") == nil && allowedAppcastURL("https://user:secret@updates.fixture.invalid/a") == nil, "unsafe update URL allowed")
         try await checkBuildOrdering(source: source, remote: remote, cache: root.appendingPathComponent("same-marketing"))
         print("PASS updater MockHTTP: metadata-only checks, TTL, same-version single-flight/persistent verified cache, tamper rejection, key/signature/declared-size preflight, failure cooldown, cancellation without retry, unknown-length budgets, no app/UI or real requests")
-        print("PASS updater appcast: Sparkle child and enclosure build ordering, legacy display feeds, downgrade rejection, same marketing metadata without a download")
+        print("PASS updater appcast: Sparkle child and enclosure build ordering, legacy display feeds, downgrade rejection, macOS enclosure identity, same marketing metadata without a download")
     }
 }

@@ -99,13 +99,13 @@ func parseAppcast(_ data: Data) -> [AppcastItem] {
           data.range(of: Data("<!ENTITY".utf8)) == nil else { return [] }
     final class Delegate: NSObject, XMLParserDelegate {
         var items: [AppcastItem] = []
-        var current: AppcastItem?
-        var depth = 0, itemDepth = 0
+        var depth = 0
+        var itemDepth: Int?
         var elementVersions: [Field: String] = [:]
-        var enclosureBuild: String?, enclosureMarketing: String?
+        var enclosures: [[String: String]] = []
         var field: Field?
         var text = ""
-        enum Field: String { case title, build = "version", marketing = "shortVersionString" }
+        enum Field: String { case title, platform = "os", build = "version", marketing = "shortVersionString" }
 
         func fieldName(_ key: String) -> Field? {
             Field(rawValue: key.hasPrefix("sparkle:") ? String(key.dropFirst(8)) : key)
@@ -120,21 +120,53 @@ func parseAppcast(_ data: Data) -> [AppcastItem] {
             return heading.split(whereSeparator: { $0.isWhitespace || $0 == "(" || $0 == "（" }).first
                 .flatMap { versionValue(String($0)) }
         }
+        func platform(_ value: String?) -> String? {
+            guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !value.isEmpty else { return nil }
+            return value
+        }
+        func macEnclosure(itemPlatform: String?) -> [String: String]? {
+            let eligible = enclosures.filter { attrs in
+                let os = platform(attrs["sparkle:os"] ?? attrs["os"]) ?? itemPlatform
+                guard os == nil || os == "macos", let url = attrs["url"].flatMap(tolerantURL) else { return false }
+                let suffix = url.pathExtension.lowercased()
+                let filename = url.lastPathComponent.lowercased()
+                let windowsSuffixes = ["exe", "msi", "msix", "msixbundle", "appx", "appxbundle"]
+                return !windowsSuffixes.contains(suffix) && !(suffix == "zip" && filename.contains("windows") && filename.contains("x64"))
+            }
+            return eligible.first { platform($0["sparkle:os"] ?? $0["os"]) == "macos" } ?? eligible.first
+        }
+        func appendItem() {
+            let itemOS = platform(elementVersions[.platform])
+            let enclosure = macEnclosure(itemPlatform: itemOS)
+            let itemIsMac = itemOS == nil || itemOS == "macos"
+            guard enclosure != nil || (enclosures.isEmpty && itemIsMac) else { return }
+            let attrs = enclosure ?? [:]
+            let legacyBuild = versionValue(attrs["sparkle:version"] ?? attrs["version"])
+            let enclosureMarketing = versionValue(attrs["sparkle:shortVersionString"] ?? attrs["shortVersionString"])
+            let elementBuild = itemIsMac ? versionValue(elementVersions[.build]) : nil
+            let marketing = (itemIsMac ? versionValue(elementVersions[.marketing]) : nil) ?? enclosureMarketing
+            let title = itemIsMac ? titleVersion(elementVersions[.title]) : nil
+            var item = AppcastItem(marketingVersion: marketing ?? title, buildVersion: elementBuild ?? legacyBuild,
+                url: attrs["url"].flatMap(tolerantURL), signatureBase64: attrs["sparkle:edSignature"] ?? attrs["edSignature"],
+                expectedLength: attrs["length"].map { Int64($0) ?? -1 })
+            // Older display-only feeds used a dotted enclosure version in place of a short version.
+            if marketing == nil, elementBuild == nil, let legacyBuild, legacyBuild.contains("."),
+               title.map({ compareVersions($0, legacyBuild) == .orderedSame }) ?? true {
+                item.marketingVersion = legacyBuild
+                item.buildVersion = nil
+            }
+            if item.marketingVersion != nil || item.buildVersion != nil { items.append(item) }
+        }
         func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName qName: String?, attributes attrs: [String: String] = [:]) {
             depth += 1
             let key = qName ?? name
-            if current == nil, key == "item" {
+            if itemDepth == nil, key == "item" {
                 itemDepth = depth
-                current = AppcastItem(marketingVersion: nil, buildVersion: nil, url: nil, signatureBase64: nil)
-                elementVersions = [:]; enclosureBuild = nil; enclosureMarketing = nil
+                elementVersions = [:]; enclosures = []
             }
-            guard current != nil, depth == itemDepth + 1 else { return }
-            if key == "enclosure", let raw = attrs["url"] {
-                current?.url = tolerantURL(raw)
-                enclosureBuild = attrs["sparkle:version"] ?? attrs["version"]
-                enclosureMarketing = attrs["sparkle:shortVersionString"] ?? attrs["shortVersionString"]
-                current?.signatureBase64 = attrs["sparkle:edSignature"] ?? attrs["edSignature"]
-                current?.expectedLength = attrs["length"].map { Int64($0) ?? -1 }
+            guard let itemDepth, depth == itemDepth + 1 else { return }
+            if key == "enclosure" {
+                enclosures.append(attrs)
             } else {
                 field = fieldName(key); text = ""
             }
@@ -142,26 +174,15 @@ func parseAppcast(_ data: Data) -> [AppcastItem] {
         func parser(_ parser: XMLParser, foundCharacters string: String) { if field != nil { text += string } }
         func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName qName: String?) {
             defer { depth -= 1 }
+            guard let itemDepth else { return }
             let key = qName ?? name
             if depth == itemDepth + 1, let field, field == fieldName(key) {
                 elementVersions[field] = text
                 self.field = nil
             }
-            if depth == itemDepth, key == "item", var item = current {
-                let elementBuild = versionValue(elementVersions[.build])
-                let legacyBuild = versionValue(enclosureBuild)
-                let marketing = versionValue(elementVersions[.marketing]) ?? versionValue(enclosureMarketing)
-                let title = titleVersion(elementVersions[.title])
-                // Older display-only feeds used a dotted enclosure version in place of a short version.
-                if marketing == nil, elementBuild == nil, let legacyBuild, legacyBuild.contains("."),
-                   title.map({ compareVersions($0, legacyBuild) == .orderedSame }) ?? true {
-                    item.marketingVersion = legacyBuild
-                } else {
-                    item.marketingVersion = marketing ?? title
-                    item.buildVersion = elementBuild ?? legacyBuild
-                }
-                if item.marketingVersion != nil || item.buildVersion != nil { items.append(item) }
-                current = nil
+            if depth == itemDepth, key == "item" {
+                appendItem()
+                self.itemDepth = nil
             }
         }
     }
