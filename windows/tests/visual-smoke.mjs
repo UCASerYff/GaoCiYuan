@@ -352,6 +352,8 @@ try {
       assert.equal(linked.snapshot.source, 'Antigravity 独立 CLI 状态栏同步');
       assert.equal(linked.snapshot.quotas[0].usedPercent, 27.5);
       assert.equal(linked.antigravityReport.quotas.length, 4);
+      await retry(() => devtools.evaluate(`document.querySelector('#agent-inspector .account-reading h3')?.textContent === '实测额度'`),
+        'The open inspector did not refresh its measured Antigravity reading.', 28000);
       await capture('11-antigravity-statusline-dark-150', route, 760, 620, 1.5);
       assert.match(await devtools.evaluate('document.querySelector("#agent-inspector .account-reading").innerText'), /实测额度/);
     }
