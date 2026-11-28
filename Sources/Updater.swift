@@ -3,33 +3,63 @@ import AppKit
 import CryptoKit
 
 // 阶段 5A：自研轻量更新器（Sparkle 降级方案，理由见 CHANGELOG 与发布报告）。
-// 流程：GET appcast.xml（https 或本地 file://，NoRedirect，ephemeral）→ 语义版本比较
+// 流程：GET appcast.xml（https 或本地 file://，NoRedirect，ephemeral）→ 版本和构建号比较
 // → 显示元数据；用户明确选择下载后才获取 zip → 验 Ed25519 → 仅提示，绝不自动安装。
 // 托管地址是用户自己的配置项（默认空 = 不检查）；本仓库不指向任何远程。
 
 // MARK: - 数据模型与纯函数（Smoke 可测）
 
 struct AppcastItem: Equatable, Sendable {
-    var version: String          // sparkle:shortVersionString 或 enclosure 的 sparkle:version
+    var marketingVersion: String? // sparkle:shortVersionString
+    var buildVersion: String?      // sparkle:version / CFBundleVersion
     var url: URL?                // enclosure 下载地址
     var signatureBase64: String? // sparkle:edSignature
     var expectedLength: Int64? = nil
+    var versionLabel: String {
+        if let marketingVersion, let buildVersion { return "\(marketingVersion) (\(buildVersion))" }
+        return marketingVersion ?? buildVersion ?? ""
+    }
 }
 
-// 语义版本点分比较：逐段按整数比，缺段补 0；非数字段按 0 处理。
-// "2" 与 "2.0" 相等；"2.0.1" > "2.0"；前导 "v/V" 容忍。
-func isNewerVersion(_ candidate: String, than current: String) -> Bool {
-    func parts(_ v: String) -> [Int] {
-        var s = v.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let f = s.first, f == "v" || f == "V" { s.removeFirst() }
-        return s.split(separator: ".").map { Int($0) ?? 0 }
-    }
-    let a = parts(candidate), b = parts(current)
+private func versionParts(_ version: String) -> [Int]? {
+    guard !version.isEmpty, version.utf8.count <= 100 else { return nil }
+    let body = version.first == "v" || version.first == "V" ? version.dropFirst() : version[...]
+    let components = body.split(separator: ".", omittingEmptySubsequences: false)
+    guard components.allSatisfy({ !$0.isEmpty && $0.utf8.allSatisfy { (48...57).contains($0) } }) else { return nil }
+    let parts = components.compactMap { Int($0) }
+    return !parts.isEmpty && parts.count == components.count ? parts : nil
+}
+
+private func compareVersions(_ lhs: String, _ rhs: String) -> ComparisonResult {
+    let a = versionParts(lhs) ?? [], b = versionParts(rhs) ?? []
     for i in 0..<max(a.count, b.count) {
         let x = i < a.count ? a[i] : 0, y = i < b.count ? b[i] : 0
-        if x != y { return x > y }
+        if x != y { return x < y ? .orderedAscending : .orderedDescending }
     }
-    return false
+    return .orderedSame
+}
+
+func latestAppcastUpdate(_ items: [AppcastItem], marketingVersion: String, buildVersion: String) -> AppcastItem? {
+    let hasCurrentBuild = versionParts(buildVersion) != nil
+    let candidates = items.filter { item in
+        let marketingOrder = item.marketingVersion.map { compareVersions($0, marketingVersion) }
+        guard marketingOrder != .orderedAscending else { return false }
+        if let build = item.buildVersion, hasCurrentBuild {
+            return compareVersions(build, buildVersion) == .orderedDescending
+        }
+        return marketingOrder == .orderedDescending
+    }
+    func earlierMarketing(_ lhs: AppcastItem, _ rhs: AppcastItem) -> Bool {
+        compareVersions(lhs.marketingVersion ?? marketingVersion, rhs.marketingVersion ?? marketingVersion) == .orderedAscending
+    }
+    let displayOnly = candidates.filter { $0.buildVersion == nil }.max(by: earlierMarketing)
+    let versioned = candidates.filter { $0.buildVersion != nil }.max { lhs, rhs in
+        let order = compareVersions(lhs.buildVersion ?? "", rhs.buildVersion ?? "")
+        return order == .orderedSame ? earlierMarketing(lhs, rhs) : order == .orderedAscending
+    }
+    guard let versioned else { return displayOnly }
+    if let displayOnly, versioned.marketingVersion != nil, earlierMarketing(versioned, displayOnly) { return displayOnly }
+    return versioned
 }
 
 // 宽松 URL 解析：先直接解析，失败再百分号编码重试（本地 appcast 里常见未编码的中文路径）。
@@ -69,31 +99,91 @@ func parseAppcast(_ data: Data) -> [AppcastItem] {
           data.range(of: Data("<!ENTITY".utf8)) == nil else { return [] }
     final class Delegate: NSObject, XMLParserDelegate {
         var items: [AppcastItem] = []
-        var current: AppcastItem?
-        var inItem = false, inTitle = false
+        var depth = 0
+        var itemDepth: Int?
+        var elementVersions: [Field: String] = [:]
+        var enclosures: [[String: String]] = []
+        var field: Field?
         var text = ""
+        enum Field: String { case title, platform = "os", build = "version", marketing = "shortVersionString" }
+
+        func fieldName(_ key: String) -> Field? {
+            Field(rawValue: key.hasPrefix("sparkle:") ? String(key.dropFirst(8)) : key)
+        }
+        func versionValue(_ value: String?) -> String? {
+            guard let token = value?.trimmingCharacters(in: .whitespacesAndNewlines), versionParts(token) != nil else { return nil }
+            return token
+        }
+        func titleVersion(_ title: String?) -> String? {
+            guard let title = title?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+            let heading = title.lowercased().hasPrefix("version ") ? title.dropFirst(8) : title[...]
+            return heading.split(whereSeparator: { $0.isWhitespace || $0 == "(" || $0 == "（" }).first
+                .flatMap { versionValue(String($0)) }
+        }
+        func platform(_ value: String?) -> String? {
+            guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !value.isEmpty else { return nil }
+            return value
+        }
+        func macEnclosure(itemPlatform: String?) -> [String: String]? {
+            let eligible = enclosures.filter { attrs in
+                let os = platform(attrs["sparkle:os"] ?? attrs["os"]) ?? itemPlatform
+                guard os == nil || os == "macos", let url = attrs["url"].flatMap(tolerantURL) else { return false }
+                let suffix = url.pathExtension.lowercased()
+                let filename = url.lastPathComponent.lowercased()
+                let windowsSuffixes = ["exe", "msi", "msix", "msixbundle", "appx", "appxbundle"]
+                return !windowsSuffixes.contains(suffix) && !(suffix == "zip" && filename.contains("windows") && filename.contains("x64"))
+            }
+            return eligible.first { platform($0["sparkle:os"] ?? $0["os"]) == "macos" } ?? eligible.first
+        }
+        func appendItem() {
+            let itemOS = platform(elementVersions[.platform])
+            let enclosure = macEnclosure(itemPlatform: itemOS)
+            let itemIsMac = itemOS == nil || itemOS == "macos"
+            guard enclosure != nil || (enclosures.isEmpty && itemIsMac) else { return }
+            let attrs = enclosure ?? [:]
+            let legacyBuild = versionValue(attrs["sparkle:version"] ?? attrs["version"])
+            let enclosureMarketing = versionValue(attrs["sparkle:shortVersionString"] ?? attrs["shortVersionString"])
+            let elementBuild = itemIsMac ? versionValue(elementVersions[.build]) : nil
+            let marketing = (itemIsMac ? versionValue(elementVersions[.marketing]) : nil) ?? enclosureMarketing
+            let title = itemIsMac ? titleVersion(elementVersions[.title]) : nil
+            var item = AppcastItem(marketingVersion: marketing ?? title, buildVersion: elementBuild ?? legacyBuild,
+                url: attrs["url"].flatMap(tolerantURL), signatureBase64: attrs["sparkle:edSignature"] ?? attrs["edSignature"],
+                expectedLength: attrs["length"].map { Int64($0) ?? -1 })
+            // Older display-only feeds used a dotted enclosure version in place of a short version.
+            if marketing == nil, elementBuild == nil, let legacyBuild, legacyBuild.contains("."),
+               title.map({ compareVersions($0, legacyBuild) == .orderedSame }) ?? true {
+                item.marketingVersion = legacyBuild
+                item.buildVersion = nil
+            }
+            if item.marketingVersion != nil || item.buildVersion != nil { items.append(item) }
+        }
         func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName qName: String?, attributes attrs: [String: String] = [:]) {
+            depth += 1
             let key = qName ?? name
-            if key == "item" { inItem = true; current = AppcastItem(version: "", url: nil, signatureBase64: nil) }
-            if inItem && key == "title" { inTitle = true; text = "" }
-            if inItem && key == "enclosure", let raw = attrs["url"] {
-                current?.url = tolerantURL(raw)
-                if current?.version.isEmpty ?? true {
-                    current?.version = attrs["sparkle:shortVersionString"] ?? attrs["shortVersionString"] ?? attrs["sparkle:version"] ?? attrs["version"] ?? ""
-                }
-                current?.signatureBase64 = attrs["sparkle:edSignature"] ?? attrs["edSignature"]
-                if let length = attrs["length"] { current?.expectedLength = Int64(length) ?? -1 }
+            if itemDepth == nil, key == "item" {
+                itemDepth = depth
+                elementVersions = [:]; enclosures = []
+            }
+            guard let itemDepth, depth == itemDepth + 1 else { return }
+            if key == "enclosure" {
+                enclosures.append(attrs)
+            } else {
+                field = fieldName(key); text = ""
             }
         }
-        func parser(_ parser: XMLParser, foundCharacters string: String) { if inTitle { text += string } }
+        func parser(_ parser: XMLParser, foundCharacters string: String) { if field != nil { text += string } }
         func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName qName: String?) {
+            defer { depth -= 1 }
+            guard let itemDepth else { return }
             let key = qName ?? name
-            if key == "title" {
-                inTitle = false
-                let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                if current?.version.isEmpty ?? true { current?.version = t }
+            if depth == itemDepth + 1, let field, field == fieldName(key) {
+                elementVersions[field] = text
+                self.field = nil
             }
-            if key == "item", let item = current { inItem = false; items.append(item); current = nil }
+            if depth == itemDepth, key == "item" {
+                appendItem()
+                self.itemDepth = nil
+            }
         }
     }
     let delegate = Delegate()
@@ -101,7 +191,7 @@ func parseAppcast(_ data: Data) -> [AppcastItem] {
     parser.shouldResolveExternalEntities = false
     parser.delegate = delegate
     guard parser.parse() else { return [] }
-    return delegate.items.filter { !$0.version.isEmpty && $0.version.utf8.count <= 100 }
+    return delegate.items
 }
 
 // CHANGELOG 版本节校验：节头形如 "## 2.0.0"、"## [2.0.0]"、"## V1.8.0 …"，整行匹配版本号。
@@ -214,7 +304,10 @@ actor UpdateService {
               (try? Curve25519.Signing.PublicKey(rawRepresentation: keyBytes)) != nil,
               let signature = item.signatureBase64.flatMap({ Data(base64Encoded: $0) }), signature.count == 64 else { throw Failure.missingSignature }
         guard let remote = item.url, allowedAppcastURL(remote.absoluteString) != nil else { throw Failure.invalidURL }
-        let key = "package:" + Self.digest(item.version + "\n" + remote.absoluteString + "\n" + (item.signatureBase64 ?? "") + "\n" + publicKey + "\n" + (item.expectedLength.map(String.init) ?? "unknown"))
+        var identity = [item.marketingVersion ?? "", remote.absoluteString, item.signatureBase64 ?? "", publicKey,
+            item.expectedLength.map(String.init) ?? "unknown"]
+        if let buildVersion = item.buildVersion { identity.append(buildVersion) }
+        let key = "package:" + Self.digest(identity.joined(separator: "\n"))
         let destination = cacheDirectory.appendingPathComponent(Self.digest(key) + ".zip")
         if let data = try? Self.readFile(destination, limit: limits.packageBytes),
            verifyUpdateSignature(item.signatureBase64, data: data, publicKeyBase64: publicKey),
@@ -345,6 +438,9 @@ actor UpdateService {
     private var availableItem: AppcastItem?
     private var availableSource: String?
     private static let checkInterval: TimeInterval = 2 * 60 * 60
+    private static var installedVersionLabel: String {
+        AppInfo.build.isEmpty ? AppInfo.version : "\(AppInfo.version) (\(AppInfo.build))"
+    }
 
     init(service: UpdateService = UpdateService()) { self.service = service }
     static var appcastURLString: String {
@@ -399,13 +495,12 @@ actor UpdateService {
             let items = try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
             try Task.checkCancellation()
             guard source == Self.appcastURLString, !task.isCancelled else { return }
-            guard let latest = items.max(by: { isNewerVersion($1.version, than: $0.version) }) else { throw UpdateService.Failure.noItems }
-            guard isNewerVersion(latest.version, than: AppInfo.version) else {
+            guard let latest = latestAppcastUpdate(items, marketingVersion: AppInfo.version, buildVersion: AppInfo.build) else {
                 availableItem = nil; availableVersion = nil; availableSource = nil
-                if userInitiated { alert(L("已是最新版本"), L("当前版本") + " \(AppInfo.version)") }
+                if userInitiated { alert(L("已是最新版本"), L("当前版本") + " \(Self.installedVersionLabel)") }
                 return
             }
-            availableItem = latest; availableVersion = latest.version; availableSource = source
+            availableItem = latest; availableVersion = latest.versionLabel; availableSource = source
             // A scheduled check only records availability. It never downloads or opens a modal.
             if userInitiated && confirmDownload(latest) { await downloadAvailableUpdate() }
         } catch is CancellationError { }
@@ -448,15 +543,15 @@ actor UpdateService {
         }
     }
     private func confirmDownload(_ item: AppcastItem) -> Bool {
-        let a = NSAlert(); a.messageText = L("发现新版本") + " \(item.version)"
+        let a = NSAlert(); a.messageText = L("发现新版本") + " \(item.versionLabel)"
         a.informativeText = L("检查仅获取版本信息。选择下载后才获取更新包（最多 128 MB），验证签名后由你手动安装。")
         a.addButton(withTitle: L("下载并验证")); a.addButton(withTitle: L("稍后"))
         NSApp.activate(ignoringOtherApps: true)
         return a.runModal() == .alertFirstButtonReturn
     }
     private func prompt(item: AppcastItem, zipURL: URL) {
-        let a = NSAlert(); a.messageText = L("发现新版本") + " \(item.version)"
-        a.informativeText = L("当前版本") + " \(AppInfo.version)\n" + L("更新包已下载并通过签名校验；请在 Finder 中解压后手动替换应用。")
+        let a = NSAlert(); a.messageText = L("发现新版本") + " \(item.versionLabel)"
+        a.informativeText = L("当前版本") + " \(Self.installedVersionLabel)\n" + L("更新包已下载并通过签名校验；请在 Finder 中解压后手动替换应用。")
         a.addButton(withTitle: L("在 Finder 中显示")); a.addButton(withTitle: L("稍后"))
         NSApp.activate(ignoringOtherApps: true)
         if a.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.activateFileViewerSelecting([zipURL]) }
