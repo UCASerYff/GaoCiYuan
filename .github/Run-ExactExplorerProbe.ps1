@@ -130,6 +130,48 @@ function Open-NotificationOverflow([IntPtr]$ShellWindow) {
     }
 }
 
+function Get-ShellTrayElement($Registration) {
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
+    Add-Type -AssemblyName WindowsBase
+    $bounds = $Registration.Bounds
+    $location = [Windows.Point]::new(($bounds.Left + $bounds.Right) / 2, ($bounds.Top + $bounds.Bottom) / 2)
+    $item = [Windows.Automation.AutomationElement]::FromPoint($location)
+    $walker = [Windows.Automation.TreeWalker]::ControlViewWalker
+    for ($depth = 0; $item -and $depth -lt 5; $depth++) {
+        if ($item.Current.Name -match '^搞词元(?:$|\s)' -and -not $item.Current.IsOffscreen) { return $item }
+        $item = $walker.GetParent($item)
+    }
+}
+
+function Invoke-ActualTrayExit($Registration, [IntPtr]$ShellWindow) {
+    $icon = Get-ShellTrayElement $Registration
+    if (-not $icon) {
+        $null = Open-NotificationOverflow $ShellWindow
+        $icon = Wait-Probe {
+            $known = Find-TrayRegistration
+            if ($known) { Get-ShellTrayElement $known }
+        } 'The actual branded notification-area item was not accessible at its Explorer bounds.' 5
+    }
+    $target = $icon.Current.BoundingRectangle
+    $result.actualTrayItem = @{ name = $icon.Current.Name; width = $target.Width; height = $target.Height }
+    Assert-Probe ($target.Width -gt 0 -and $target.Width -lt 128 -and $target.Height -gt 0 -and $target.Height -lt 128) 'The accessible notification item did not have an icon-sized rectangle.'
+    $result.actualTrayCropSaved = Write-NotificationCrop @{ left = [int]$target.Left; top = [int]$target.Top; width = [int]$target.Width; height = [int]$target.Height } 'tray-verified-item'
+    Assert-Probe ($n::PointerClick([int]($target.Left + $target.Width/2), [int]($target.Top + $target.Height/2), $true)) 'The hosted desktop rejected the test right-click.'
+    $popup = Wait-Probe {
+        $n::Windows($app.Id) | Where-Object { $_.Class -eq '#32768' -and $_.Visible } | Select-Object -First 1
+    } 'The right-click did not display the exact application menu.' 5
+    $root = [Windows.Automation.AutomationElement]::FromHandle($popup.Handle)
+    $exitName = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, '退出搞词元')
+    $item = Wait-Probe { $root.FindFirst([Windows.Automation.TreeScope]::Descendants, $exitName) } 'The active menu did not expose its own Exit item.' 5
+    Assert-Probe ($item.Current.ProcessId -eq $app.Id -and $item.Current.IsEnabled) 'The Exit item does not belong to the guarded application process.'
+    $result.exitMenuItem = $item.Current.Name
+    $rectangle = $item.Current.BoundingRectangle
+    Assert-Probe ($rectangle.Width -gt 0 -and $rectangle.Height -gt 0) 'The Exit item was not visible.'
+    Assert-Probe ($n::PointerClick([int]($rectangle.Left + $rectangle.Width/2), [int]($rectangle.Top + $rectangle.Height/2), $false)) 'The hosted desktop rejected the Exit click.'
+    return $app.WaitForExit(10000)
+}
+
 function Add-Bounds($Bounds) {
     [ordered]@{
         left = $Bounds.Left; top = $Bounds.Top
@@ -261,14 +303,12 @@ try {
     $result.restoredTrayBounds = Add-Bounds $restored.Bounds
     $result.restoredTrayCropSaved = Write-NotificationCrop $result.restoredTrayBounds 'tray-after-restart'
 
-    $t::OpenTrayMenu($tray.Window)
     try {
-        $popup = Wait-Probe {
-            $n::Windows($app.Id) | Where-Object { $_.Class -eq '#32768' -and $_.Visible } | Select-Object -First 1
-        } 'The exact app tray menu was not observable.' 3
-        $t::SelectLastMenuItem($popup.Handle)
-        $result.exitedByMenu = $app.WaitForExit(5000)
-    } catch { $result.exitedByMenu = $false }
+        $result.exitedByMenu = Invoke-ActualTrayExit $restored $newShell
+    } catch {
+        $result.menuFailure = $_.Exception.Message
+        $result.exitedByMenu = $false
+    }
     if (-not $result.exitedByMenu) {
         Quit-OwnedEndpoint
         Assert-Probe ($app.WaitForExit(10000)) 'The app did not close from its safe shutdown endpoint.'

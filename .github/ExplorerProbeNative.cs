@@ -28,6 +28,15 @@ namespace GaoCiYuan.Smoke
             public ushort Planes, Bits;
             public IntPtr Pixels;
         }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MouseInput
+        {
+            public int X, Y;
+            public uint Data, Flags, Time;
+            public UIntPtr Extra;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Input { public uint Type; public MouseInput Mouse; }
 
         public static IntPtr Taskbar() { return FindWindow("Shell_TrayWnd", null); }
         public static int Owner(IntPtr window) { uint pid; GetWindowThreadProcessId(window, out pid); return (int)pid; }
@@ -59,6 +68,13 @@ namespace GaoCiYuan.Smoke
         }
 
         public static uint Dpi(IntPtr window) { return GetDpiForWindow(window); }
+        public static bool PointerClick(int x, int y, bool right)
+        {
+            if (!SetCursorPos(x, y)) return false;
+            var press = new Input { Mouse = new MouseInput { Flags = right ? 0x0008u : 0x0002u } };
+            var release = new Input { Mouse = new MouseInput { Flags = right ? 0x0010u : 0x0004u } };
+            return SendInput(2, new[] { press, release }, Marshal.SizeOf<Input>()) == 2;
+        }
         public static int[] NativeIcon(IntPtr window, int kind)
         {
             IntPtr icon;
@@ -90,6 +106,8 @@ namespace GaoCiYuan.Smoke
         [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
         [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
         [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr window);
+        [DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
+        [DllImport("user32.dll")] private static extern uint SendInput(uint count, Input[] inputs, int size);
         [DllImport("user32.dll")] private static extern int GetSystemMetricsForDpi(int metric, uint dpi);
         [DllImport("shell32.dll")] private static extern int Shell_NotifyIconGetRect(ref NotifyId key, out Rectangle rect);
         [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW")] private static extern IntPtr SendMessageTimeout(IntPtr window, uint message, IntPtr key, IntPtr value, uint flags, uint timeout, out IntPtr result);
