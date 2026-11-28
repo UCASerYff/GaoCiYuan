@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -29,7 +30,7 @@ struct AccountEditor: View {
                 }
                 TextField(L("账户名称"),text:$account.name)
                 TextField(L("套餐 / 组织备注"),text:$account.plan,prompt:Text(account.kind == .agent ? L("如 Plus、Pro、Max、Coding Plan") : L("如组织名称或项目名")))
-                Picker(L("连接方式"),selection:$account.connection) { ForEach(Connection.available(account.provider,account.kind),id:\.self) { Text(L($0 == .kimiDesktop ? "Kimi 桌面订阅页（推荐 · 免 Key）" : $0 == .geminiApp ? "Gemini App 中的 Antigravity（推荐）" : ($0 == .agentLocal && account.provider == .gemini ? "Antigravity 独立 App" : $0.rawValue))).tag($0) } }
+                Picker(L("连接方式"),selection:$account.connection) { ForEach(Connection.available(account.provider,account.kind),id:\.self) { Text(L($0 == .kimiDesktop ? "Kimi 桌面订阅页（推荐 · 免 Key）" : ($0 == .agentLocal && account.provider == .gemini ? "Antigravity 独立版" : $0.rawValue))).tag($0) } }
                 integrationSettings
                 if account.connection.needsKey {
                     if [.aliyun,.volc,.xai,.volcArk].contains(account.connection) {
@@ -62,17 +63,10 @@ struct AccountEditor: View {
                     }
                     Text(L("DeepSeek 余额接口不含百分比。「充值以来峰值」以本机观测到的余额峰值为分母，余额上升视为充值重新计满；「我的预算」以上方本月预算数字为分母。")).font(.caption).foregroundStyle(.secondary)
                 }
-                if account.connection == .geminiApp {
-                    Text(L("用「立即同步」读取 Gemini 内置的 Antigravity /usage。也可从已登录的 Antigravity 导入文本报告。")).font(.callout).foregroundStyle(.secondary)
-                    if isExisting {
-                        Button(L("导入 Antigravity 用量报告…"), action: importAntigravityReport)
-                            .disabled(store.refreshing.contains(account.id))
-                    }
-                }
-                if account.connection == .agentLocal {
-                    if account.provider == .gemini {
-                        Text(L("自动读取独立版 Antigravity（或 Antigravity IDE）本机会话与配额池。软件运行中自动保持同步。")).font(.callout).foregroundStyle(.secondary)
-                    } else if account.provider == .grok {
+                if account.usesAntigravityReport {
+                    antigravityImportSettings
+                } else if account.connection == .agentLocal {
+                    if account.provider == .grok {
                         Text(L("只读读取 Grok Bot 左下角头像栏目的套餐和已用百分比，悬浮窗显示剩余量。手动点击立即读取；非前台自动同步并做 5 分钟导航节流，前台使用中不打扰。没有可用读数时不显示百分比，也不读取 Grok 账号额度。")).font(.callout).foregroundStyle(.secondary)
                     } else {
                         Text(L("自动检测本机 \(account.provider.agentSoftware) 软件与 CLI 状态，自动保持同步，无需手动录入。")).font(.callout).foregroundStyle(.secondary)
@@ -141,7 +135,9 @@ struct AccountEditor: View {
                 Toggle(L("启用此账户"),isOn:$account.enabled)
             }.formStyle(.grouped)
             HStack(spacing:12) {
-                Button(L(testing ? "测试中…" : "测试连接")) { test() }.disabled(testing)
+                if !account.usesAntigravityReport {
+                    Button(L(testing ? "测试中…" : "测试连接")) { test() }.disabled(testing)
+                }
                 if let testResult { Text(L(testResult)).font(.caption).foregroundStyle(testResult.hasPrefix("连接失败") ? .red : Theme.teal).fixedSize(horizontal:false,vertical:true) }
             }
             Text(L(account.provider.note)).font(.caption).foregroundStyle(.secondary)
@@ -201,31 +197,80 @@ struct AccountEditor: View {
     }
     private var scopeBinding: Binding<String> { Binding(get: { account.scopeID ?? "" }, set: { account.scopeID = $0 }) }
     private func regionBinding(_ fallback: String) -> Binding<String> { Binding(get: { account.region ?? fallback }, set: { account.region = $0 }) }
+
+    private var savedAntigravityAccount: Account? {
+        store.library.accounts.first { $0.id == account.id && $0.usesAntigravityReport && $0.connection == account.connection }
+    }
+
+    @ViewBuilder private var antigravityImportSettings: some View {
+        let embedded = account.connection == .geminiApp
+        Text(L(embedded
+            ? "从 Gemini 内置 Antigravity 的官方额度界面复制报告并保存为文本。独立 CLI 的 /usage 报告请导入独立版账户。"
+            : "在官方 Antigravity CLI 的交互窗口运行 /usage，将额度面板内容保存为文本后导入。"))
+            .font(.callout).foregroundStyle(.secondary)
+        if let guide = URL(string: embedded ? AntigravityUsageReport.embeddedGuide : AntigravityUsageReport.standaloneGuide) {
+            Link(L("查看 Google 官方说明 ↗"), destination: guide)
+        }
+        if savedAntigravityAccount != nil {
+            Button(L("导入 Antigravity 额度报告…"), action: importAntigravityReport)
+                .disabled(store.refreshing.contains(account.id))
+        } else {
+            Text(L("保存账户及连接方式后可导入报告。")).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
     private func importAntigravityReport() {
+        guard let saved = savedAntigravityAccount, !store.refreshing.contains(saved.id) else { return }
+        error = nil
+        testResult = nil
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.plainText]
-        guard panel.runModal() == .OK, let url = panel.url,
-              let saved = store.library.accounts.first(where: { $0.id == account.id && $0.connection == .geminiApp }),
-              !store.refreshing.contains(saved.id) else { return }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let fields = try url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey])
-            guard fields.isRegularFile == true, let date = fields.contentModificationDate,
-                  let size = fields.fileSize, size <= AntigravityUsageReport.maxBytes else {
-                throw MonitorError.message("请选择包含 Antigravity /usage 输出的文本报告（最大 64 KB）。")
+            let source: AntigravityUsageReport.Source = saved.connection == .geminiApp ? .embedded : .standalone
+            let snapshot = try AntigravityUsageReport.parse(readAntigravityReport(url), source: source)
+            let confirm = NSAlert()
+            confirm.messageText = L("确认报告归属")
+            let destination = L("目标账户") + " 「\(saved.name)」"
+            let reportSource = L("报告来源") + " 「\(L(source.title))」"
+            let explanation = L("请核对报告来自该连接当前登录的正确 Google 账号。账号、观测时间和重置时刻未经核实，报告仅供历史参考。")
+            confirm.informativeText = [destination, reportSource, "", explanation].joined(separator: "\n")
+            confirm.addButton(withTitle: L("确认并导入"))
+            confirm.addButton(withTitle: L("取消"))
+            confirm.buttons[0].keyEquivalent = ""
+            confirm.buttons[1].keyEquivalent = "\u{1b}"
+            guard confirm.runModal() == .alertFirstButtonReturn else { return }
+            guard let current = savedAntigravityAccount, current.id == saved.id,
+                  current.connection == saved.connection, current.name == saved.name else {
+                throw MonitorError.message("账户已变更，请重新选择报告并确认归属。")
             }
-            let file = try FileHandle(forReadingFrom: url)
-            defer { try? file.close() }
-            let data = try file.read(upToCount: AntigravityUsageReport.maxBytes + 1) ?? Data()
-            let snapshot = try AntigravityUsageReport.parse(data, source: AntigravityUsageReport.importedSource, observedAt: date)
-            guard saved.snapshot.map({ snapshot.observedAt > $0.observedAt }) ?? true else {
-                throw MonitorError.message("报告早于或等于账户上次成功读数。请重新运行 /usage 并保存报告。")
-            }
-            try store.updateSnapshot(snapshot, for: saved.id)
-            testResult = "已导入 Antigravity 用量报告。"
+            try store.importAntigravityReport(snapshot, for: saved.id)
+            testResult = "已导入历史参考报告。"
         } catch let error as MonitorError {
-            testResult = error.localizedDescription
+            self.error = error.localizedDescription
         } catch {
-            testResult = "无法读取 Antigravity 用量报告。上次读数已保留。"
+            self.error = "未能导入 Antigravity 报告。已保存数据保持不变。"
+        }
+    }
+
+    private func readAntigravityReport(_ url: URL) throws -> Data {
+        let descriptor = url.withUnsafeFileSystemRepresentation { path -> Int32 in
+            guard let path else { return -1 }
+            return Darwin.open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
+        }
+        let invalidFile = MonitorError.message("请选择 Antigravity UTF-8 文本报告（普通文件，最大 64 KB）。")
+        guard descriptor >= 0 else { throw invalidFile }
+        let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? file.close() }
+        var fields = stat()
+        guard fstat(descriptor, &fields) == 0, (fields.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG),
+              fields.st_size > 0, fields.st_size <= off_t(AntigravityUsageReport.maxBytes) else { throw invalidFile }
+        do {
+            let data = try file.read(upToCount: AntigravityUsageReport.maxBytes + 1) ?? Data()
+            guard data.count == Int(fields.st_size) else { throw invalidFile }
+            return data
+        } catch {
+            throw invalidFile
         }
     }
     private func validateDestinationChange() throws {
@@ -319,7 +364,7 @@ struct AccountEditor: View {
                 account.snapshot = nil; account.error = nil; account.lastAttempt = nil
             }
             try store.upsert(account,key:key); dismiss()
-            if account.enabled { let id = account.id; Task { await store.refresh(id, userInitiated: true) } }
+            if account.enabled && !account.usesAntigravityReport { let id = account.id; Task { await store.refresh(id, userInitiated: true) } }
         } catch { self.error = error.localizedDescription }
     }
 }

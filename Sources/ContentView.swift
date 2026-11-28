@@ -261,12 +261,12 @@ struct ContentView: View {
                 } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 22)
             }
             HStack {
-                Tag(text: a.enabled ? a.connection.displayName : "已暂停", color: a.enabled ? Theme.accent : .secondary)
+                Tag(text: accountConnectionLabel(a), color: a.enabled ? Theme.accent : .secondary)
                 if a.autoDiscovered { Tag(text: "自动发现", color: Theme.teal) }
-                if a.stale(), a.snapshot != nil { Tag(text: "历史数据", color: .orange) }
+                if a.stale(), let snapshot = a.snapshot, !snapshot.isHistoricalAntigravityReading { Tag(text: "历史数据", color: .orange) }
                 Spacer()
             }
-            if let s = a.snapshot, !a.errorIsCredential {
+            if let s = a.snapshot, !s.isHistoricalAntigravityReading, !a.errorIsCredential {
                 let rows = a.displayQuotas
                 if !rows.isEmpty {
                     ForEach(rows) { QuotaRow(quota: $0, stale: a.stale(), threshold: store.library.warningThreshold, showExpiredValue: a.keepsSnapshotOnError) }
@@ -315,40 +315,87 @@ struct ContentView: View {
                     if note.count > 40 { Button(L(expanded ? "收起 ▾" : "详情 ▸")) { if expanded { expandedNotes.remove(a.id) } else { expandedNotes.insert(a.id) } }.buttonStyle(.plain).font(.caption).foregroundStyle(Theme.accent) }
                 }
                 Text(L(a.stale() ? "数据截至 \(displayDate(s.observedAt)) · \(s.source)" : "\(s.source) · \(displayDate(s.observedAt))")).font(.caption2).foregroundStyle(.secondary)
-            } else if a.errorIsCredential {
+            } else if a.errorIsCredential && !a.usesAntigravityReport {
                 Label(L("凭证已失效，重新连接前不展示旧读数。"), systemImage: "key.slash").font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-            } else {
+            } else if a.historicalAntigravityReport == nil && a.unassignedLegacyAntigravityReport == nil {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(L("—")).font(.system(size: 26, weight: .light)).foregroundStyle(.secondary)
                     Text(L("尚未获取额度")).font(.callout)
-                    Text(L("连接后读取真实数据，不预填额度。")).font(.caption).foregroundStyle(.secondary)
+                    Text(L(a.usesAntigravityReport ? AntigravityUsageReport.manualHint : "连接后读取真实数据，不预填额度。")).font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
             }
+            antigravityReferences(a)
             if (a.snapshot?.note ?? "").contains("需在「系统设置") || (a.error ?? "").contains("需在「系统设置") || (a.statusNote ?? "").contains("需在「系统设置") {
                 Button(L("打开系统设置授权 ↗")) { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!) }.buttonStyle(.borderedProminent).controlSize(.small).font(.caption)
             }
             if let status = GrokBotBridge.visibleStatus(a) { Label(L(status), systemImage: "info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
-            if let error = a.error { Label(L(error), systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
+            if let error = a.error, !a.usesAntigravityReport { Label(L(error), systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 QuotaForecastAccountEntry(forecast: QuotaForecast.evaluate(account: a, now: context.date)) {
                     forecastSelection = QuotaForecastSelection(accountID: a.id)
                 }
             }
             HStack {
-                Button { Task { await store.refresh(a.id, userInitiated: true) } } label: {
-                    Label(L(GrokBotBridge.isUsageRoute(a) ? GrokBotUsageReport.manualButtonTitle(refreshing: store.refreshing.contains(a.id)) : (store.refreshing.contains(a.id) ? "同步中…" : "立即同步")), systemImage: "arrow.clockwise")
-                }.disabled(store.refreshing.contains(a.id) || !a.enabled).controlSize(.small)
+                if a.usesAntigravityReport {
+                    Button { edit = a } label: { Label(L("导入额度报告…"), systemImage: "doc.badge.plus") }.controlSize(.small)
+                } else {
+                    Button { Task { await store.refresh(a.id, userInitiated: true) } } label: {
+                        Label(L(GrokBotBridge.isUsageRoute(a) ? GrokBotUsageReport.manualButtonTitle(refreshing: store.refreshing.contains(a.id)) : (store.refreshing.contains(a.id) ? "同步中…" : "立即同步")), systemImage: "arrow.clockwise")
+                    }.disabled(store.refreshing.contains(a.id) || !a.enabled).controlSize(.small)
+                }
                 Spacer()
                 if a.provider != .custom { Button(L("控制台 ↗")) { if let url = URL(string: a.dashboard) { NSWorkspace.shared.open(url) } }.buttonStyle(.plain).foregroundStyle(.secondary).font(.caption) }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading).panel()
         .saturation(a.stale() && a.snapshot != nil ? 0.45 : 1)
-        .help(a.stale() && a.snapshot != nil ? L("历史数据：最后成功观测于 \(displayDate(a.snapshot?.observedAt ?? Date(), time: true))") : "")
+        .help(staleSnapshotHelp(a))
         .id(a.id)
+    }
+
+    private func staleSnapshotHelp(_ account: Account) -> String {
+        guard account.stale(), let snapshot = account.snapshot, !snapshot.isHistoricalAntigravityReading else { return "" }
+        return L("历史数据：最后成功观测于 \(displayDate(snapshot.observedAt, time: true))")
+    }
+
+    private func accountConnectionLabel(_ account: Account) -> String {
+        guard account.enabled else { return "已暂停" }
+        if account.usesAntigravityReport && account.connection == .agentLocal { return "Antigravity 独立版" }
+        return account.connection.displayName
+    }
+
+    @ViewBuilder private func antigravityReferences(_ account: Account) -> some View {
+        if let report = account.historicalAntigravityReport { antigravityHistory(report) }
+        if let archived = account.unassignedLegacyAntigravityReport { antigravityHistory(archived, archived: true) }
+    }
+
+    private func antigravityHistory(_ report: UsageSnapshot, archived: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AntigravityReportCaption(report: report, archived: archived)
+            ForEach(report.historicalChartQuotas) { quota in
+                QuotaRow(quota: quota, stale: true, threshold: store.library.warningThreshold, showExpiredValue: true)
+            }
+        }
     }
 
     var providers: some View {
         ProviderCatalogView { provider, _ in edit = newAccount(provider) }
+    }
+}
+
+struct AntigravityReportCaption: View {
+    let report: UsageSnapshot
+    var archived = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(L(archived ? "旧版未归属报告" : "历史参考")).fontWeight(.semibold)
+            Text(L(report.source))
+            if !archived && report.isUnverifiedAntigravityReport == true {
+                Text(L("导入时间") + " " + displayDate(report.observedAt))
+            }
+            Text(L("账号和观测时间未经核实"))
+        }
+        .font(.caption2).foregroundStyle(.secondary)
     }
 }

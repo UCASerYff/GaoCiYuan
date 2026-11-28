@@ -25,7 +25,8 @@ done
 compiler=(xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0)
 models=(Sources/{Models,AgentTables,ProviderIntegrations,GrokBotUsageReport,QuotaForecast}.swift)
 
-"${compiler[@]}" "${models[@]}" Sources/Log.swift Tests/QuotaForecastRegression.swift -o "$fixture/quota-forecast"
+"${compiler[@]}" "${models[@]}" Sources/{Alerts,Log}.swift Tests/QuotaForecastRegression.swift \
+    -framework UserNotifications -o "$fixture/quota-forecast"
 "$fixture/quota-forecast"
 
 "${compiler[@]}" "${models[@]}" Sources/{AntigravityUsageReport,Log}.swift Tests/AntigravityUsageReportRegression.swift -o "$fixture/antigravity-report"

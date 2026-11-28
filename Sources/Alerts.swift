@@ -115,6 +115,7 @@ struct AlertMemory: Codable, Equatable {
     @discardableResult
     mutating func evaluate(account id: UUID, currency: String, outcome: AlertOutcome,
                            settings: AlertSettings, now: Date) -> [AlertEvent] {
+        if case .reading(let snapshot) = outcome, snapshot.isHistoricalAntigravityReading { return [] }
         var record = accounts[id.uuidString] ?? Record()
         var produced: [AlertEvent] = []
 
@@ -150,7 +151,8 @@ struct AlertMemory: Codable, Equatable {
         }
 
         // 额度窗：只升不降记最高档；翻篇证据才清零；重置已过的窗不评（属于已不存在的窗口）。
-        for quota in snapshot.quotas {
+        let liveQuotas = snapshot.isFreshObservation(at: now) ? snapshot.quotas : []
+        for quota in liveQuotas {
             guard quota.resetsAt.map({ $0 > now }) ?? true else { continue }
             var memory = record.windows[quota.id] ?? Window()
             if let seen = record.windows[quota.id],
@@ -229,8 +231,9 @@ enum AlertRules {
     /// 「需要留意」横幅项：阈值 + 预算 + 余额不足 + 到期，与通知状态机同一评估入口。
     /// （语义即 V1.8 Account.warnings，原样迁入。）
     static func attention(_ account: Account, threshold: Double, at date: Date = Date()) -> [String] {
-        guard account.enabled, let s = account.snapshot else { return [] }
-        var result = s.quotas.filter { !$0.expired(at: date) && $0.remaining <= threshold }.map { "\($0.title)剩余 \(Int($0.remaining))%" }
+        guard account.enabled, !account.errorIsCredential, let s = account.snapshot, !s.isHistoricalAntigravityReading else { return [] }
+        let liveQuotas = s.isFreshObservation(at: date) ? s.quotas : []
+        var result = liveQuotas.filter { !$0.expired(at: date) && $0.remaining <= threshold }.map { "\($0.title)剩余 \(Int($0.remaining))%" }
         if let budget = account.budget, budget > 0, let start = s.periodStart, let end = s.periodEnd,
            Calendar.current.isDate(start, equalTo: date, toGranularity: .month), Calendar.current.isDate(end, equalTo: date, toGranularity: .month),
            let cost = s.costs.first(where: { $0.currency == account.currency }), cost.value >= budget * (1 - threshold / 100) {

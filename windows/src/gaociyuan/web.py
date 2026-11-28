@@ -420,6 +420,8 @@ def dispatch(store: TokenStore, path: str, payload: dict):
         return {'ids': store.refresh_all()}
     if path == '/api/accounts/test':
         return store.test_account(payload)
+    if path == "/api/antigravity/import":
+        return store.import_antigravity_report(payload)
     if path == "/api/grokbot/read":
         store.read_grokbot(payload["id"])
         return {"read": True, "grokReads": store.grok_reads}

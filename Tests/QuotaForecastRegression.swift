@@ -1,10 +1,9 @@
 import Foundation
 
-// The fixture compiles the production models with Foundation only.
+// The fixture compiles the production model and alert policies without launching the app.
 enum TokenBundle { static let bundle = Bundle.main }
-enum AlertRules {
-    static func attention(_ account: Account, threshold: Double, at: Date) -> [String] { [] }
-}
+func L(_ text: String) -> String { text }
+func displayDate(_ date: Date, time: Bool = true) -> String { "" }
 
 @main struct QuotaForecastRegression {
     private static let clock = Date(timeIntervalSince1970: 1_800_000_000)
@@ -108,6 +107,46 @@ enum AlertRules {
         let estimatedGrant = makeAccount(zip(times, [50.0, 60, 70, 80, 90]).map { sample($0.0, $0.1, id: "commandcode-monthly") })
         try require(QuotaForecast.evaluate(account: estimatedGrant, now: clock).reason == .nonQuota,
                     "A reset timestamp cannot turn a derived monetary grant into a measured quota")
+        let positional = makeAccount(zip(times, [50.0, 60, 70, 80, 90]).map {
+            sample($0.0, $0.1, duration: nil, id: "gemini-cascade-0")
+        })
+        try require(positional.quotaForecastHistory == nil && QuotaForecast.evaluate(account: positional, now: clock).windows.isEmpty,
+                    "A positional Antigravity fallback identity cannot supply forecast evidence")
+
+        let retiredSources: [(String, Connection?)] = [
+            ("Gemini App 中的 Antigravity", .geminiApp), ("Gemini App 中的 Antigravity · /usage", .geminiApp),
+            ("Antigravity /usage 手动报告", nil), ("Antigravity 本机服务", .agentLocal),
+        ]
+        for (source, sourceRoute) in retiredSources {
+            var historical = sample(-2, 100)
+            historical.source = source
+            for route in [Connection.geminiApp, .agentLocal] {
+                var account = Account(provider: .gemini, kind: .agent, name: "Historical Gemini fixture", connection: route)
+                record(historical, into: &account)
+                let belongsToRoute = sourceRoute == route
+                try require(account.historicalAntigravityReport == (belongsToRoute ? historical : nil)
+                            && account.unassignedLegacyAntigravityReport == (belongsToRoute ? nil : historical)
+                            && account.snapshot == historical, "A legacy report was relabeled, lost or shown under another route")
+                try require(historical.isHistoricalAntigravityReading && !historical.isFreshObservation(at: clock)
+                            && account.stale(at: clock) && account.displayQuotas.isEmpty,
+                            "A retired source label was treated as a current observation")
+                try require(account.quotaForecastHistory == nil && QuotaForecast.evaluate(account: account, now: clock).windows.isEmpty,
+                            "A historical report supplied an exhaustion result or forecast evidence")
+            }
+        }
+        var mixed = Account(provider: .gemini, kind: .agent, name: "Mixed source fixture", connection: .geminiApp)
+        var misfiled = sample(-2, 90)
+        misfiled.source = UsageSnapshot.standaloneAntigravityManualSource
+        mixed.antigravityReports = [Connection.geminiApp.rawValue: misfiled]
+        try require(mixed.historicalAntigravityReport == nil && mixed.unassignedLegacyAntigravityReport == misfiled,
+                    "A previously misfiled report must stay archived")
+        var flaggedReport = sample(-2, 100)
+        flaggedReport.isUnverifiedAntigravityReport = true
+        let reportData = try JSONCoding.encoder.encode(flaggedReport)
+        let reopenedReport = try JSONCoding.decoder.decode(UsageSnapshot.self, from: reportData)
+        try require(reopenedReport.isUnverifiedAntigravityReport == true && !reopenedReport.isFreshObservation(at: clock),
+                    "Historical marker must survive serialization")
+        try checkHistoricalNotifications(reopenedReport)
 
         var legacy = highRisk
         legacy.quotaForecastHistory = nil
@@ -130,5 +169,32 @@ enum AlertRules {
         for minute in -60 ... -1 { record(sample(Double(minute), Double(minute + 60)), into: &bounded) }
         try require(bounded.quotaForecastHistory?.observations.count == QuotaForecast.maxObservations, "Evidence must remain bounded")
         print("Quota forecast regression passed with isolated synthetic snapshots.")
+    }
+
+    private static func checkHistoricalNotifications(_ historical: UsageSnapshot) throws {
+        var account = Account(provider: .gemini, kind: .agent, name: "Alert fixture", connection: .geminiApp)
+        let settings = AlertSettings(threshold: 80)
+        var memory = AlertMemory()
+        _ = memory.evaluate(account: account.id, currency: "USD", outcome: .failure("Fixture failure"),
+                            settings: settings, now: clock)
+        let before = memory
+        account.snapshot = historical
+        let historicalEvents = memory.evaluate(account: account.id, currency: "USD", outcome: .reading(historical),
+                                               settings: settings, now: clock)
+        try require(historicalEvents.isEmpty && memory == before && account.warnings(threshold: 20, at: clock).isEmpty,
+                    "Historical reports cannot produce live warnings or change alert memory")
+
+        let old = sample(-20, 95, reset: nil)
+        account.snapshot = old
+        let oldEvents = memory.evaluate(account: account.id, currency: "USD", outcome: .reading(old),
+                                        settings: settings, now: clock)
+        try require(oldEvents.isEmpty && account.warnings(threshold: 20, at: clock).isEmpty,
+                    "An old quota without a reset cannot produce a current warning")
+        let fresh = sample(-2, 95, reset: nil)
+        account.snapshot = fresh
+        let freshEvents = memory.evaluate(account: account.id, currency: "USD", outcome: .reading(fresh),
+                                          settings: settings, now: clock)
+        try require(freshEvents.count == 1 && account.warnings(threshold: 20, at: clock).count == 1,
+                    "Fresh verified quota warnings must still work")
     }
 }

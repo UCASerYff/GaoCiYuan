@@ -12,6 +12,20 @@ enum AgentPlatformTable {
         var cli: [String] = []              // CLI 候选路径，~ 代表用户目录
     }
 
+    static let geminiEmbeddedAntigravity = Identity(exactBundles: ["com.google.GeminiMacOS"],
+                                                   exactNames: ["gemini"], appNames: ["Gemini.app"])
+    static let standaloneAntigravity = Identity(exactBundles: ["com.google.antigravity"],
+                                               exactNames: ["antigravity", "antigravity ide"],
+                                               appNames: ["Antigravity.app", "Antigravity IDE.app"],
+                                               cli: ["/usr/local/bin/antigravity", "/opt/homebrew/bin/antigravity", "~/.local/bin/antigravity",
+                                                     "/usr/local/bin/agy", "/opt/homebrew/bin/agy", "~/.local/bin/agy"])
+
+    static func isStandaloneAntigravityCLIPath(_ url: URL) -> Bool {
+        let bundle = url.pathComponents.last { $0.lowercased().hasSuffix(".app") }
+        guard let bundle else { return true }
+        return standaloneAntigravity.appNames.contains { $0.caseInsensitiveCompare(bundle) == .orderedSame }
+    }
+
     static func identity(_ p: Provider) -> Identity {
         switch p {
         case .openai:
@@ -26,10 +40,11 @@ enum AgentPlatformTable {
                             appNames: ["Claude.app"],
                             cli: ["/usr/local/bin/claude", "/opt/homebrew/bin/claude", "~/.local/bin/claude"])
         case .gemini:
-            return Identity(exactBundles: ["com.google.antigravity", "com.google.GeminiMacOS"],
-                            exactNames: ["antigravity", "gemini", "agy"],
-                            appNames: ["Antigravity.app", "Antigravity IDE.app", "Gemini.app"],
-                            cli: ["/usr/local/bin/antigravity", "/opt/homebrew/bin/antigravity", "~/.local/bin/antigravity", "/Applications/Gemini.app/Contents/Helpers/agy"])
+            let embedded = geminiEmbeddedAntigravity
+            let standalone = standaloneAntigravity
+            return Identity(exactBundles: embedded.exactBundles + standalone.exactBundles,
+                            exactNames: embedded.exactNames + standalone.exactNames,
+                            appNames: embedded.appNames + standalone.appNames, cli: standalone.cli)
         case .grok:
             return Identity(exactBundles: ["com.anysphere.sand"],
                             bundleContains: ["xai"],
@@ -131,8 +146,11 @@ enum AgentPlatformTable {
 
     /// 进程运行匹配（入参已小写；调用方负责过滤系统进程）。
     static func matchesRunning(_ p: Provider, bundle: String, name: String) -> Bool {
-        let id = identity(p)
-        if id.exactBundles.contains(bundle) { return true }
+        matchesRunning(identity(p), bundle: bundle, name: name)
+    }
+
+    static func matchesRunning(_ id: Identity, bundle: String, name: String) -> Bool {
+        if id.exactBundles.contains(where: { $0.caseInsensitiveCompare(bundle) == .orderedSame }) { return true }
         if !id.bundleContains.isEmpty,
            id.bundleContains.contains(where: { bundle.contains($0) }),
            !id.bundleExcludes.contains(where: { bundle.contains($0) }) { return true }

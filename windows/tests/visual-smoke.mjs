@@ -19,6 +19,10 @@ const scratch = await mkdtemp(path.join(build, 'visual-smoke-'));
 const dataDir = path.join(scratch, 'fixture data');
 const profile = path.join(scratch, 'edge-profile');
 const edgeExe = path.join(process.env['ProgramFiles(x86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe');
+const testAntigravity = Number(expectedVersion.split('+')[1]) >= 7;
+const legacyAntigravityID = '0c7814a8-4f46-4d73-93b8-e5e2747d2bef';
+const legacyAntigravityConnection = 'Gemini App 中的 Antigravity';
+const antigravityConnection = 'Antigravity 独立版 /usage 报告';
 
 async function retry(test, message, timeout = 15000) {
   const deadline = Date.now() + timeout;
@@ -68,8 +72,19 @@ function quota(id, title, usedPercent, resetHours, windowSeconds) {
   return { id, title, usedPercent, resetsAt: instant(resetHours), windowSeconds };
 }
 
+async function seedLegacyAntigravity() {
+  const snapshot = { observedAt: instant(-0.05), source: 'Older macOS fixture',
+    quotas: [quota('five', 'Gemini Models · 5 小时', 33, 1.5, 18000)], balances: [], costs: [] };
+  await mkdir(dataDir, { recursive: true });
+  await writeFile(path.join(dataDir, 'library.json'), JSON.stringify({
+    schema: 1, autoRefresh: false, refreshMinutes: 5, warningThreshold: 20,
+    accounts: [{ id: legacyAntigravityID, provider: 'gemini', kind: 'Agent', name: 'Gemini 旧账户',
+      plan: '旧版套餐', enabled: true, connection: legacyAntigravityConnection, snapshot, history: [snapshot] }],
+  }));
+}
+
 async function seed() {
-  await api('/api/library/create', {});
+  if (!testAntigravity) await api('/api/library/create', {});
   await api('/api/settings', { autoRefresh: false, language: 'zh-Hans', appearance: 'light' });
   const fixtures = [
     ['openai', 'Codex 工作区', 'Plus', -0.06, [quota('short', '5 小时窗口', 28, 1.8, 18000), quota('week', '每周额度', 52, 57, 604800)]],
@@ -77,10 +92,12 @@ async function seed() {
     ['cursor', 'Cursor 项目开发', 'Pro', -0.11, [quota('month', '本月计划', 89, 29, 2592000)]],
     ['opencode', 'OpenCode Go', 'Go', -3, [quota('week', '每周额度', 57, 24, 604800)]],
   ];
+  let codexID;
   for (const [provider, name, plan, age, quotas] of fixtures) {
     const filePath = path.join(scratch, `${provider}.json`);
     await writeFile(filePath, JSON.stringify({ observedAt: instant(age), quotas }));
-    await api('/api/accounts/save', { provider, name, plan, filePath, connection: '自动读取快照文件' });
+    const saved = await api('/api/accounts/save', { provider, name, plan, filePath, connection: '自动读取快照文件' });
+    if (provider === 'openai') codexID = saved.result.id;
   }
   const grok = await api('/api/accounts/save', { provider: 'grok', name: 'Grok Bot', plan: 'Premium', connection: '本机软件自动读取' });
   await writeFile(path.join(dataDir, 'grokbot-usage.json'), JSON.stringify({ schema: 1, source: 'grok-bot-usage-report', plan: 'Premium',
@@ -111,6 +128,7 @@ async function seed() {
   await api('/api/usage/scan', {});
   const dashboard = await api('/api/usage?range=7d');
   assert(dashboard.total.totalTokens > 500000);
+  return codexID;
 }
 
 class DevTools {
@@ -153,6 +171,7 @@ let app;
 let browser;
 let socket;
 try {
+  if (testAntigravity) await seedLegacyAntigravity();
   app = spawn(path.resolve(cliPath), ['--data-dir', dataDir, '--no-refresh', '--serve', '--no-browser', '--port', new URL(baseURL).port],
     { windowsHide: true, stdio: ['ignore', 'ignore', 'inherit'] });
   token = await retry(async () => {
@@ -160,7 +179,7 @@ try {
     return (await response.text()).match(/<meta name="gao-token" content="([A-Za-z0-9_-]+)">/)?.[1];
   }, 'Could not start the isolated application.');
   assert.equal((await api('/api/state')).version, expectedVersion);
-  await seed();
+  const codexID = await seed();
 
   browser = spawn(edgeExe, ['--headless=new', '--disable-gpu', '--disable-background-networking', '--no-first-run', '--disable-extensions',
     '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { windowsHide: true, stdio: 'ignore' });
@@ -195,7 +214,8 @@ try {
   }
 
   await capture('01-overview-light', 'overview', 1160, 760);
-  await capture('02-agents-light', 'agents', 1160, 760);
+  const agentRoute = testAntigravity ? `agents?account=${codexID}` : 'agents';
+  await capture('02-agents-light', agentRoute, 1160, 760);
   await capture('03-analytics-light', 'analytics', 1160, 840);
   await capture('04-catalog-light', 'catalog', 1160, 760);
   await capture('05-settings-light', 'settings', 1160, 760);
@@ -206,7 +226,73 @@ try {
     assert.equal(await devtools.evaluate('document.documentElement.dataset.appearance'), 'dark');
     await capture('07-analytics-dark-150', 'analytics', 760, 600, 1.5);
     await capture('08-settings-dark-150', 'settings', 760, 620, 1.5, '[data-action="settings-tab"][data-value="data"]');
-    await capture('09-account-editor-dark-150', 'agents', 760, 620, 1.5, '#agent-inspector [data-action="edit"]');
+    await capture('09-account-editor-dark-150', agentRoute, 760, 620, 1.5, '#agent-inspector [data-action="edit"]');
+  }
+  if (testAntigravity) {
+    await devtools.send('Page.navigate', { url: `${baseURL}/#agents?account=${legacyAntigravityID}` });
+    await retry(() => devtools.evaluate(`document.querySelector('#agent-inspector .account-card')?.id === 'inspecting-${legacyAntigravityID}'`),
+      'Legacy Gemini details did not open.');
+    const legacy = await devtools.evaluate(`(() => {
+      const inspector = document.querySelector('#agent-inspector');
+      return { text: inspector.innerText, liveControls: !!inspector.querySelector('[data-action="refresh"], [data-action="antigravity-import"]') };
+    })()`);
+    assert.match(legacy.text, /macOS 旧版连接/);
+    assert.match(legacy.text, /Older macOS fixture/);
+    assert.doesNotMatch(legacy.text, /实测额度/);
+    assert.equal(legacy.liveControls, false);
+    await devtools.evaluate(`document.querySelector('#agent-inspector [data-action="add-antigravity"]').click()`);
+    const newAccountControls = await devtools.evaluate(`(() => ({
+      choices: [...document.querySelector('#account-editor [name="connection"]').options].map(option => option.value),
+      link: document.querySelector('#account-editor .antigravity-links a').href,
+      liveTest: !!document.querySelector('#account-editor [data-action="test-account"]'),
+    }))()`);
+    assert.deepEqual(newAccountControls.choices, [antigravityConnection]);
+    assert.match(newAccountControls.link, /^https:\/\/antigravity\.google\/docs\//);
+    assert.equal(newAccountControls.liveTest, false);
+    await devtools.evaluate(`document.querySelector('#account-editor [name="name"]').value = 'Antigravity 报告账户';
+      document.querySelector('#account-editor button[type="submit"]').click()`);
+    const standalone = await retry(async () => (await api('/api/state')).accounts.find(account => account.connection === antigravityConnection),
+      'Could not create a separate standalone account.');
+    assert.notEqual(standalone.id, legacyAntigravityID);
+    const route = `agents?account=${standalone.id}`;
+    await devtools.send('Page.navigate', { url: `${baseURL}/#${route}` });
+    await retry(() => devtools.evaluate(`Boolean(document.querySelector('#agent-inspector [data-action="antigravity-import"]'))`),
+      'Standalone import action was unavailable.');
+    await devtools.evaluate(`document.querySelector('#agent-inspector [data-action="antigravity-import"]').click()`);
+    assert.match(await devtools.evaluate(`document.querySelector('.antigravity-target').innerText`), /Antigravity 报告账户/);
+    assert.match(await devtools.evaluate(`document.querySelector('#antigravity-import-warning').innerText`), /采集时间均无法验证/);
+    const fixture = path.join(scratch, 'report.txt');
+    const secondSelection = path.join(scratch, 'second-report.txt');
+    const report = 'Fixture owner: antigravity-fixture@example.invalid\nGemini Models\nFive Hour Limit Remaining: 75.5%\nClaude and GPT models\nWeekly Limit Remaining: 42%';
+    await Promise.all([writeFile(fixture, report), writeFile(secondSelection, report)]);
+    const { root } = await devtools.send('DOM.getDocument');
+    const { nodeId } = await devtools.send('DOM.querySelector', { nodeId: root.nodeId, selector: '#antigravity-import-form [name="report"]' });
+    const isConfirmDisabled = () => devtools.evaluate(`document.querySelector('#antigravity-import-form button[type="submit"]').disabled`);
+    const selectFile = file => devtools.send('DOM.setFileInputFiles', { nodeId, files: [file] });
+    await selectFile(fixture);
+    assert.equal(await isConfirmDisabled(), true);
+    await devtools.evaluate(`document.querySelector('#antigravity-import-form [name="confirmed"]').click()`);
+    assert.equal(await isConfirmDisabled(), false);
+    await selectFile(secondSelection);
+    assert.equal(await isConfirmDisabled(), true);
+    assert.deepEqual(await devtools.evaluate('window.gaociyuanExitState()'), { dirty: true, pending: false });
+    assert.equal((await api('/api/state')).accounts.find(account => account.id === standalone.id).antigravityReport, null);
+    await devtools.evaluate(`document.querySelector('#antigravity-import-form [name="confirmed"]').click();
+      document.querySelector('#antigravity-import-form button[type="submit"]').click()`);
+    await retry(() => devtools.evaluate(`!document.querySelector('#dialog').open && Boolean(document.querySelector('#agent-inspector .antigravity-report-quotas'))`),
+      'The confirmed report did not render.');
+    const display = await devtools.evaluate(`document.querySelector('#agent-inspector .account-reading').innerText`);
+    assert.match(display, /历史报告 · 采集时间未验证/);
+    assert.match(display, /报告导入时间/);
+    assert.match(display, /报告记录剩余 75\.5%/);
+    assert.match(display, /报告记录剩余 42%/);
+    assert.doesNotMatch(display, /实测额度|antigravity-fixture@example\.invalid/);
+    const accounts = (await api('/api/state')).accounts;
+    const preserved = accounts.find(account => account.id === legacyAntigravityID);
+    assert.equal(preserved.connection, legacyAntigravityConnection);
+    assert.equal(preserved.history.length, 1);
+    assert.equal(accounts.find(account => account.id === standalone.id).snapshot, null);
+    await capture('10-antigravity-history-dark-150', route, 760, 620, 1.5);
   }
   assert.deepEqual(devtools.errors, []);
 } finally {

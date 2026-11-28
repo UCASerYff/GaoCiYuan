@@ -75,7 +75,7 @@ const forecastReason = {
 const forecastConfidence = { moderate: "中等", higher: "较高" };
 
 function accountForecast(account) {
-  if (!account.quotaForecast) return null;
+  if (!account.quotaForecast || antigravityLegacyAccount(account)) return null;
   return credentialProblem(account)
     ? { status: "insufficient", reason: "credential", windows: [] }
     : account.quotaForecast;

@@ -60,8 +60,9 @@
 
 ## V4.14 / build 16
 
-- Gemini 内置 Antigravity 改为按官方 `/usage` 报告显示 Gemini Models 和 Claude and GPT models 两个共享额度组，仅接纳明确标注的 5 小时与每周剩余百分比。没有可核实的账号或重置时刻时保留未知。两个连接各自保留来源和历史。 [官方额度说明](https://antigravity.google/docs/cli/commands/usage)
-- 账户中点「立即同步」可查询已安装且明确支持 `/usage` 的 Google 签名 Gemini 内置工具。若无法同步，在登录了正确 Google 账号的 Antigravity 中运行 `/usage`，将输出保存为文本，然后到该账户设置点「导入 Antigravity 用量报告」。导入使用文件保存时间，上次数据在失败时保留。 [官方命令行说明](https://antigravity.google/docs/cli/headless/)
+- Gemini 内置 Antigravity 和独立版使用各自的报告入口。请在 Gemini 内置额度界面或官方独立 CLI 交互窗口的 `/usage` 面板核对登录账号，把报告保存为 UTF-8 文本，再在对应账户设置选择「导入 Antigravity 额度报告」。导入前会列出目标账户和来源，由你确认归属。应用只读取本次选中的文本，不启动 CLI 或读取登录凭据。 [Gemini 内置 Antigravity](https://support.google.com/gemini/answer/18755601) · [独立 CLI 额度说明](https://antigravity.google/docs/cli/commands/usage)
+- 识别 Gemini Models 和 Claude and GPT models 两个共享组中明确标注的 5 小时与每周剩余百分比，未知项保持空缺。导入时间只表示本机导入时间，报告始终作为历史参考，不影响现有实测快照、实时提醒或趋势预测。旧来源读数会保留并标记为历史，导入或保存失败时保留已保存资料。
+- 本机检测分别显示 Gemini 内置版与独立 App 或 CLI。安装状态不会决定报告归属，已有连接和报告按原账户保留。旧版无法归属到所选连接的数据单列为未归属历史。
 - 隐藏悬浮窗时停止透明区域的指针轮询，恢复显示后重新开始。
 
 ## V4.13 / build 15

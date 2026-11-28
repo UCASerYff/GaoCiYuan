@@ -13,13 +13,26 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from gaociyuan.alerts import failure_alert, reading_alerts
+from gaociyuan.antigravity_report import (
+    HISTORICAL_SOURCES,
+    IMPORT_HELP,
+    MAX_FINGERPRINTS,
+    REPORT_FIELD,
+    decode_report,
+    parse_report,
+    public_report,
+    report_fingerprint,
+)
 from gaociyuan.catalog import (
     AGENT_LOCAL,
+    ANTIGRAVITY_REPORT,
+    FILE,
     available_connections,
     creation_kinds,
     default_agent_name,
     display_name,
     agent_software,
+    is_legacy_gemini_connection,
     known_provider,
     normalize_connection,
     normalize_kind,
@@ -83,6 +96,7 @@ ACCOUNT_KEYS = {
     "grokBotManualReading",
     "quotaForecast",
     FORECAST_HISTORY,
+    REPORT_FIELD,
 }
 SECRET_FIELDS = {"secret", "apiKey", "token", "password", "credential"}
 UNSUPPORTED = "Windows 版不调用这条连接的在线接口或辅助功能，也不会写入百分比。可改用「快照文件」导入真实读数。上次数据已保留。"
@@ -179,11 +193,22 @@ class TokenStore:
             raise AppError("搞词元仅记录 Agent 软件，不支持 API 账户。")
         if provider == "custom":
             raise AppError("搞词元仅记录 Agent 软件，不支持 API 账户。")
-        connection, unknown = normalize_connection(str(payload.get("connection") or AGENT_LOCAL))
+        default = (existing["connection"] if existing else ANTIGRAVITY_REPORT) if provider == "gemini" else AGENT_LOCAL
+        requested = str(payload.get("connection") or default)
+        connection, unknown = (requested, False) if is_legacy_gemini_connection(provider, requested) else normalize_connection(requested)
         if unknown:
             self.unknown_connections.append(str(payload.get("connection")))
         if connection not in available_connections(provider, "Agent"):
             raise AppError("这个 Agent 没有该连接方式。")
+        current_route = (existing["provider"], existing["connection"]) if existing else None
+        new_route = (provider, connection)
+        routes = [route for route in (current_route, new_route) if route is not None]
+        if new_route != current_route and any(
+            is_legacy_gemini_connection(*route) or route == ("gemini", FILE) for route in routes
+        ):
+            raise AppError("请另建 Antigravity 独立版账户。旧 Gemini 连接和历史记录会保留。", "legacy_connection")
+        if connection == ANTIGRAVITY_REPORT and new_credential:
+            raise AppError("Antigravity 手动报告不需要凭据。")
         name = str(payload.get("name") or default_agent_name(provider)).strip()
         if not name:
             raise AppError("账户设置无效。")
@@ -226,6 +251,8 @@ class TokenStore:
             same = _same_source(existing, account)
             if same:
                 account["connectorAuthorized"] = existing.get("connectorAuthorized", False)
+                if connection == ANTIGRAVITY_REPORT and REPORT_FIELD in existing:
+                    account[REPORT_FIELD] = existing[REPORT_FIELD]
             if same and not new_credential:
                 for key in ("snapshot", "lastAttempt", "error", "statusNote", "grokBotManualReading", "lastQuotaChangedAt"):
                     account[key] = existing.get(key)
@@ -253,14 +280,18 @@ class TokenStore:
         if self.load_failed:
             return []
         added = []
-        existing = {item["provider"] for item in self.library["accounts"]}
+        def identity(account: dict) -> tuple:
+            provider = account["provider"]
+            return provider, account["connection"] if provider == "gemini" else None
+
+        existing = {identity(item) for item in self.library["accounts"]}
         for candidate in suggested:
-            provider = candidate["provider"]
-            if provider in existing or ("id" in candidate and self._find(candidate["id"]) is not None):
+            key = identity(candidate)
+            if key in existing or ("id" in candidate and self._find(candidate["id"]) is not None):
                 continue
             account = self.save_account({**candidate, "autoDiscovered": True})
             added.append(account["id"])
-            existing.add(provider)
+            existing.add(key)
         return added
 
     def delete_account(self, account_id: str) -> None:
@@ -281,6 +312,8 @@ class TokenStore:
             account = self._find(account_id)
             if account is None:
                 raise AppError("没有这个账户。", "missing")
+            if account.get("connection") == ANTIGRAVITY_REPORT:
+                raise AppError("Antigravity 手动报告不需要凭据。")
             if not isinstance(secret, str) or not secret.strip():
                 raise AppError("凭据不能为空。", "credential")
             try:
@@ -377,6 +410,8 @@ class TokenStore:
                     self.read_grokbot(account_id)
                 return
             mode = windows_read_mode(account["provider"], account["connection"])
+            if mode == "antigravity-report" or is_legacy_gemini_connection(account["provider"], account["connection"]):
+                return
             now = self.now()
             if user_initiated:
                 self._actions[account_id] = now
@@ -421,6 +456,8 @@ class TokenStore:
         mode = windows_read_mode(provider, connection)
         if is_grok_bot_route(draft):
             raise AppError("请保存账户，再用「读取本机额度」读取 Grok Bot。")
+        if mode == "antigravity-report":
+            raise AppError(IMPORT_HELP, "manual_report")
         now = self.now()
         if mode == "file":
             snapshot, _ = self._read_snapshot_file(draft, now)
@@ -438,10 +475,38 @@ class TokenStore:
 
     def refresh_all(self) -> list[str]:
         with self.lock:
-            account_ids = [item["id"] for item in self.library["accounts"] if item.get("enabled") and not is_grok_bot_route(item)]
+            account_ids = [item["id"] for item in self.library["accounts"]
+                           if item.get("enabled") and not is_grok_bot_route(item) and item["connection"] != ANTIGRAVITY_REPORT
+                           and not is_legacy_gemini_connection(item["provider"], item["connection"])]
         for account_id in account_ids:
             self.refresh(account_id, user_initiated=True)
         return account_ids
+
+    def import_antigravity_report(self, payload: dict) -> dict:
+        with self.lock:
+            self._ensure_writable()
+            account_id = payload.get("id")
+            account = self._find(account_id) if isinstance(account_id, str) else None
+            if not account or account["provider"] != "gemini" or account["connection"] != ANTIGRAVITY_REPORT:
+                raise AppError("请选择已保存的 Antigravity 独立版报告账户。", "wrong_account")
+            if payload.get("confirmed") is not True:
+                raise AppError("请确认所选账户和报告来源。", "confirmation_required")
+            quotas = parse_report(payload.get("report"))
+            fingerprint = report_fingerprint(quotas)
+            previous = account.get(REPORT_FIELD)
+            fingerprints = previous["fingerprints"] if previous else []
+            if fingerprint in fingerprints:
+                return {"report": public_report(previous), "duplicate": True}
+
+            # An editable transcript has no trustworthy provider observation time or identity.
+            # Its values are displayed separately from snapshots, alerts, history and forecasts.
+            report = {"importedAt": format_iso(self.now()), "quotas": quotas,
+                      "fingerprints": (fingerprints + [fingerprint])[-MAX_FINGERPRINTS:]}
+            updated = {**account, REPORT_FIELD: report}
+            accounts = [updated if item is account else item for item in self.library["accounts"]]
+            self._write_library(accounts=accounts)
+            self.library["accounts"] = accounts
+            return {"report": public_report(report), "duplicate": False}
 
     def read_grokbot(self, account_id: str) -> None:
         """唯一会打开 grokbot-usage.json 的入口。"""
@@ -519,9 +584,19 @@ class TokenStore:
         failures = self.failures.get(account["id"], 0)
         view = dict(account)
         view.pop(FORECAST_HISTORY, None)
-        if include_forecast:
+        legacy_gemini = is_legacy_gemini_connection(account["provider"], account["connection"])
+        if account["connection"] == ANTIGRAVITY_REPORT:
+            view[REPORT_FIELD] = public_report(account.get(REPORT_FIELD))
+        if include_forecast and not legacy_gemini:
             view["quotaForecast"] = quota_forecast(account, now)
-        view["hasCredential"] = self.credentials.has(account["id"])
+        view["hasCredential"] = not legacy_gemini and account["connection"] != ANTIGRAVITY_REPORT and self.credentials.has(account["id"])
+        if legacy_gemini:
+            view["stale"] = bool(account.get("snapshot"))
+            view["warnings"] = []
+            view["health"] = "historical" if view["stale"] else "syncPaused"
+            view["ring"] = ring_for({**account, "snapshot": None}, threshold, now, self.zone)
+            view["grokStatus"] = None
+            return view
         observed = parse_instant((account.get("snapshot") or {}).get("observedAt") or "") if account.get("snapshot") else None
         view["stale"] = observed is not None and (now - observed).total_seconds() > 900
         view["warnings"] = attention(account, threshold, now)
@@ -587,7 +662,12 @@ class TokenStore:
                 data = handle.read(2_000_001)
             if len(data) > 2_000_000:
                 raise AppError("快照文件不能超过 2 MB。")
-            snapshot = strip_status_quotas(normalize_snapshot(json.loads(data.decode("utf-8-sig")), now))
+            raw = json.loads(data.decode("utf-8-sig"))
+            snapshot = strip_status_quotas(normalize_snapshot(raw, now))
+            if account["provider"] == "gemini" and (
+                snapshot["source"] in HISTORICAL_SOURCES or raw.get("isUnverifiedAntigravityReport") is True
+            ):
+                raise AppError("Antigravity 历史报告仅供参考，不能更新当前 JSON 快照。")
             source_key = _quota_source_key(account, snapshot["source"])
             snapshot["source"] = "快照文件"
             validate_snapshot(snapshot, now)
@@ -716,7 +796,8 @@ class TokenStore:
             raise AppError("账户设置无效。")
         kind = normalize_kind(str(raw.get("kind") or "Agent"))
         connection_raw = str(raw.get("connection") or AGENT_LOCAL)
-        connection, unknown = normalize_connection(connection_raw)
+        gemini_legacy = is_legacy_gemini_connection(provider, connection_raw)
+        connection, unknown = (connection_raw, False) if gemini_legacy else normalize_connection(connection_raw)
         if unknown:
             self.unknown_connections.append(connection_raw)
         original_currency = str(raw.get("currency") or "USD")
@@ -735,7 +816,7 @@ class TokenStore:
             display_name(provider),
             f"{display_name(provider)} · {agent_software(provider)}",
         }
-        if kind == "Agent" and (name in legacy or (provider == "openai" and "/" in name)):
+        if kind == "Agent" and not gemini_legacy and (name in legacy or (provider == "openai" and "/" in name)):
             name = default_agent_name(provider)
         if name != original_name:
             dirty = True
@@ -791,6 +872,10 @@ class TokenStore:
                 "source": forecast["source"],
                 "observations": forecast["observations"][-MAX_OBSERVATIONS:],
             }
+        if provider == "gemini" and connection == ANTIGRAVITY_REPORT:
+            report = decode_report(raw.get(REPORT_FIELD))
+            if report is not None:
+                account[REPORT_FIELD] = report
         for key, value in raw.items():
             if key not in ACCOUNT_KEYS and key not in SECRET_FIELDS:
                 account[key] = value
@@ -821,14 +906,16 @@ class TokenStore:
             for item in account.get("history") or []:
                 validate_snapshot(item, now)
 
-    def _write_library(self) -> None:
+    def _write_library(self, *, accounts: list[dict] | None = None) -> None:
         if self.load_failed:
             return
-        for account in self.library["accounts"]:
+        if accounts is None:
+            accounts = self.library["accounts"]
+        for account in accounts:
             account["history"] = (account.get("history") or [])[-300:]
         payload = {
             "schema": self.library["schema"],
-            "accounts": self.library["accounts"],
+            "accounts": accounts,
             "refreshMinutes": self.library["refreshMinutes"],
             "warningThreshold": self.library["warningThreshold"],
             "autoRefresh": self.library["autoRefresh"],

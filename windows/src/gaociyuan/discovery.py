@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from gaociyuan.catalog import (
-    AGENT_LOCAL, CLAUDE_STATUSLINE, CODEX, DSH, GEMINI_APP, KIMI_DESKTOP,
+    AGENT_LOCAL, ANTIGRAVITY_REPORT, CLAUDE_STATUSLINE, CODEX, DSH, GEMINI_APP, KIMI_DESKTOP,
     WORKBUDDY, agent_software, default_agent_name, default_connection,
 )
 
@@ -27,7 +27,7 @@ class Identity:
 IDENTITIES = {
     "openai": Identity(("Codex", "ChatGPT"), ("codex",), ("OpenAI Codex",)),
     "claude": Identity(("Claude",), ("claude",), ("Claude Code",)),
-    "gemini": Identity(("Antigravity", "Antigravity IDE", "Gemini"), ("antigravity", "agy")),
+    "gemini": Identity(("Antigravity", "Antigravity IDE"), ("antigravity", "agy")),
     "grok": Identity(("Grok Bot", "Grok"), names=("GrokBot",)),
     "deepseek": Identity(("DeepSeek",)),
     "kimi": Identity(("Kimi", "Kimi Work"), ("kimi",), ("Kimi Code",)),
@@ -55,7 +55,7 @@ IDENTITIES = {
 AUTOMATIC_ROUTES = {
     "openai": (CODEX, "USD"),
     "claude": (CLAUDE_STATUSLINE, "USD"),
-    "gemini": (GEMINI_APP, "USD"),
+    "gemini": (ANTIGRAVITY_REPORT, "USD"),
     "grok": (AGENT_LOCAL, "USD"),
     "kimi": (KIMI_DESKTOP, "CNY"),
     "doubao": (AGENT_LOCAL, "CNY"),
@@ -73,6 +73,8 @@ def automatic_provider(account: dict) -> str | None:
     if provider not in AUTOMATIC_ROUTES:
         return None
     if provider == "grok" and account.get("connection") != AGENT_LOCAL:
+        return None
+    if provider == "gemini" and account.get("connection") != ANTIGRAVITY_REPORT:
         return None
     return provider
 

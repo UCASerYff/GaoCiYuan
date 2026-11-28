@@ -418,9 +418,13 @@ enum CardLayout {
         var h: CGFloat = 56 // 头部
         let quotas = account.displayQuotas.count
         h += CGFloat(max(quotas, 1)) * 46
+        if let report = account.historicalAntigravityReport ?? account.unassignedLegacyAntigravityReport {
+            if quotas == 0 { h -= 46 }
+            h += 58 + CGFloat(report.historicalChartQuotas.count) * 46
+        }
         if let s = account.snapshot, !s.balances.isEmpty { h += CGFloat(s.balances.count) * 23 }
         if account.stale(), account.snapshot != nil { h += 16 }
-        if account.error != nil { h += 28 }
+        if account.error != nil && !account.usesAntigravityReport { h += 28 }
         if account.statusNote != nil { h += 14 }
         h += 30 // 同步按钮 + padding
         return min(h, maximumHeight)

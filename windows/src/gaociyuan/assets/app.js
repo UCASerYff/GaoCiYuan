@@ -9,6 +9,10 @@ const message = document.querySelector("#message");
 const systemTheme = matchMedia("(prefers-color-scheme: dark)");
 const fileConnection = "自动读取快照文件";
 const localConnection = "本机软件自动读取";
+const antigravityReportConnection = "Antigravity 独立版 /usage 报告";
+const antigravityCLIURL = "https://antigravity.google/docs/getting-started?tab=cli";
+const antigravityUsageURL = "https://antigravity.google/docs/cli/commands/usage";
+const antigravityReportMaxBytes = 64 * 1024;
 const routeDefinitions = {
   overview: ["总览", "Agent 额度与状态，一眼看清", "overview"],
   agents: ["Agent 软件", "只记录本机 Agent 软件", "computer"],
@@ -131,7 +135,48 @@ const supplementalTranslations = {
   "快照文件": "Snapshot file",
   "本机额度连接": "Client quota connection",
   "手动读取额度": "Manual quota read",
-  "Windows 版搞词元可读取本地 JSON 快照。独立版 Antigravity 可在官方 CLI 运行 /usage 查看共享额度，Gemini 内置连接仅适用于 macOS。": "GaoCiYuan for Windows can read local JSON snapshots. Run /usage in the official standalone Antigravity CLI to view shared limits. The Gemini integration is available on macOS.",
+  "Antigravity 独立版 /usage 报告": "Standalone Antigravity /usage report",
+  "安装官方独立 CLI ↗": "Install the official standalone CLI ↗",
+  "官方 /usage 说明 ↗": "Official /usage guide ↗",
+  "导入额度报告": "Import quota report",
+  "导入 Antigravity 额度报告": "Import Antigravity quota report",
+  "在已登录的官方独立 Antigravity CLI 中运行 /usage，将额度输出保存为 UTF-8 文本文件。": "Run /usage in the signed-in official standalone Antigravity CLI and save the quota output as a UTF-8 text file.",
+  "先保存账户，再从账户明细导入报告。": "Save the account, then import the report from its details.",
+  "Antigravity 历史额度": "Antigravity quota history",
+  "历史报告 · 采集时间未验证": "Historical report · observation time unverified",
+  "历史报告": "Historical report",
+  "macOS 旧版连接": "Legacy macOS connection",
+  "旧连接历史资料": "Legacy connection history",
+  "原账户和历史资料保留在此。若要导入 Windows 的 CLI 报告，请另建独立版账户。": "The original account and history stay here. Add a separate standalone account to import Windows CLI reports.",
+  "添加 Antigravity 独立版账户": "Add a standalone Antigravity account",
+  "待导入报告": "Report needed",
+  "可从账户明细手动导入官方 CLI 的 /usage 报告。": "Open account details to import a report from the official CLI.",
+  "暂无历史额度报告。": "No historical quota report yet.",
+  "历史报告不用于实时额度、重置时间、预测或提醒。": "Historical reports do not feed live quotas, reset times, forecasts or alerts.",
+  "报告记录剩余": "Remaining in report",
+  "Gemini Models · 5 小时": "Gemini Models · 5 hours",
+  "Gemini Models · 每周": "Gemini Models · weekly",
+  "Claude and GPT models · 5 小时": "Claude and GPT models · 5 hours",
+  "Claude and GPT models · 每周": "Claude and GPT models · weekly",
+  "报告导入时间": "Report import time",
+  "导入到账户": "Import into account",
+  "搞词元账户 ID": "GaoCiYuan account ID",
+  "报告文本文件（UTF-8 .txt，最多 64 KiB）": "Report text file (UTF-8 .txt, up to 64 KiB)",
+  "报告的签发者、所属账号与额度采集时间均无法验证。": "The report issuer, account and observation time cannot be verified.",
+  "我确认将此报告作为历史记录导入上方账户。": "I confirm that this report belongs in the account above as a historical record.",
+  "确认导入": "Confirm import",
+  "导入中…": "Importing…",
+  "请选择不超过 64 KiB 的 .txt 报告。": "Choose a .txt report no larger than 64 KiB.",
+  "无法将所选文件读取为 UTF-8 文本。": "The selected file could not be read as UTF-8 text.",
+  "账户已变更，请重新选择账户后导入。": "The account changed. Select the account again before importing.",
+  "报告已导入为历史记录。": "The report was imported as historical data.",
+  "此报告已导入，无需重复保存。": "This report has already been imported.",
+  "未读到明确的 Antigravity 模型组与剩余额度。请选择 /usage 的 UTF-8 文本报告。": "No supported Antigravity model group and remaining quota were found. Choose a UTF-8 /usage transcript.",
+  "请选择已保存的 Antigravity 独立版报告账户。": "Choose a saved standalone Antigravity report account.",
+  "请确认所选账户和报告来源。": "Confirm the selected account and source of the report.",
+  "导入文本报告": "Via text report import",
+  "在官方 Antigravity CLI 中登录目标账户并运行 /usage，将输出另存为 UTF-8 文本后导入。报告账户及采集时间未经验证，仅作历史参考。": "Sign in to the intended account in the official Antigravity CLI and run /usage. Save the output as UTF-8 text and import it as history. The account and observation time are unverified.",
+  "此连接在 Windows 无法读取。可选择「Antigravity 独立版 /usage 报告」手动导入，或使用本地 JSON 快照。": "Windows cannot read this connection. Choose Standalone Antigravity /usage report for manual import or use a local JSON snapshot.",
   "搜索 Agent 平台": "Search Agent platforms",
   "搜索本机软件": "Search installed apps",
   "搜索采集来源": "Search collection sources",
@@ -349,6 +394,10 @@ function closeDialog() {
   if (dialog.open) dialog.close();
 }
 
+dialog.addEventListener("cancel", (event) => {
+  if (dialog.querySelector('#antigravity-import-form[aria-busy="true"]')) event.preventDefault();
+});
+
 dialog.addEventListener("close", () => {
   if (!dialog.open) {
     dialogDraftIsDirty = null;
@@ -441,7 +490,8 @@ function renderNav() {
     `<button type="button" data-action="page" data-value="${target}" aria-label="${t(definition[0])}" title="${t(definition[0])}"${page === target ? ' aria-current="page"' : ""}>${icon(definition[2])}<span>${t(definition[0])}</span></button>`
   ).join("");
   sidebarActions.innerHTML = `<button type="button" data-action="settings" aria-label="${t("设置")}" title="${t("设置")}">${icon("settings")}<span>${t("设置")}</span></button>`;
-  const canSync = activeAccounts().some((account) => !grokManual(account));
+  const canSync = activeAccounts().some((account) => !grokManual(account)
+    && !antigravityReportAccount(account) && !antigravityLegacyAccount(account));
   const syncing = isSyncingAll || state?.refreshing?.length;
   const auto = state?.library?.autoRefresh;
   const syncLabel = syncing ? tr("正在同步") : tr(auto === false ? "自动同步已暂停" : "自动同步");
@@ -505,12 +555,25 @@ const healthDisplay = {
 };
 
 function agentHealth(account) {
+  if (account.enabled) {
+    if (antigravityLegacyAccount(account)) return "historical";
+    if (antigravityReportAccount(account) && !account.snapshot) {
+      return account.antigravityReport ? "historical" : "syncPaused";
+    }
+  }
   return account.enabled ? (Object.hasOwn(healthDisplay, account.health) ? account.health : "ok") : "paused";
 }
 
 function statusMark(level) {
   const [label, glyph, tone] = healthDisplay[level];
   return `<span class="health-label ${tone}">${icon(glyph)}<span>${t(label)}</span></span>`;
+}
+
+function accountStatusMark(account) {
+  if (antigravityLegacyAccount(account)) return tag("macOS 旧版连接", "secondary");
+  return antigravityReportAccount(account) && !account.snapshot && account.enabled
+    ? tag(account.antigravityReport ? "历史报告" : "待导入报告", "secondary")
+    : statusMark(agentHealth(account));
 }
 
 function overviewCounts(active) {
@@ -644,16 +707,50 @@ function revealInspector() {
 function agentRow(account, selected) {
   const provider = providerFor(account.provider) || { id: account.provider, agent: account.provider };
   const id = text(account.id);
-  const mostConstrained = account.ring?.showsDash || credentialProblem(account) ? "—" : account.ring?.label || "—";
+  const mostConstrained = account.ring?.showsDash || credentialProblem(account) || antigravityLegacyAccount(account)
+    ? "—" : account.ring?.label || "—";
   return `<button type="button" id="account-${id}" class="agent-row agent-columns" data-action="select-agent" data-value="${id}" aria-pressed="${selected}" aria-controls="agent-inspector">
     <span class="marked">${providerMark(provider, 30)}<span class="agent-names"><strong title="${text(account.name)}">${text(account.name)}</strong><small class="muted">${t(provider.agent)}${account.plan ? " · " + text(account.plan) : ""}</small></span></span>
-    ${statusMark(agentHealth(account))}
+    ${accountStatusMark(account)}
     <span class="agent-remaining${account.ring?.stale ? " muted" : ""}">${text(mostConstrained)}</span>
   </button>`;
 }
 
 function grokManual(account) {
   return account.provider === "grok" && account.connection === localConnection;
+}
+
+function antigravityReportAccount(account) {
+  return account?.provider === "gemini" && account.connection === antigravityReportConnection;
+}
+
+function antigravityLegacyAccount(account) {
+  return account?.provider === "gemini" && providerFor(account.provider)?.connectionDetails?.[account.connection]?.legacy === true;
+}
+
+function antigravityReportGuide() {
+  return `<p class="caption muted">${t("在已登录的官方独立 Antigravity CLI 中运行 /usage，将额度输出保存为 UTF-8 文本文件。")}</p>
+    <div class="cluster antigravity-links">${externalLink(antigravityCLIURL, "安装官方独立 CLI ↗")}${externalLink(antigravityUsageURL, "官方 /usage 说明 ↗")}</div>`;
+}
+
+function renderAntigravityReport(account, inspector) {
+  const report = account.antigravityReport;
+  if (!report && !inspector) return `<p class="caption muted">${t("可从账户明细手动导入官方 CLI 的 /usage 报告。")}</p>`;
+  const percentage = new Intl.NumberFormat(inEnglish() ? "en" : "zh-CN", { maximumFractionDigits: 6 });
+  return `<section class="antigravity-history" aria-label="${t("Antigravity 历史额度")}">
+    <div class="cluster antigravity-history-heading"><h3>${t("Antigravity 历史额度")}</h3>
+      ${report ? tag("历史报告 · 采集时间未验证", "secondary") : ""}</div>
+    ${report ? `<p class="caption muted">${t("报告导入时间")} <time datetime="${text(report.importedAt)}">${text(displayDate(report.importedAt, { year: "numeric" }))}</time></p>
+    <ul class="antigravity-report-quotas">${(report.quotas || []).filter((quota) => Number.isFinite(quota.usedPercent)).map((quota) =>
+      `<li class="spread"><span>${t(quota.title)}</span><strong>${t("报告记录剩余")} ${text(percentage.format(100 - quota.usedPercent))}%</strong></li>`
+    ).join("")}</ul>` : `<p class="caption muted">${t("暂无历史额度报告。")}</p>`}
+    <p class="caption muted">${t("历史报告不用于实时额度、重置时间、预测或提醒。")}</p>
+    ${inspector ? antigravityReportGuide() : ""}
+  </section>`;
+}
+
+function antigravityLegacyGuide() {
+  return `<p class="caption muted">${t("原账户和历史资料保留在此。若要导入 Windows 的 CLI 报告，请另建独立版账户。")}</p>`;
 }
 
 function quotaRow(quota, stale, keepExpired) {
@@ -725,9 +822,25 @@ function renderAccount(account, inspector = false) {
   const status = account.grokStatus || account.statusNote;
   const id = text(account.id);
   const syncing = state?.refreshing?.includes(account.id);
+  const reportAccount = antigravityReportAccount(account);
+  const legacyAccount = antigravityLegacyAccount(account);
+  const currentReading = !legacyAccount && (!reportAccount || account.snapshot);
+  let accountAction = "";
+  if (inspector && legacyAccount) {
+    accountAction = button("添加 Antigravity 独立版账户", "add-antigravity", { glyph: "plus" });
+  } else if (inspector && reportAccount) {
+    accountAction = button("导入额度报告", "antigravity-import", { value: account.id, glyph: "upload" });
+  } else if (!reportAccount && !legacyAccount) {
+    accountAction = button(syncing ? "同步中…" : grokManual(account) ? "读取本机额度" : "立即同步", grokManual(account) ? "grok" : "refresh", {
+      value: account.id, glyph: "refresh", disabled: !account.enabled || syncing,
+    });
+  }
+  const detailsAction = inspector
+    ? !reportAccount && !legacyAccount && externalLink(provider.url, "控制台 ↗", "muted caption")
+    : button("账户明细", "inspect-account", { value: account.id, glyph: "chevron", classes: "plain" });
   return `<article id="${inspector ? "inspecting" : "account"}-${id}" class="panel account-card${inspector ? " inspected-account" : ""}" data-health="${agentHealth(account)}" tabindex="-1">
     ${inspector ? `<div class="section-heading inspector-heading"><h2>${t("账户明细")}</h2><div class="cluster">
-      ${statusMark(agentHealth(account))}
+      ${accountStatusMark(account)}
       ${button("返回账户列表", "return-agent-list", { glyph: "left", classes: "return-agent-list plain" })}
     </div></div>` : ""}
     <div class="spread account-header"><div class="marked">${providerMark(provider, inspector ? 43 : 36)}<div>
@@ -735,29 +848,35 @@ function renderAccount(account, inspector = false) {
       <p class="caption muted">${t(provider.agent)}${account.plan ? " · " + text(account.plan) : ""}</p></div></div>
       ${menu("更多", "more", [
         inspector ? "" : button("账户设置", "edit", { value: account.id }),
-        inspector ? "" : externalLink(provider.url, "打开官方控制台"),
+        inspector || reportAccount || legacyAccount ? "" : externalLink(provider.url, "打开官方控制台"),
         inspector ? "" : "<hr>",
         button("移除账户", "remove", { value: account.id, classes: "red" }),
       ].join(""), "", true)}
     </div>
     <div class="cluster tags">
-      ${!inspector ? statusMark(agentHealth(account)) : ""}
-      ${tag(account.enabled ? connection : "已暂停", "secondary")}
+      ${!inspector ? accountStatusMark(account) : ""}
+      ${!account.enabled ? tag("已暂停", "secondary") : !legacyAccount ? tag(connection, "secondary") : ""}
       ${account.autoDiscovered ? tag("自动发现", "teal") : ""}
     </div>
     <div class="account-reading">
-      ${inspector ? `<h3>${t("实测额度")}</h3>` : ""}
-      ${renderSnapshot(account)}
+      ${inspector && currentReading ? `<h3>${t("实测额度")}</h3>` : ""}
+      ${currentReading ? renderSnapshot(account) : ""}
+      ${reportAccount ? renderAntigravityReport(account, inspector) : ""}
+      ${legacyAccount ? `<section class="antigravity-history">
+        <h3>${t("旧连接历史资料")}</h3>
+        ${antigravityLegacyGuide()}
+        ${account.snapshot ? renderSnapshot({ ...account, stale: true, keepsSnapshotOnError: true }) : ""}
+      </section>` : ""}
       ${status ? `<p class="info-row muted">${icon("info")}${t(status)}</p>` : ""}
       ${account.error ? `<p class="info-row amber">${icon("alert")}${t(account.error)}</p>` : ""}
     </div>
-    ${renderAccountForecast(account)}
+    ${currentReading ? renderAccountForecast(account) : ""}
     <div class="spread account-foot">
       <div class="cluster">
-        ${button(syncing ? "同步中…" : grokManual(account) ? "读取本机额度" : "立即同步", grokManual(account) ? "grok" : "refresh", { value: account.id, glyph: "refresh", disabled: !account.enabled || syncing })}
+        ${accountAction}
         ${inspector ? button("账户设置", "edit", { value: account.id }) : ""}
       </div>
-      ${inspector ? externalLink(provider.url, "控制台 ↗", "muted caption") : button("账户明细", "inspect-account", { value: account.id, glyph: "chevron", classes: "plain" })}
+      ${detailsAction || ""}
     </div>
   </article>`;
 }
@@ -778,7 +897,7 @@ function renderCatalog() {
       <div class="cluster">
         <label class="search-field">${icon("search")}<input class="search catalog-search" id="catalog-search" type="search" aria-label="${t(currentTab[3])}" placeholder="${t(currentTab[3])}" value="${text(catalogQuery)}"></label>
         ${catalogTab === "platforms" ? `<label class="filter-field">${icon("filter")}<select id="catalog-filter" aria-label="${t("接入范围")}">${selectOptions([
-          ["all", "全部平台"], ["direct", "可直接读额度"], ["snapshot", "通过快照文件"],
+          ["all", "全部平台"], ["direct", "可直接读额度"], ["report", "导入文本报告"], ["snapshot", "通过快照文件"],
         ], catalogFilter)}</select></label>` : ""}
       </div>
       ${catalogTab === "sources" ? button("采集设置", "usage-settings", { glyph: "settings", classes: "primary" }) : ""}
@@ -796,21 +915,23 @@ function providerCards() {
   const needle = catalogQuery.trim().toLocaleLowerCase();
   const entries = providers.filter(discoverableProvider).map((item) => {
     const modes = Object.values(item.connectionDetails || {}).map((details) => details.mode);
-    return [item, modes.includes("connector") ? "connector" : modes.includes("grokbot") ? "grokbot" : "snapshot"];
+    return [item, modes.includes("connector") ? "connector" : modes.includes("grokbot") ? "grokbot"
+      : modes.includes("antigravity-report") ? "report" : "snapshot"];
   });
   const found = entries.filter(([item, route]) =>
-    (catalogFilter === "all" || (catalogFilter === "snapshot" ? route === "snapshot" : route !== "snapshot"))
+    (catalogFilter === "all" || catalogFilter === route
+      || (catalogFilter === "direct" && (route === "connector" || route === "grokbot")))
     && `${item.name} ${item.agent} ${item.company} ${item.id}`.toLocaleLowerCase().includes(needle));
-  const assigned = new Set(accounts().map((account) => account.provider));
-  const labels = { connector: "本机额度连接", grokbot: "手动读取额度", snapshot: "快照文件" };
+  const assigned = new Set(accounts().filter((account) => account.provider !== "gemini" || antigravityReportAccount(account)).map((account) => account.provider));
+  const labels = { connector: "本机额度连接", grokbot: "手动读取额度", report: "导入额度报告", snapshot: "快照文件" };
   return `<section class="panel catalog-list" id="catalog-providers" aria-label="${t("Agent 平台")}">
     <div class="section-heading"><div class="stacked"><h2>${t("Agent 平台")}</h2><p class="muted caption">${t("选择一个平台，查看 Windows 支持的连接方式。")}</p></div><span class="muted caption">${text(countText(found.length, "个平台", "platforms"))}</span></div>
     ${found.length ? found.map(([item, route]) => `<article class="catalog-row">
       <div class="marked">${providerMark(item, 37)}
         <div class="stacked"><h3>${t(item.agent)}</h3><p class="muted caption">${t(item.company)}${assigned.has(item.id) ? ` · ${t("已接入")}` : ""}</p></div>
       </div>
-      <p class="caption muted catalog-note">${t(item.note)}</p>
-      <div class="catalog-row-actions">${tag(labels[route], route === "snapshot" ? "secondary" : "teal")}${button("接入", "edit", { value: item.id, glyph: "chevron" })}</div>
+      <div class="caption muted catalog-note"><p>${t(item.note)}</p>${route === "report" ? externalLink(antigravityCLIURL, "安装官方独立 CLI ↗") : ""}</div>
+      <div class="catalog-row-actions">${tag(labels[route], route === "snapshot" || route === "report" ? "secondary" : "teal")}${button("接入", "edit", { value: item.id, glyph: "chevron" })}</div>
     </article>`).join("") : `<p class="muted catalog-empty">${t("未找到匹配的 Agent 软件。")}</p>`}
   </section>`;
 }
@@ -826,7 +947,8 @@ function renderDiscovery() {
     ${discovery?.error ? `<p class="red" role="alert">${text(discovery.error)}</p>` : ""}
     ${rows.length ? `<div class="discovery-list">${rows.map((item) => `<div class="discovered">
       ${providerMark(providerFor(item.provider), 32)}<div><strong>${t(item.softwareName)}</strong><p class="${item.isRunning ? "teal" : "muted"}">${t(item.status)}</p></div><span class="spacer"></span>
-      ${!accounts().some((account) => account.provider === item.provider) && providerFor(item.provider)?.creatable ? button("接入", "discovery-add", { value: item.id }) : ""}
+      ${!accounts().some((account) => account.provider === item.provider && (item.provider !== "gemini" || antigravityReportAccount(account)))
+        && providerFor(item.provider)?.creatable ? button("接入", "discovery-add", { value: item.id }) : ""}
     </div>`).join("")}</div>` : `<p class="catalog-empty muted">${t(needle ? "未找到匹配的 Agent 软件。" : discovery ? "暂未检测到本机已安装的 Agent 软件（如 Codex、Claude Code、Antigravity 等）。" : "等待读取软件安装状态…")}</p>`}
   </section>`;
 }
@@ -919,6 +1041,10 @@ function openEditor(account, defaultProvider, overrideConnection) {
     const regions = (current.regions || []).map((item) => Array.isArray(item) ? item : [item.id || item.value, item.label || item.name]);
     const isFile = draft.connection === fileConnection || current.mode === "file";
     const isClaudeStatus = draft.connection === "Claude Code 状态栏推送";
+    const isAntigravityReport = current.mode === "antigravity-report";
+    const isAntigravityLegacy = current.legacy === true;
+    const connectionLocked = Boolean(original && provider.id === "gemini");
+    const connectionChoices = connectionLocked ? [[draft.connection, isAntigravityLegacy ? "macOS 旧版连接" : current.label || draft.connection]] : options;
     const showSecret = !!current.credentialLabel && current.mode !== "unsupported";
     const savedSecret = original?.hasCredential && original.connection === draft.connection;
     const pathLabel = current.pathLabel || "Windows 快照文件路径";
@@ -936,7 +1062,7 @@ function openEditor(account, defaultProvider, overrideConnection) {
           </section>
           <section class="editor-section">
             <h3>${t("连接配置")}</h3>
-            ${editorField("连接方式", `<select name="connection">${selectOptions(options, draft.connection)}</select>`)}
+            ${editorField("连接方式", `<select name="connection"${connectionLocked ? " disabled" : ""}>${selectOptions(connectionChoices, draft.connection)}</select>`)}
             ${current.scopeLabel ? editorField(current.scopeLabel, `<input name="scopeID" value="${text(draft.scopeID)}">`) : ""}
             ${regions.length ? editorField("服务地区", `<select name="region">${selectOptions(regions, draft.region)}</select>`) : ""}
             ${showSecret ? editorField(current.credentialLabel, `<input name="secret" type="password" autocomplete="new-password"${savedSecret ? ` placeholder="${t("留空保留已存密钥")}"` : " required"}>`) : ""}
@@ -944,10 +1070,12 @@ function openEditor(account, defaultProvider, overrideConnection) {
             ${isFile || current.pathLabel ? `<div class="editor-path">
               ${editorField(pathLabel, `<input name="filePath" value="${text(draft.filePath)}" placeholder="${isFile ? "C:\\…\\snapshot.json" : "C:\\…\\codex.exe"}"${isFile ? " required" : ""}>`)}
               ${isFile ? button("选择…", "pick-snapshot", { glyph: "folder" }) : ""}</div>` : ""}
-            ${current.help ? `<p class="caption muted connection-help">${t(current.help)}</p>` : ""}
+            ${current.help && !isAntigravityReport && !isAntigravityLegacy ? `<p class="caption muted connection-help">${t(current.help)}</p>` : ""}
             ${isClaudeStatus ? claudeSetupMarkup() : ""}
+            ${isAntigravityReport ? `${antigravityReportGuide()}<p class="caption muted">${t("先保存账户，再从账户明细导入报告。")}</p>` : ""}
+            ${isAntigravityLegacy ? antigravityLegacyGuide() : ""}
             ${isFile ? `<p class="caption muted">${t("读取标准 JSON 快照，不是任意平台原始账单。格式示例见设置页，可由外部脚本持续更新。")}</p>` : ""}
-            <div class="editor-test">${button("测试连接", "test-account", { glyph: "link", disabled: current.mode === "unsupported" || current.mode === "grokbot" })}<p id="editor-result" class="caption" role="status"></p></div>
+            ${isAntigravityReport || isAntigravityLegacy ? "" : `<div class="editor-test">${button("测试连接", "test-account", { glyph: "link", disabled: current.mode === "unsupported" || current.mode === "grokbot" })}<p id="editor-result" class="caption" role="status"></p></div>`}
           </section>
           <section class="editor-section">
             <h3>${t("显示与同步")}</h3>
@@ -1032,6 +1160,79 @@ function setEditorError(error) {
   if (target) target.textContent = error.message;
 }
 
+async function readAntigravityReportFile(file) {
+  if (!file || !/\.txt$/i.test(file.name) || !file.size || file.size > antigravityReportMaxBytes) {
+    throw new Error(tr("请选择不超过 64 KiB 的 .txt 报告。"));
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
+  } catch {
+    throw new Error(tr("无法将所选文件读取为 UTF-8 文本。"));
+  }
+}
+
+function openAntigravityImport(account) {
+  const showID = accounts().some((candidate) => candidate.id !== account.id
+    && candidate.name === account.name && candidate.plan === account.plan);
+  openDialog(`${editorHeading("导入 Antigravity 额度报告")}
+    <form id="antigravity-import-form">
+      <div class="dialog-body">
+        <div class="antigravity-target">
+          <p class="caption muted">${t("导入到账户")}</p>
+          <p><strong>${text(account.name)}</strong>${account.plan ? " · " + text(account.plan) : ""}</p>
+          ${showID ? `<p class="caption muted">${t("搞词元账户 ID")} <code>${text(account.id)}</code></p>` : ""}
+        </div>
+        ${antigravityReportGuide()}
+        ${editorField("报告文本文件（UTF-8 .txt，最多 64 KiB）", '<input type="file" name="report" accept=".txt,text/plain" required>')}
+        <p id="antigravity-import-warning" class="caption muted">${t("报告的签发者、所属账号与额度采集时间均无法验证。")}</p>
+        <label class="antigravity-confirm"><input type="checkbox" name="confirmed" required aria-describedby="antigravity-import-warning"><span>${t("我确认将此报告作为历史记录导入上方账户。")}</span></label>
+        <p id="antigravity-import-error" class="red caption" role="alert"></p>
+      </div>
+      <footer class="dialog-foot">${button("取消", "close-dialog")}<button type="submit" class="primary" disabled>${t("确认导入")}</button></footer>
+    </form>`, "antigravity-dialog");
+  const form = dialog.querySelector("form");
+  const { report, confirmed } = form.elements;
+  const submit = form.querySelector('[type="submit"]');
+  const dismiss = dialog.querySelectorAll('[data-action="close-dialog"]');
+  const errorMessage = form.querySelector("#antigravity-import-error");
+  dialogDraftIsDirty = () => report.files.length > 0 || confirmed.checked;
+  form.addEventListener("change", (event) => {
+    if (event.target === report) confirmed.checked = false;
+    errorMessage.textContent = "";
+    submit.disabled = !report.files.length || !confirmed.checked;
+  });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (submit.disabled || !confirmed.checked || !report.files.length) return;
+    const file = report.files[0];
+    errorMessage.textContent = "";
+    form.setAttribute("aria-busy", "true");
+    submit.textContent = tr("导入中…");
+    for (const control of [report, confirmed, submit, ...dismiss]) control.disabled = true;
+    void trackOperation(async () => {
+      try {
+        const current = accounts().find((candidate) => candidate.id === account.id);
+        if (!antigravityReportAccount(current) || current.name !== account.name || current.plan !== account.plan) {
+          throw new Error(tr("账户已变更，请重新选择账户后导入。"));
+        }
+        const { result } = await api("/api/antigravity/import", {
+          id: account.id, confirmed: true, report: await readAntigravityReportFile(file),
+        });
+        closeDialog();
+        render();
+        showMessage(tr(result?.duplicate ? "此报告已导入，无需重复保存。" : "报告已导入为历史记录。"));
+        document.getElementById(`inspecting-${account.id}`)?.querySelector('[data-action="antigravity-import"]')?.focus({ preventScroll: true });
+      } catch (error) {
+        errorMessage.textContent = tr(error.message);
+      } finally {
+        form.removeAttribute("aria-busy");
+        submit.textContent = tr("确认导入");
+        for (const control of [report, confirmed, submit, ...dismiss]) control.disabled = false;
+      }
+    });
+  });
+}
+
 function claudeSetupMarkup() {
   const executable = nativeInterface?.cliPath?.replaceAll("\\", "/") || "GaoCiYuan-cli.exe";
   const configuration = JSON.stringify({
@@ -1056,6 +1257,11 @@ action("edit", (button) => {
   const value = button.dataset.value;
   openEditor(accounts().find((item) => item.id === value), value);
 });
+action("antigravity-import", (button) => {
+  const account = accounts().find((item) => item.id === button.dataset.value);
+  if (antigravityReportAccount(account)) openAntigravityImport(account);
+});
+action("add-antigravity", () => openEditor(null, "gemini", antigravityReportConnection));
 
 action("export-accounts", () => downloadFile("/api/export/accounts.csv", "GaoCiYuan-accounts.csv"));
 action("health-target", (button) => {

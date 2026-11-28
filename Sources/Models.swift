@@ -206,7 +206,7 @@ enum Provider: String, Codable, CaseIterable, Identifiable {
         case .deepseek: return "DeepSeek Harness 是独立 Agent 入口；此处不再提供大模型 API 账户。"
         case .kimi: return "Kimi Work / Kimi Code 支持专用额度 Key 或本机桌面订阅页只读采集，未运行时保留上次真实状态。"
         case .grok: return "Grok Bot 只读读取头像栏目的套餐与已用百分比；支持手动立即读取、非前台自动同步和 5 分钟导航节流。"
-        case .gemini: return "Antigravity 按模型组共享 5 小时与每周额度。Gemini 桌面端和独立版是不同连接。"
+        case .gemini: return "Antigravity 按模型组共享 5 小时与每周额度。Gemini 内置版与独立版分别导入本机报告，作为历史参考。"
         case .qwen: return "Qoder 和 Alibaba Coding Plan 使用各自独立 Agent 入口；此处不再提供大模型 API 账户。"
         case .doubao: return "豆包桌面端经辅助功能只读采集当前时段、近 7 天额度和重置信息，前台使用中不打扰。"
         case .glm: return "Zcode 自动读取 Coding Plan 的真实额度窗口。"
@@ -478,6 +478,28 @@ struct UsageSnapshot: Codable, Equatable {
     var note: String?
     var deadlines: [Deadline]? = nil
     var creditBalances: [CreditBalance]? = nil
+    // For manual Antigravity reports, observedAt is the import date. Actual observation time is unknown.
+    var isUnverifiedAntigravityReport: Bool? = nil
+    static let embeddedAntigravityManualSource = "Gemini 内置 Antigravity · 手动报告"
+    static let standaloneAntigravityManualSource = "Antigravity 独立版 · /usage 手动报告"
+    private static let historicalAntigravitySources: Set<String> = [
+        embeddedAntigravityManualSource, standaloneAntigravityManualSource,
+        "Gemini App 中的 Antigravity", "Gemini App 中的 Antigravity · /usage",
+        "Antigravity /usage 手动报告", "Antigravity 本机服务", "Antigravity 独立版 /usage 手动报告",
+    ]
+    var isHistoricalAntigravityReading: Bool {
+        isUnverifiedAntigravityReport == true || Self.historicalAntigravitySources.contains(source)
+    }
+    fileprivate var legacyAntigravityConnection: Connection? {
+        switch source {
+        case "Gemini App 中的 Antigravity", "Gemini App 中的 Antigravity · /usage": return .geminiApp
+        case "Antigravity 本机服务": return .agentLocal
+        default: return nil
+        }
+    }
+    func isFreshObservation(at date: Date) -> Bool {
+        !isHistoricalAntigravityReading && (0...900).contains(date.timeIntervalSince(observedAt))
+    }
     var totalTokens: Int64? {
         guard let inputTokens, let outputTokens else { return nil }
         let (total, overflow) = inputTokens.addingReportingOverflow(outputTokens)
@@ -498,7 +520,8 @@ struct UsageSnapshot: Codable, Equatable {
     /// 观测值相等比较：排除 observedAt 与统计期时间戳（periodEnd 随刷新时间滚动），用于历史幂等
     /// 额度、用量和来源不变时不追加变更历史，确有新读数时可推进当前观测时间。
     func sameObservation(as other: UsageSnapshot) -> Bool {
-        source == other.source && quotas == other.quotas && inputTokens == other.inputTokens && outputTokens == other.outputTokens
+        guard isHistoricalAntigravityReading == other.isHistoricalAntigravityReading else { return false }
+        return source == other.source && quotas == other.quotas && inputTokens == other.inputTokens && outputTokens == other.outputTokens
             && costs == other.costs && balances == other.balances && creditBalances == other.creditBalances && note == other.note
     }
     func validate() throws {
@@ -538,6 +561,7 @@ extension UsageSnapshot {
         note = try c.decodeIfPresent(String.self, forKey: .note)
         deadlines = try c.decodeIfPresent([Deadline].self, forKey: .deadlines)
         creditBalances = try c.decodeIfPresent([CreditBalance].self, forKey: .creditBalances)
+        isUnverifiedAntigravityReport = try c.decodeIfPresent(Bool.self, forKey: .isUnverifiedAntigravityReport)
     }
 }
 /// DeepSeek 等只有余额接口平台的分母基线（实测口径）：某币种自上次余额上升以来观测到的峰值。
@@ -590,11 +614,13 @@ struct Account: Codable, Identifiable {
     var autoDiscovered: Bool = false
     /// Last successful Grok Bot avatar read; legacy file archives remain decodable. Not history.
     var grokBotManualReading: GrokBotUsageReport.ManualReading? = nil
+    // Keep one separate reference per Gemini route, keyed by the persisted connection value.
+    var antigravityReports: [String: UsageSnapshot]? = nil
     /// Source-verified percentage observations, separate from the quota change history.
     var quotaForecastHistory: QuotaForecastHistory? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, provider, kind, name, plan, connection, filePath, scopeID, region, enabled, budget, currency, snapshot, lastAttempt, error, statusNote, balanceBasis, baselines, history, lastQuotaChangedAt, customConfig, showInRail, autoDiscovered, grokBotManualReading, quotaForecastHistory
+        case id, provider, kind, name, plan, connection, filePath, scopeID, region, enabled, budget, currency, snapshot, lastAttempt, error, statusNote, balanceBasis, baselines, history, lastQuotaChangedAt, customConfig, showInRail, autoDiscovered, grokBotManualReading, quotaForecastHistory, antigravityReports
     }
 
     init(id: UUID = UUID(), provider: Provider, kind: AccountKind, name: String, plan: String = "", connection: Connection, filePath: String = "", scopeID: String? = nil, region: String? = nil, enabled: Bool = true, budget: Double? = nil, currency: String = "USD", snapshot: UsageSnapshot? = nil, lastAttempt: Date? = nil, error: String? = nil, statusNote: String? = nil, history: [UsageSnapshot] = []) {
@@ -643,6 +669,7 @@ struct Account: Codable, Identifiable {
         showInRail = try container.decodeIfPresent(Bool.self, forKey: .showInRail) ?? true
         autoDiscovered = try container.decodeIfPresent(Bool.self, forKey: .autoDiscovered) ?? false
         grokBotManualReading = try container.decodeIfPresent(GrokBotUsageReport.ManualReading.self, forKey: .grokBotManualReading)
+        antigravityReports = try container.decodeIfPresent([String: UsageSnapshot].self, forKey: .antigravityReports)
         if var evidence = try? container.decode(QuotaForecastHistory.self, forKey: .quotaForecastHistory) {
             evidence.observations = Array(evidence.observations.suffix(QuotaForecast.maxObservations))
             quotaForecastHistory = evidence
@@ -651,7 +678,32 @@ struct Account: Codable, Identifiable {
 
     var dashboard: String { kind == .agent ? provider.memberURL : provider.apiURL }
     var usesGrokBotQuota: Bool { provider == .grok && kind == .agent && connection == .agentLocal }
-    func stale(at date: Date = Date()) -> Bool { snapshot.map { date.timeIntervalSince($0.observedAt) > 900 } ?? true }
+    var usesAntigravityReport: Bool { antigravityManualSource != nil }
+    var antigravityManualSource: String? {
+        guard provider == .gemini, kind == .agent else { return nil }
+        switch connection {
+        case .geminiApp: return UsageSnapshot.embeddedAntigravityManualSource
+        case .agentLocal: return UsageSnapshot.standaloneAntigravityManualSource
+        default: return nil
+        }
+    }
+    var historicalAntigravityReport: UsageSnapshot? {
+        guard let source = antigravityManualSource else { return nil }
+        if let report = antigravityReports?[connection.rawValue], report.source == source { return report }
+        return snapshot.flatMap { $0.legacyAntigravityConnection == connection ? $0 : nil }
+    }
+    // Archived data has no verified observation or import date, even if a legacy timestamp exists.
+    var unassignedLegacyAntigravityReport: UsageSnapshot? {
+        guard let source = antigravityManualSource else { return nil }
+        if let snapshot, snapshot.isHistoricalAntigravityReading, snapshot.legacyAntigravityConnection != connection {
+            return snapshot
+        }
+        if let report = antigravityReports?[connection.rawValue], report.isHistoricalAntigravityReading, report.source != source {
+            return report
+        }
+        return nil
+    }
+    func stale(at date: Date = Date()) -> Bool { !(snapshot?.isFreshObservation(at: date) ?? false) }
     /// 3.31/3.32 失败兜底（Antigravity、Codex）：读取报错（服务未启动/网络失败/端口未响应）时
     /// 保留最后一次成功快照的额度窗，已过期窗口也照常展示——陈旧由 stale() 的灰环/灰字/「历史数据」标签表达，
     /// 额度区块不整块消失。凭证类错误仍走 errorIsCredential 绝不糊旧数；其余账户维持 3C「过期窗口不展示」口径。
@@ -661,7 +713,7 @@ struct Account: Codable, Identifiable {
         error != nil && !errorIsCredential && ((provider == .gemini && kind == .agent) || (provider == .openai && connection == .codex))
     }
     var displayQuotas: [Quota] {
-        guard let s = snapshot else { return [] }
+        guard let s = snapshot, !s.isHistoricalAntigravityReading else { return [] }
         if keepsSnapshotOnError {
             return s.quotas.filter { !$0.id.contains("status") && !$0.title.contains("运行中") && !$0.title.contains("未启动") }
         }

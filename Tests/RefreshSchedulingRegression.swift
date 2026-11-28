@@ -192,6 +192,104 @@ actor UsageLedger {
         try check(fetchCalls == 1, "Successful credential retry did not restore refresh")
     }
 
+    @MainActor static func checkAntigravityHistoricalImport(in directory: URL) async throws {
+        var fetchCalls = 0
+        let store = MonitorStore(directory: directory, fetch: { _, _ in
+            fetchCalls += 1
+            return .status("Fixture manual report guidance")
+        })
+        var account = Account(provider: .gemini, kind: .agent, name: "Fixture Gemini", connection: .geminiApp)
+        try store.upsert(account)
+        let now = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+        let reset = now.addingTimeInterval(2_700)
+        let observations: [(TimeInterval, Double)] = [(3_720, 60), (1_920, 75), (120, 90)]
+        for (age, used) in observations {
+            var live = UsageSnapshot.empty(source: "Fixture verified source")
+            live.observedAt = now.addingTimeInterval(-age)
+            live.quotas = [.init(id: "verified", title: "Verified window", usedPercent: used,
+                                 resetsAt: reset, windowSeconds: 18_000)]
+            try store.updateSnapshot(live, for: account.id)
+        }
+        let before = store.library.accounts[0]
+        let beforeForecast = QuotaForecast.evaluate(account: before, now: now)
+        try check(beforeForecast.windows.first?.status == .risk, "Fixture must begin with a verified trend")
+        var report = UsageSnapshot.empty(source: UsageSnapshot.embeddedAntigravityManualSource)
+        report.observedAt = now.addingTimeInterval(86_400)
+        report.quotas = [.init(id: "report", title: "Historical window", usedPercent: 100, resetsAt: nil)]
+        try store.importAntigravityReport(report, for: account.id)
+        let after = store.library.accounts[0]
+        guard let historical = after.historicalAntigravityReport else { throw MonitorError.message("Missing historical reference") }
+        try check(historical.isUnverifiedAntigravityReport == true && historical.isHistoricalAntigravityReading,
+                  "Import did not seal report provenance")
+        try check(historical.observedAt >= now && historical.observedAt <= Date(),
+                  "Import must use app import time without trusting the supplied timestamp")
+        try check(after.snapshot == before.snapshot && after.history == before.history
+                  && after.quotaForecastHistory == before.quotaForecastHistory
+                  && after.lastAttempt == before.lastAttempt && after.lastQuotaChangedAt == before.lastQuotaChangedAt,
+                  "Historical import changed the verified reading, forecast, ordinary history or pacing")
+        try check(QuotaForecast.evaluate(account: after, now: now).windows.first?.estimatedExhaustedAt ==
+                  beforeForecast.windows.first?.estimatedExhaustedAt, "Historical import changed the verified estimate")
+
+        let saved = try Data(contentsOf: store.dataURL)
+        try store.importAntigravityReport(report, for: account.id)
+        let duplicate = try Data(contentsOf: store.dataURL)
+        try check(duplicate == saved && store.library.accounts[0].historicalAntigravityReport == historical,
+                  "Duplicate report rewrote the first import")
+        var wrongMode = report
+        wrongMode.source = UsageSnapshot.standaloneAntigravityManualSource
+        var mismatch: String? = nil
+        do { try store.importAntigravityReport(wrongMode, for: account.id) } catch { mismatch = error.localizedDescription }
+        let afterWrongMode = try Data(contentsOf: store.dataURL)
+        try check(mismatch?.contains("报告来源与账户连接方式不符") == true && afterWrongMode == saved
+                  && store.library.accounts[0].historicalAntigravityReport == historical,
+                  "A standalone source was accepted or changed the saved embedded account")
+        let reopened = MonitorStore(directory: directory, fetch: { _, _ in throw MonitorError.message("Unexpected fixture fetch") })
+        let persisted = reopened.library.accounts[0]
+        try check(persisted.snapshot == before.snapshot && persisted.history == before.history
+                  && persisted.historicalAntigravityReport?.quotas == historical.quotas
+                  && persisted.historicalAntigravityReport?.isUnverifiedAntigravityReport == true,
+                  "Verified and historical records failed to reopen separately")
+
+        await store.refreshDue()
+        await store.refreshAll()
+        await store.refreshAll(userInitiated: true)
+        await store.refresh(account.id)
+        await store.refresh(account.id, userInitiated: true)
+        try check(fetchCalls == 0 && store.library.accounts[0].lastAttempt == before.lastAttempt,
+                  "A refresh path touched a report-only account")
+
+        account = store.library.accounts[0]
+        account.connection = .agentLocal
+        try store.upsert(account)
+        try check(store.library.accounts[0].historicalAntigravityReport == nil, "The two report routes shared a reference")
+        mismatch = nil
+        let beforeEmbeddedMismatch = try Data(contentsOf: store.dataURL)
+        do { try store.importAntigravityReport(report, for: account.id) } catch { mismatch = error.localizedDescription }
+        let afterEmbeddedMismatch = try Data(contentsOf: store.dataURL)
+        try check(mismatch?.contains("报告来源与账户连接方式不符") == true && beforeEmbeddedMismatch == afterEmbeddedMismatch
+                  && store.library.accounts[0].historicalAntigravityReport == nil,
+                  "An embedded source was accepted or changed the saved standalone account")
+        report.source = UsageSnapshot.standaloneAntigravityManualSource
+        report.quotas[0].usedPercent = 50
+        try store.importAntigravityReport(report, for: account.id)
+        let standalone = store.library.accounts[0]
+        try check(standalone.snapshot == nil && standalone.history == before.history
+                  && standalone.historicalAntigravityReport?.quotas.first?.remaining == 50
+                  && standalone.stale() && store.health(of: standalone) == .historical,
+                  "Standalone report escaped historical display or ordinary history")
+
+        try FileManager.default.removeItem(at: store.dataURL)
+        try FileManager.default.createDirectory(at: store.dataURL, withIntermediateDirectories: false)
+        report.quotas[0].usedPercent = 70
+        var rejected = false
+        do { try store.importAntigravityReport(report, for: account.id) } catch { rejected = true }
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        try check(rejected && store.library.accounts[0].historicalAntigravityReport == standalone.historicalAntigravityReport
+                  && !files.contains(where: { $0.hasPrefix(".library-") }),
+                  "Failed report replacement published an uncommitted reading or left its stage")
+        store.stop()
+    }
+
     @MainActor static func main() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("RefreshSchedulingRegression-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -352,6 +450,7 @@ actor UsageLedger {
         for _ in 0..<30 { await Task.yield() }
         try check(historyIO.calls == 3, "History settings queued an unauthorized reindex")
         history.stop(); store.stop()
-        print("Refresh scheduling regression passed: quota evidence provenance and persistence, failed account save, disabled startup/due gates, manual override, single-flight, source/disable/delete cancellation, stale-result rejection, shared waiters, service/global concurrency, non-cooperative cancellation slot retention, automatic history cancellation and no hidden settings reindex. No HTTP, credentials, app launch or smoke test.")
+        try await checkAntigravityHistoricalImport(in: root.appendingPathComponent("antigravity-import"))
+        print("Refresh scheduling regression passed: quota evidence provenance and persistence, historical Antigravity import and atomic save failure, disabled gates, manual override, single-flight, cancellation, concurrency and history policy. Synthetic data only.")
     }
 }

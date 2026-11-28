@@ -432,6 +432,18 @@ select { padding-inline-end: 20px; }
 .account-header .marked h2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .account-header .marked p { overflow-wrap: anywhere; }
 .account-reading { display: grid; gap: 12px; min-width: 0; }
+.antigravity-history {
+  display: grid; gap: 8px; min-width: 0; padding: 12px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-panel);
+}
+.antigravity-history-heading h3 { font-size: 13px; }
+.antigravity-links { column-gap: 14px; font-size: 12px; }
+.antigravity-report-quotas { margin: 0; padding: 0; list-style: none; }
+.antigravity-report-quotas > li {
+  flex-wrap: wrap; gap: 3px 10px; padding-block: 6px;
+  border-top: 1px solid var(--border); font-size: 12px;
+}
+.antigravity-report-quotas > li strong { font-variant-numeric: tabular-nums; }
 .account-foot { padding-top: 11px; border-top: 1px solid var(--border); flex-wrap: wrap; }
 .marked { justify-content: flex-start; }
 .provider-mark {
@@ -578,9 +590,16 @@ dialog::backdrop { background: var(--scrim); }
 .dialog-foot { position: sticky; bottom: 0; z-index: 2; border-top: 1px solid var(--border); }
 .dialog-body { padding: 16px 20px; display: grid; align-content: start; gap: 14px; max-height: calc(100dvh - 145px); overflow: auto; }
 .account-dialog { width: min(640px, calc(100% - 30px)); }
-.account-dialog[open] { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
-.account-dialog form { display: grid; gap: 0; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; overflow: hidden; }
-.account-dialog .editor-body { max-height: none; min-height: 0; }
+.antigravity-dialog { width: min(560px, calc(100% - 30px)); }
+:is(.account-dialog, .antigravity-dialog)[open] { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+:is(.account-dialog, .antigravity-dialog) form { display: grid; gap: 0; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; overflow: hidden; }
+.account-dialog .editor-body, .antigravity-dialog .dialog-body { max-height: none; min-height: 0; }
+.antigravity-target { display: grid; gap: 4px; padding: 10px 12px; border-radius: 8px; background: var(--raised); overflow-wrap: anywhere; }
+.antigravity-dialog .field { display: grid; min-width: 0; gap: 7px; }
+.antigravity-dialog input[type="file"] { width: 100%; }
+.antigravity-confirm { display: flex; align-items: start; gap: 8px; }
+.antigravity-confirm input { flex: none; }
+#antigravity-import-error:empty { display: none; }
 .editor-title .marked { gap: 11px; }
 .editor-title .marked > div { min-width: 0; }
 .editor-title h2 { font-size: 21px; font-weight: 650; }

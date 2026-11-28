@@ -62,7 +62,7 @@ enum QuotaForecast {
 
     /// Forecast samples keep their real observation timestamps. The regular change history and ledger keep their own rules.
     static func record(account: inout Account, snapshot: UsageSnapshot, sourceKey: String, now: Date = Date()) {
-        guard account.kind == .agent, !account.usesGrokBotQuota else { return }
+        guard account.kind == .agent, !account.usesGrokBotQuota, !snapshot.isHistoricalAntigravityReading else { return }
         var history: [QuotaForecastObservation] = []
         if let previous = account.quotaForecastHistory, previous.sourceKey == sourceKey {
             history = Array(previous.observations.suffix(maxObservations))
@@ -90,7 +90,9 @@ enum QuotaForecast {
         guard account.enabled else { return .init(status: .excluded, reason: .disabled) }
         if account.usesGrokBotQuota { return .init(status: .excluded, reason: .manualGrok) }
         if account.errorIsCredential { return .init(status: .insufficient, reason: .credential) }
-        guard let snapshot = account.snapshot else { return .init(status: .insufficient, reason: .noReadings) }
+        guard let snapshot = account.snapshot, !snapshot.isHistoricalAntigravityReading else {
+            return .init(status: .insufficient, reason: .noReadings)
+        }
         let quotas = percentageQuotas(snapshot)
         guard !quotas.isEmpty else { return .init(status: .excluded, reason: .nonQuota) }
         let observations = account.quotaForecastHistory?.observations ?? []
@@ -104,8 +106,10 @@ enum QuotaForecast {
     }
 
     private static func percentageQuotas(_ snapshot: UsageSnapshot) -> [Quota] {
-        // These rows measure spend against a wallet, user budget or estimated grant.
-        snapshot.historicalChartQuotas.filter { !derivedBalanceIDs.contains($0.id) && !$0.id.hasPrefix("deepseek-topup-") }
+        snapshot.historicalChartQuotas.filter { quota in
+            // Exclude derived balance rows and positional identities from the retired Antigravity fallback.
+            !derivedBalanceIDs.contains(quota.id) && !quota.id.hasPrefix("deepseek-topup-") && !quota.id.hasPrefix("gemini-cascade-")
+        }
     }
 
     private static func reading(_ quota: Quota, observed: Date) -> QuotaForecastReading? {

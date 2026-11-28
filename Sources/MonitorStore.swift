@@ -199,6 +199,7 @@ import UniformTypeIdentifiers
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         do {
             try handle.write(contentsOf: data)
+            try handle.synchronize()
             try handle.close()
             return staged
         } catch {
@@ -206,6 +207,12 @@ import UniformTypeIdentifiers
             try? FileManager.default.removeItem(at: staged)
             throw error
         }
+    }
+    private func replaceStagedAccountSave(_ staged: URL) throws {
+        let result = staged.path.withCString { from in
+            dataURL.path.withCString { to in Darwin.rename(from, to) }
+        }
+        guard result == 0 else { throw Self.fileError(at: dataURL) }
     }
     private func invalidateRefresh(for id: UUID) {
         revisions[id, default: 0] += 1
@@ -228,6 +235,7 @@ import UniformTypeIdentifiers
             var edited = account
             let current = copy.accounts[i]
             edited.history = current.history
+            edited.antigravityReports = current.antigravityReports
             let sameSource = Self.sameSource(current, edited)
             if sameSource && enteredKey.isEmpty {
                 edited.snapshot = current.snapshot; edited.lastAttempt = current.lastAttempt; edited.error = current.error; edited.statusNote = current.statusNote; edited.grokBotManualReading = current.grokBotManualReading
@@ -239,6 +247,7 @@ import UniformTypeIdentifiers
         } else {
             var created = account
             created.quotaForecastHistory = nil
+            created.antigravityReports = nil
             copy.accounts.append(created)
         }
         try Self.validate(copy)
@@ -249,11 +258,9 @@ import UniformTypeIdentifiers
         if !enteredKey.isEmpty { try KeyVault.save(enteredKey,id:account.id) }
         // 切换连接方式且未提供新密钥时，清理旧连接残留的钥匙串条目。
         else if connectionChanged { KeyVault.delete(account.id) }
-        let replaced = staged.path.withCString { from in
-            dataURL.path.withCString { to in Darwin.rename(from, to) }
-        }
-        guard replaced == 0 else {
-            let error = Self.fileError(at: dataURL)
+        do {
+            try replaceStagedAccountSave(staged)
+        } catch {
             if !enteredKey.isEmpty || connectionChanged {
                 incompleteCredentialSaves.insert(account.id)
                 invalidateRefresh(for: account.id)
@@ -272,6 +279,40 @@ import UniformTypeIdentifiers
         incompleteCredentialSaves.remove(account.id)
         library = copy
     }
+    func importAntigravityReport(_ snapshot: UsageSnapshot, for id: UUID) throws {
+        guard !loadFailed else { throw MonitorError.message("资料库不可写，未导入 Antigravity 报告。") }
+        guard let index = library.accounts.firstIndex(where: { $0.id == id && $0.usesAntigravityReport }) else {
+            throw MonitorError.message("请选择已保存的 Gemini 或 Antigravity 账户导入报告。")
+        }
+        let account = library.accounts[index]
+        guard account.antigravityManualSource == snapshot.source else {
+            throw MonitorError.message("报告来源与账户连接方式不符。请选择对应模式的报告。")
+        }
+        guard !refreshing.contains(id) else {
+            throw MonitorError.message("账户正在同步，请在同步完成后导入 Antigravity 报告。")
+        }
+        guard !snapshot.historicalChartQuotas.isEmpty else {
+            throw MonitorError.message("报告没有可保存的 Antigravity 额度。")
+        }
+        var report = snapshot
+        report.isUnverifiedAntigravityReport = true
+        report.observedAt = Date()
+        try report.validate()
+        let key = account.connection.rawValue
+        if account.antigravityReports?[key]?.sameObservation(as: report) == true { return }
+        var candidate = library
+        var reports = account.antigravityReports ?? [:]
+        reports[key] = report
+        candidate.accounts[index].antigravityReports = reports
+        do {
+            let staged = try stageAccountSave(candidate)
+            defer { try? FileManager.default.removeItem(at: staged) }
+            try replaceStagedAccountSave(staged)
+        } catch {
+            throw MonitorError.message("Antigravity 报告未能保存：\(error.localizedDescription)")
+        }
+        library = candidate
+    }
     func remove(_ id: UUID) {
         guard !loadFailed else { return }
         // 3.33：移除可自动发现的 agent 账户时记住选择，下次扫描不再自动加回。
@@ -281,6 +322,9 @@ import UniformTypeIdentifiers
     }
     func updateSnapshot(_ s: UsageSnapshot, for id: UUID, forecastOrigin: String? = nil) throws {
         guard !loadFailed else { throw MonitorError.message("存档不可写。") }
+        guard !s.isHistoricalAntigravityReading else {
+            throw MonitorError.message("请将 Antigravity 报告导入为历史参考。")
+        }
         try s.validate()
         guard let i = library.accounts.firstIndex(where:{$0.id == id}) else { return }
         let now = Date()
@@ -310,7 +354,8 @@ import UniformTypeIdentifiers
     func refresh(_ id: UUID, userInitiated: Bool = false) async {
         guard !Task.isCancelled, !loadFailed, !suspended, userInitiated || library.autoRefresh,
               !incompleteCredentialSaves.contains(id), !refreshing.contains(id),
-              let a = library.accounts.first(where: { $0.id == id }), a.kind == .agent, a.provider != .custom, a.enabled else { return }
+              let a = library.accounts.first(where: { $0.id == id }), a.kind == .agent, a.provider != .custom, a.enabled,
+              !a.usesAntigravityReport else { return }
         if userInitiated { lastUserActions[id] = Date() }
         let revision = revisions[id, default: 0], token = UUID()
         refreshing.insert(id)
@@ -340,7 +385,10 @@ import UniformTypeIdentifiers
             switch result {
             case .snapshot(var s):
                 let forecastOrigin = s.source
-                if a.connection == .file { s.source = "快照文件" }
+                if a.connection == .file {
+                    if s.isHistoricalAntigravityReading { s.isUnverifiedAntigravityReport = true }
+                    s.source = "快照文件"
+                }
                 let outcome: AlertOutcome
                 // DeepSeek 分母模式：余额接口无百分比，按账户配置注入余额环（基线标记随账户持久化）。
                 if a.connection == .deepseek, let i = library.accounts.firstIndex(where:{$0.id == id}) {
@@ -397,6 +445,7 @@ import UniformTypeIdentifiers
     }
     // 一批账户并行刷新，整轮 180 秒上限：一个挂住的连接器不该拖住整批的下一次到期判定。
     private func refreshGroup(_ ids: [UUID], userInitiated: Bool) async {
+        guard !ids.isEmpty else { return }
         await withTaskGroup(of:Void.self) { race in
             race.addTask { await withTaskGroup(of:Void.self) { group in
                 for id in ids { group.addTask { await self.refresh(id, userInitiated: userInitiated) } }
@@ -408,13 +457,14 @@ import UniformTypeIdentifiers
     }
     func refreshAll(userInitiated: Bool = false) async {
         guard !suspended, userInitiated || library.autoRefresh else { return }
-        await refreshGroup(library.accounts.filter { $0.enabled && $0.kind == .agent && $0.provider != .custom }.map(\.id), userInitiated: userInitiated)
+        await refreshGroup(active.filter { !$0.usesAntigravityReport }.map(\.id), userInitiated: userInitiated)
     }
     func refreshDue() async {
         guard !suspended, library.autoRefresh else { return }
         // 固定/自适应是用户偏好，存 UserDefaults，不进 Library schema（保持存档兼容）。
         let fixed = TokenBundle.defaults.bool(forKey: "refreshFixedInterval")
-        let ids = Self.dueIDs(accounts: active, fixed: fixed, refreshMinutes: library.refreshMinutes, changes: lastChanges, actions: lastUserActions)
+        let ids = Self.dueIDs(accounts: active.filter { !$0.usesAntigravityReport }, fixed: fixed,
+                              refreshMinutes: library.refreshMinutes, changes: lastChanges, actions: lastUserActions)
         await refreshGroup(ids, userInitiated: false)
     }
     var active: [Account] { library.accounts.filter { $0.enabled && $0.kind == .agent && $0.provider != .custom } }
@@ -433,6 +483,9 @@ import UniformTypeIdentifiers
     /// 3.36：统一健康分类的唯一入口——模块顶部、聚合条、导出（总览简报）全部走它。
     func health(of a: Account) -> AccountHealth {
         if !a.warnings(threshold: library.warningThreshold).isEmpty { return .needsAction }
+        if a.usesAntigravityReport && a.snapshot?.isHistoricalAntigravityReading != false {
+            return a.historicalAntigravityReport != nil || a.unassignedLegacyAntigravityReport != nil ? .historical : .ok
+        }
         if a.error != nil {
             // 凭证类（不自愈）或连续失败才算「需处理」；单次读取失败/服务未启动是「暂时无法同步」。
             if a.errorIsCredential { return .needsAction }

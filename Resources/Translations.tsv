@@ -622,4 +622,33 @@ Gemini 暂未启动。启动后自动读取，不预填额度。	Gemini desktop 
 未找到运行中的 Gemini 桌面端 Antigravity 服务。请打开 Gemini 并确认 Antigravity 已启用后重试。	No running Gemini desktop Antigravity service found. Please launch Gemini and ensure Antigravity is enabled.
 未能获取 Gemini Antigravity 本机会话凭证。请在 Gemini 中查看 Antigravity 界面后重试。	Could not acquire Gemini Antigravity local session credentials. Please open the Antigravity view in Gemini and retry.
 Gemini Antigravity 服务已发现但端口未响应，请稍后重试。	Gemini Antigravity service found but port did not respond. Please try again later.
+Gemini 内置 Antigravity	Antigravity in Gemini
+Antigravity 独立版	Standalone Antigravity
+已检测到独立 CLI	Standalone CLI detected
+Gemini 内置 Antigravity · 手动报告	Antigravity in Gemini · imported report
+Antigravity 独立版 · /usage 手动报告	Standalone Antigravity · imported /usage report
+请在账户设置导入 Antigravity 额度报告。	Import an Antigravity quota report in account settings.
+从 Gemini 内置 Antigravity 的官方额度界面复制报告并保存为文本。独立 CLI 的 /usage 报告请导入独立版账户。	Copy the quota report from the official Antigravity view in Gemini and save it as text. Import standalone CLI /usage reports into a standalone account.
+在官方 Antigravity CLI 的交互窗口运行 /usage，将额度面板内容保存为文本后导入。	Run /usage in the official Antigravity CLI's interactive window, then save the quota panel as text and import the file.
+查看 Google 官方说明 ↗	Google's official guide ↗
+保存账户及连接方式后可导入报告。	Save the account and connection before importing a report.
+导入 Antigravity 额度报告…	Import Antigravity Quota Report…
+导入额度报告…	Import Quota Report…
+在主窗口导入	Import in Main Window
+确认报告归属	Confirm Report Account
+目标账户	Destination account
+报告来源	Report source
+请核对报告来自该连接当前登录的正确 Google 账号。账号、观测时间和重置时刻未经核实，报告仅供历史参考。	Check that the report came from the intended Google account signed into this connection. The account, observation time, and reset are unverified. The report is stored as a historical reference.
+确认并导入	Confirm and Import
+账户已变更，请重新选择报告并确认归属。	The destination account changed. Choose the report again and confirm the account.
+已导入历史参考报告。	Imported the historical reference report.
+未能导入 Antigravity 报告。已保存数据保持不变。	Could not import the Antigravity report. Previously saved data was retained.
+请选择 Antigravity UTF-8 文本报告（普通文件，最大 64 KB）。	Choose a regular UTF-8 Antigravity text file (up to 64 KB).
+历史参考	Historical reference
+旧版未归属报告	Unassigned legacy report
+导入时间	Imported
+账号和观测时间未经核实	Account and observation time unverified
+账号、观测时间与重置时刻未经核实。仅供历史参考。	The account, observation time, and reset are unverified. Historical reference only.
+报告来源与账户连接方式不符。请选择对应模式的报告。	The report source does not match this account's connection. Choose a report from the matching mode.
+Antigravity 按模型组共享 5 小时与每周额度。Gemini 内置版与独立版分别导入本机报告，作为历史参考。	Antigravity shares five-hour and weekly limits by model group. Import a local report for the matching Gemini or standalone connection as a historical reference.
 

@@ -120,6 +120,16 @@ function arc(ring) {
   return 'var(--' + (arcColours.has(ring.color) ? ring.color : 'secondary') + ')';
 }
 
+function accountConnection(account) {
+  return providerModes.get(account?.provider)?.[account?.connection];
+}
+
+function openAccount(account) {
+  if (!account) return;
+  const connection = accountConnection(account);
+  openPage(connection?.legacy || connection?.mode === 'antigravity-report' ? 'agents' : 'overview', account.id);
+}
+
 function itemFor(account) {
   const button = actionButton('', '', 'item');
   button.dataset.id = account.id;
@@ -137,15 +147,20 @@ function itemFor(account) {
   });
   button.addEventListener('click', () => {
     closeOverlays();
-    openPage('overview', account.id);
+    openAccount(account);
   });
   button.addEventListener('keydown', moveFocus);
   return button;
 }
 
 function updateItem(button, account) {
-  const ring = account.ring;
-  const status = ring.stale ? '历史读数' : (ring.showsDash ? '尚未获取额度' : '剩余 ' + ring.label);
+  const connection = accountConnection(account);
+  const legacy = connection?.legacy === true;
+  const reportOnly = connection?.mode === 'antigravity-report' && !account.snapshot;
+  const ring = legacy || reportOnly ? { label: '—', color: 'secondary', showsDash: true } : account.ring;
+  const status = legacy ? 'macOS 旧版连接'
+    : reportOnly ? (account.antigravityReport ? '历史报告 · 采集时间未验证' : '待导入报告')
+    : ring.stale ? '历史读数' : (ring.showsDash ? '尚未获取额度' : '剩余 ' + ring.label);
   button.dataset.state = ring.stale ? 'stale' : (ring.showsDash ? 'empty' : 'current');
   button.title = account.name + ' · ' + status;
   button.setAttribute('aria-label', button.title);
@@ -401,7 +416,12 @@ function renderDetails(account) {
   header.append(mark, names, collapse);
   const area = node('div');
   const grok = ring.kind === 'grokbot';
-  if (grok) renderGrok(account, area);
+  const connection = accountConnection(account);
+  if (connection?.legacy) {
+    area.append(blank('macOS 旧版连接', '原账户和历史资料已保留，可在账户明细查看。'));
+  } else if (connection?.mode === 'antigravity-report' && !account.snapshot) {
+    area.append(blank(account.antigravityReport ? '历史报告 · 采集时间未验证' : '待导入报告', '可在账户明细导入或查看历史报告。'));
+  } else if (grok) renderGrok(account, area);
   else renderSnapshot(account, area);
 
   if (account.statusNote && (grok ? Boolean(account.grokBotManualReading && account.statusNote !== account.grokStatus) : Boolean(account.snapshot))) {
@@ -415,8 +435,7 @@ function renderDetails(account) {
   }
 
   const actions = node('div', '', 'detail-actions');
-  const mode = providerModes.get(account.provider)?.[account.connection]?.mode;
-  if (grok || refreshModes.has(mode)) {
+  if (grok || refreshModes.has(connection?.mode)) {
     const running = pending.has(account.id);
     const refresh = actionButton(running ? (grok ? '正在读取…' : '刷新中…') : (grok ? '读取本机额度' : '刷新额度'),
       grok ? 'manual-read' : 'refresh', 'primary-action');
@@ -526,7 +545,7 @@ detail.addEventListener('click', event => {
   const action = button?.dataset.action;
   if (action === 'close') closeOverlays(true);
   if (action === 'account') {
-    openPage('overview', lookingAt);
+    openAccount(state?.rail.find(item => item.id === lookingAt));
     closeOverlays();
   }
   if (action === 'manual-read' || action === 'refresh') refreshAccount(action, lookingAt, button);
@@ -562,6 +581,7 @@ window.addEventListener('resize', requestSizing);
 darkMode.addEventListener('change', theme);
 api('catalog').then(catalog => {
   for (const item of catalog.providers || []) providerModes.set(item.id, item.connectionDetails);
+  if (state) drawRail();
   const account = state?.rail.find(item => item.id === lookingAt);
   if (account) renderDetails(account);
 }).catch(() => {});

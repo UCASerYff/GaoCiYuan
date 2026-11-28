@@ -1,4 +1,4 @@
-"""账户目录。名称和连接方式与 Mac 版 Provider / Connection 的原始值一致。"""
+"""账户目录，保留现有跨平台 Provider 和 Connection 标识。"""
 
 from __future__ import annotations
 
@@ -20,6 +20,9 @@ COMMAND_CODE = "Command Code API"
 DSH = "DeepSeek Harness 本机凭证"
 WORKBUDDY = "WorkBuddy 积分余额（本机只读）"
 GEMINI_APP = "Gemini App 中的 Antigravity"
+ANTIGRAVITY_REPORT = "Antigravity 独立版 /usage 报告"
+GEMINI_APP_LEGACY_NAMES = ("Gemini 桌面端 Antigravity", "Gemini App 内置 Antigravity")
+GEMINI_LEGACY_CONNECTIONS = frozenset((GEMINI_APP, AGENT_LOCAL, *GEMINI_APP_LEGACY_NAMES))
 CUSTOM_API = "自定义 API 余额查询（GET）"
 MINIMAX = "MiniMax Token Plan API"
 MINIMAX_CLI = "MiniMax CLI 套餐额度"
@@ -235,7 +238,7 @@ def available_connections(provider: str, kind: str) -> list[str]:
         if provider == "workbuddy":
             listed.append(WORKBUDDY)
         if provider == "gemini":
-            listed.append(GEMINI_APP)
+            listed.extend((ANTIGRAVITY_REPORT, GEMINI_APP, *GEMINI_APP_LEGACY_NAMES))
         if provider == "custom":
             listed.append(CUSTOM_API)
         if provider == "minimax":
@@ -281,9 +284,15 @@ def windows_read_mode(provider: str, connection: str) -> str:
         return "file"
     if provider == "grok" and connection == AGENT_LOCAL:
         return "grokbot"
+    if provider == "gemini" and connection == ANTIGRAVITY_REPORT:
+        return "antigravity-report"
     if (provider, connection) in _WINDOWS_CONNECTORS:
         return "connector"
     return "unsupported"
+
+
+def is_legacy_gemini_connection(provider: str, connection: str) -> bool:
+    return provider == "gemini" and connection in GEMINI_LEGACY_CONNECTIONS
 
 
 _WINDOWS_CONNECTORS = {
@@ -299,7 +308,7 @@ _WINDOWS_LIMITS = {
     "cursor": "Cursor 的组织管理 API 不提供个人双额度池。可在 Cursor 官方用量页查看。",
     "copilot": "GitHub 的公共账单 API 不返回个人的所有套餐额度窗口。可在 GitHub 官方用量页查看。",
     "grok": "Grok 账号额度与 Grok Bot 本机手动用量是两个独立来源。此账号连接没有公开查询接口。",
-    "gemini": "Windows 版搞词元可读取本地 JSON 快照。独立版 Antigravity 可在官方 CLI 运行 /usage 查看共享额度，Gemini 内置连接仅适用于 macOS。",
+    "gemini": "这是已保存的旧 Gemini 连接。请另建 Antigravity 独立版账户来导入 /usage 报告。",
     "claude": "Claude 桌面会话读取依赖 macOS。Claude Code 可通过官方状态栏推送额度。",
     "kimi": "Windows 可以使用 Kimi 官方用量页查看额度。Mac 的本机桌面订阅页读取暂未移植。",
     "doubao": "豆包订阅页的本机读取已在 macOS 验证。请在豆包客户端查看额度。",
@@ -317,7 +326,7 @@ _WINDOWS_LIMITS = {
 
 
 def default_connection(provider: str) -> str:
-    preferred = {"openai": CODEX, "claude": CLAUDE_STATUSLINE, "grok": AGENT_LOCAL, "mimo": MIMO,
+    preferred = {"openai": CODEX, "claude": CLAUDE_STATUSLINE, "grok": AGENT_LOCAL, "mimo": MIMO, "gemini": ANTIGRAVITY_REPORT,
                  "minimax": MINIMAX_CLI, "opencode": OPENCODE_GO, "alibaba": ALIBABA_TOKEN_CLI}
     return preferred.get(provider, FILE)
 
@@ -330,8 +339,12 @@ def connection_details(provider: str, connection: str) -> dict:
         details.update(pathLabel="快照文件路径", help="读取明确选择的本地 JSON 快照。")
     elif mode == "grokbot":
         details.update(label="Grok Bot 本机用量", help="只有点击「读取本机额度」才读取应用资料里的 grokbot-usage.json。")
+    elif mode == "antigravity-report":
+        details.update(help="在官方 Antigravity CLI 中登录目标账户并运行 /usage，将输出另存为 UTF-8 文本后导入。报告账户及采集时间未经验证，仅作历史参考。")
     elif mode == "unsupported":
         details.update(help=_WINDOWS_LIMITS.get(provider, "此连接在 Windows 暂无经验证的读取方式。可从官方页面查看，或选择本地快照。"))
+        if is_legacy_gemini_connection(provider, connection):
+            details["legacy"] = True
     elif provider == "openai":
         details.update(pathLabel="Codex CLI 可执行文件（可选）", help="使用已安装且已登录 ChatGPT 的 Codex CLI 查询额度。首次点击刷新以启用。")
     elif provider == "claude":
@@ -367,7 +380,7 @@ def catalog_entries() -> list[dict]:
                 "note": connection_details(provider, preferred)["help"] if preferred != FILE else _WINDOWS_LIMITS.get(provider, "可查看官方用量页，或接入明确选择的本地快照。"),
                 "url": member_url(provider),
                 "creatable": bool(kinds),
-                "connections": connections,
+                "connections": [ANTIGRAVITY_REPORT] if provider == "gemini" else connections,
                 "defaultConnection": preferred,
                 "connectionDetails": {item: connection_details(provider, item) for item in connections},
                 "removed": provider == "custom" or (INTEGRATIONS.get(provider) is not None and INTEGRATIONS[provider].kind != "Agent"),
@@ -391,8 +404,7 @@ _CONNECTION_ALIASES = {
     "manual": AGENT_LOCAL,
     "阿里云余额 API": ALIYUN,
     "火山引擎余额 API": VOLC,
-    "Gemini 桌面端 Antigravity": GEMINI_APP,
-    "Gemini App 内置 Antigravity": GEMINI_APP,
+    **dict.fromkeys(GEMINI_APP_LEGACY_NAMES, GEMINI_APP),
 }
 
 

@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$InstallerPath = (Join-Path $PSScriptRoot 'dist\GaoCiYuan-Windows-4.14-build6-x64-Setup.exe'),
+    [string]$InstallerPath = (Join-Path $PSScriptRoot 'dist\GaoCiYuan-Windows-4.14-build7-x64-Setup.exe'),
     [string]$PreviousInstallerPath,
     [switch]$HeadlessServerOnly,
     [switch]$KeepArtifacts
@@ -9,10 +9,12 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$expectedVersion = '4.14+6'
-$expectedFileVersion = '4.14.6.0'
-$previousVersion = '4.13+5'
-$previousFileVersion = '4.13.5.0'
+$expectedVersion = '4.14+7'
+$expectedFileVersion = '4.14.7.0'
+$previousVersions = @{
+    '4.13.5.0' = '4.13+5'
+    '4.14.6.0' = '4.14+6'
+}
 $productName = ConvertFrom-Json '"\u641e\u8bcd\u5143"'
 $fileConnection = ConvertFrom-Json '"\u81ea\u52a8\u8bfb\u53d6\u5feb\u7167\u6587\u4ef6"'
 $localConnection = ConvertFrom-Json '"\u672c\u673a\u8f6f\u4ef6\u81ea\u52a8\u8bfb\u53d6"'
@@ -141,7 +143,7 @@ function Assert-X64Pe([string]$Path) {
     } finally { $reader.Close() }
 }
 
-function Confirm-Installer([string]$Path, [string]$FileVersion) {
+function Confirm-Installer([string]$Path, [string[]]$FileVersions) {
     $resolved = (Resolve-Path -LiteralPath $Path).ProviderPath
     $hashPath = "$resolved.sha256"
     Assert-Test (Test-Path -LiteralPath $hashPath -PathType Leaf) "The matching SHA-256 file is required for '$resolved'."
@@ -149,7 +151,9 @@ function Confirm-Installer([string]$Path, [string]$FileVersion) {
     Assert-Test ($expectedHash -match '^[0-9A-Fa-f]{64}$' -and
         (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash -eq $expectedHash) "Installer SHA-256 mismatch for '$resolved'."
     Assert-X64Pe $resolved
-    Assert-Test ((Get-Item -LiteralPath $resolved).VersionInfo.FileVersion.Trim() -eq $FileVersion) "Expected installer version $FileVersion at '$resolved'."
+    Assert-Test ($FileVersions -contains (Get-Item -LiteralPath $resolved).VersionInfo.FileVersion.Trim()) (
+        "Expected installer version $($FileVersions -join ' or ') at '$resolved'."
+    )
     return $resolved
 }
 
@@ -229,7 +233,8 @@ Assert-Test ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [R
     'Run the release smoke on a native Windows x64 host.'
 )
 $installerPath = Confirm-Installer $InstallerPath $expectedFileVersion
-$previousInstaller = if ($PreviousInstallerPath) { Confirm-Installer $PreviousInstallerPath $previousFileVersion }
+$previousInstaller = if ($PreviousInstallerPath) { Confirm-Installer $PreviousInstallerPath @($previousVersions.Keys) }
+$previousVersion = if ($previousInstaller) { $previousVersions[(Get-Item -LiteralPath $previousInstaller).VersionInfo.FileVersion.Trim()] }
 
 $normalInstall = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'Programs\GaoSeries\GaoCiYuan'
 $shortcutPaths = @(

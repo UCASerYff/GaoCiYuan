@@ -632,7 +632,7 @@ struct PanelDetailCard: View {
                     }
                     Spacer()
                 }
-                if let s = account.snapshot, !account.errorIsCredential {
+                if let s = account.snapshot, !s.isHistoricalAntigravityReading, !account.errorIsCredential {
                     if account.provider == .dsh {
                         // dsh 钱包语义：大号余额 + 赠金/累计消费行，无额度窗、无重置倒计时。
                         if let b = s.balances.first {
@@ -683,25 +683,20 @@ struct PanelDetailCard: View {
                     if account.stale() {
                         Text(L("数据截至 \(displayDate(s.observedAt))")).font(.system(size: 9)).foregroundStyle(.orange)
                     }
-                } else if account.errorIsCredential {
+                } else if account.errorIsCredential && !account.usesAntigravityReport {
                     Label(L("凭证已失效，重新连接前不展示旧读数。"), systemImage: "key.slash").font(.caption).foregroundStyle(.orange)
-                } else {
+                } else if account.historicalAntigravityReport == nil && account.unassignedLegacyAntigravityReport == nil {
                     Text(L("尚未获取用量")).font(.caption).foregroundStyle(.secondary)
                 }
+                if let report = account.historicalAntigravityReport {
+                    historicalAntigravitySection(report)
+                } else if let archived = account.unassignedLegacyAntigravityReport {
+                    historicalAntigravitySection(archived, archived: true)
+                }
                 if let status = GrokBotBridge.visibleStatus(account) { Text(L(status)).font(.system(size: 9)).foregroundStyle(.secondary) }
-                if let error = account.error { Text(L(error)).font(.system(size: 9)).foregroundStyle(.orange).lineLimit(2) }
+                if let error = account.error, !account.usesAntigravityReport { Text(L(error)).font(.system(size: 9)).foregroundStyle(.orange).lineLimit(2) }
                 HStack {
-                    Button { Task { await store.refresh(account.id, userInitiated: true) } } label: {
-                        Label(L(syncTitle(account)), systemImage: "arrow.clockwise")
-                            .font(.caption.weight(.medium))
-                            .padding(.horizontal, 10).padding(.vertical, 3)
-                            .foregroundStyle(PanelTheme.iris)
-                            .background(PanelTheme.iris.opacity(0.12), in: Capsule())
-                            .overlay { Capsule().strokeBorder(PanelTheme.iris.opacity(0.22), lineWidth: 0.5) }
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(store.refreshing.contains(account.id) || !account.enabled)
-                    .opacity(store.refreshing.contains(account.id) || !account.enabled ? 0.5 : 1)
+                    quotaAction
                     if account.provider == .dsh {
                         Button { if let url = URL(string: DshBridge.topUpURL) { NSWorkspace.shared.open(url) } } label: {
                             Label(L("去充值"), systemImage: "plus.circle")
@@ -745,6 +740,35 @@ struct PanelDetailCard: View {
         }
     }
 
+    private var quotaAction: some View {
+        let manual = account.usesAntigravityReport
+        let unavailable = !manual && (store.refreshing.contains(account.id) || !account.enabled)
+        return Button {
+            if manual {
+                NotificationCenter.default.post(name: .gaoOpenMainWindow, object: nil, userInfo: ["account": account.id.uuidString])
+            } else {
+                Task { await store.refresh(account.id, userInitiated: true) }
+            }
+        } label: {
+            Label(L(manual ? "在主窗口导入" : syncTitle(account)), systemImage: manual ? "doc.badge.plus" : "arrow.clockwise")
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 10).padding(.vertical, 3)
+                .foregroundStyle(PanelTheme.iris)
+                .background(PanelTheme.iris.opacity(0.12), in: Capsule())
+                .overlay { Capsule().strokeBorder(PanelTheme.iris.opacity(0.22), lineWidth: 0.5) }
+        }
+        .buttonStyle(.plain)
+        .disabled(unavailable)
+        .opacity(unavailable ? 0.5 : 1)
+    }
+
+    private func historicalAntigravitySection(_ report: UsageSnapshot, archived: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            AntigravityReportCaption(report: report, archived: archived)
+            ForEach(report.historicalChartQuotas) { quota in quotaRow(quota, historical: true) }
+        }
+    }
+
     /// Grok Bot 手动读取左下角头像栏目的真实已用量；自动同步在非前台时补读。其他账户仍是「立即同步」。
     private func syncTitle(_ account: Account) -> String {
         guard GrokBotBridge.isUsageRoute(account) else {
@@ -755,8 +779,8 @@ struct PanelDetailCard: View {
 
     /// 一条额度：标题与大数字同排，渐变胶囊条表达剩余量，9pt 重置倒计时垫底。
     /// 历史数据不着阈值色：过期读数染成色是假装它仍然新鲜。
-    private func quotaRow(_ q: Quota) -> some View {
-        let fresh = !account.stale()
+    private func quotaRow(_ q: Quota, historical: Bool = false) -> some View {
+        let fresh = !historical && !account.stale()
         let color: Color = fresh ? (q.remaining <= store.library.warningThreshold ? .orange : Theme.teal) : .secondary
         return VStack(alignment: .leading, spacing: 3) {
             HStack {
@@ -776,8 +800,10 @@ struct PanelDetailCard: View {
             }
             .frame(height: 5)
             HStack {
-                if let reset = q.resetsAt {
+                if let reset = q.resetsAt, !historical {
                     Text(L("重置：\(displayDate(reset)) · \(Countdown.text(to: reset))"))
+                } else if let reset = q.resetsAt {
+                    Text(L("重置：\(displayDate(reset))"))
                 } else { Text(L("平台未提供重置时间")) }
                 Spacer()
             }.font(.system(size: 9)).foregroundStyle(.tertiary)
@@ -1027,8 +1053,12 @@ final class FloatingPanelController {
                 NotificationCenter.default.post(name: .gaoOpenMainWindow, object: nil)
                 return
             }
-            let id = accounts[index].id
-            Task { await store.refresh(id, userInitiated: true) }
+            let account = accounts[index]
+            if account.usesAntigravityReport {
+                NotificationCenter.default.post(name: .gaoOpenMainWindow, object: nil, userInfo: ["account": account.id.uuidString])
+            } else {
+                Task { await store.refresh(account.id, userInitiated: true) }
+            }
         }
     }
 

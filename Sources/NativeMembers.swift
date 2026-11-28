@@ -11,6 +11,7 @@ struct AgentObservation: Identifiable {
     var status: String
     var snapshot: UsageSnapshot?
     var isMacAppInstalled: Bool = false
+    var connection: Connection? = nil
 }
 
 private final class DoubaoHelperCancellation: @unchecked Sendable {
@@ -230,6 +231,9 @@ enum DoubaoBridge {
         return accounts.filter { account in
             guard account.showInRail else { return false }
             guard discoveryCompleted, account.kind == .agent, local.contains(account.connection), AgentPlatformTable.hasSoftwareIdentity(account.provider) else { return true }
+            if account.usesAntigravityReport {
+                return observations.contains { $0.provider == .gemini && $0.connection == account.connection }
+            }
             guard let observation = observations.first(where: { $0.provider == account.provider }) else { return false }
             return !AgentPlatformTable.hasMacApplicationIdentity(account.provider) || observation.isMacAppInstalled
         }
@@ -241,21 +245,29 @@ enum DoubaoBridge {
 
     nonisolated static func isMacApplicationInstalled(_ p: Provider, in runningApps: [NSRunningApplication]) -> Bool {
         guard AgentPlatformTable.hasMacApplicationIdentity(p) else { return false }
+        return isMacApplicationInstalled(AgentPlatformTable.identity(p), in: runningApps)
+    }
+
+    nonisolated private static func isMacApplicationInstalled(_ identity: AgentPlatformTable.Identity, in runningApps: [NSRunningApplication]) -> Bool {
         let fm = FileManager.default
-        for app in runningApps where AgentPlatformTable.matchesRunning(p, bundle: (app.bundleIdentifier ?? "").lowercased(), name: (app.localizedName ?? "").lowercased()) {
+        for app in runningApps where AgentPlatformTable.matchesRunning(identity, bundle: (app.bundleIdentifier ?? "").lowercased(), name: (app.localizedName ?? "").lowercased()) {
             if let url = app.bundleURL, url.pathExtension == "app", fm.fileExists(atPath: url.path) { return true }
         }
-        for bid in AgentPlatformTable.identity(p).exactBundles {
+        for bid in identity.exactBundles {
             if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid), fm.fileExists(atPath: url.path) { return true }
         }
         let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
         for dir in ["/Applications", "\(home)/Applications"] {
-            for name in AgentPlatformTable.identity(p).appNames where fm.fileExists(atPath: "\(dir)/\(name)") { return true }
+            for name in identity.appNames where fm.fileExists(atPath: "\(dir)/\(name)") { return true }
         }
         return false
     }
 
     nonisolated static func isAgentRunning(_ p: Provider, in runningApps: [NSRunningApplication]) -> Bool {
+        isAgentRunning(AgentPlatformTable.identity(p), in: runningApps)
+    }
+
+    nonisolated private static func isAgentRunning(_ identity: AgentPlatformTable.Identity, in runningApps: [NSRunningApplication]) -> Bool {
         for app in runningApps {
             if app.isTerminated { continue }
             let bundle = (app.bundleIdentifier ?? "").lowercased()
@@ -263,9 +275,31 @@ enum DoubaoBridge {
             let name = (app.localizedName ?? "").lowercased()
             if name.hasPrefix("dock extra") || name.hasPrefix("程序坞") { continue }
             if app.activationPolicy == .prohibited && bundle.isEmpty { continue }
-            if AgentPlatformTable.matchesRunning(p, bundle: bundle, name: name) { return true }
+            if AgentPlatformTable.matchesRunning(identity, bundle: bundle, name: name) { return true }
         }
         return false
+    }
+
+    nonisolated private static func antigravityObservations(in runningApps: [NSRunningApplication], home: String) -> [AgentObservation] {
+        let sources: [(Connection, String, AgentPlatformTable.Identity)] = [
+            (.geminiApp, "Gemini 内置 Antigravity", AgentPlatformTable.geminiEmbeddedAntigravity),
+            (.agentLocal, "Antigravity 独立版", AgentPlatformTable.standaloneAntigravity),
+        ]
+        return sources.compactMap { connection, title, identity in
+            let running = isAgentRunning(identity, in: runningApps)
+            let installed = isMacApplicationInstalled(identity, in: runningApps)
+            let cli: String? = identity.cli.lazy.map { $0.hasPrefix("~/") ? home + String($0.dropFirst(1)) : $0 }
+                .first { path in
+                    guard FileManager.default.isExecutableFile(atPath: path) else { return false }
+                    let target = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+                    return AgentPlatformTable.isStandaloneAntigravityCLIPath(target)
+                }
+            guard running || installed || cli != nil else { return nil }
+            let status = running ? "软件运行中" : installed ? "未启动" : "已检测到独立 CLI"
+            return AgentObservation(id: "gemini.\(connection.rawValue)", provider: .gemini, softwareName: title,
+                                    isRunning: running, cliPath: cli, status: status, snapshot: nil,
+                                    isMacAppInstalled: installed, connection: connection)
+        }
     }
 
     nonisolated static func isAgentInstalled(_ p: Provider, in runningApps: [NSRunningApplication]) -> Bool {
@@ -304,6 +338,10 @@ enum DoubaoBridge {
         var result: [AgentObservation] = []
         for p in Provider.allCases {
             if Task.isCancelled { break }
+            if p == .gemini {
+                result.append(contentsOf: antigravityObservations(in: runningApps, home: home))
+                continue
+            }
             guard Self.isAgentInstalled(p, in: runningApps) else { continue }
             let isRunning = Self.isAgentRunning(p, in: runningApps)
             let candidates = AgentPlatformTable.cliCandidates(p, home: home, appSupport: "", includeDedicatedHelper: false)
@@ -355,7 +393,6 @@ enum DoubaoBridge {
     nonisolated private static let autoAddSpecs: [AutoAddSpec] = [
         AutoAddSpec(provider: .openai, connection: .codex, currency: "USD"),
         AutoAddSpec(provider: .claude, connection: .agentLocal, currency: "USD"),
-        AutoAddSpec(provider: .gemini, connection: .geminiApp, currency: "USD"),
         AutoAddSpec(provider: .grok, connection: .agentLocal, currency: "USD"),
         AutoAddSpec(provider: .kimi, connection: .kimiDesktop, currency: "CNY"),
         AutoAddSpec(provider: .doubao, connection: .agentLocal, currency: "CNY"),
@@ -461,7 +498,7 @@ struct MemberDiscoveryPanel: View {
                         HStack(spacing:8) {
                             ProviderMark(provider:obs.provider,size:24)
                             VStack(alignment:.leading,spacing:2) {
-                                Text(obs.softwareName).font(.caption.weight(.semibold)).lineLimit(1)
+                                Text(L(obs.softwareName)).font(.caption.weight(.semibold)).lineLimit(1)
                                 Text(L(obs.status)).font(.system(size:10)).foregroundStyle(obs.isRunning ? Theme.teal : .secondary)
                             }
                             Spacer()

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from gaociyuan import providers
-from gaociyuan.catalog import AGENT_LOCAL, CLAUDE_STATUSLINE, CODEX, FILE, GEMINI_APP, GROK_ACCOUNT, MIMO, catalog_entries, windows_read_mode
+from gaociyuan.catalog import AGENT_LOCAL, ANTIGRAVITY_REPORT, CLAUDE_STATUSLINE, CODEX, FILE, GEMINI_APP, GROK_ACCOUNT, MIMO, catalog_entries, windows_read_mode
 from gaociyuan.discovery import ProviderDiscovery, automatic_provider, observations_from
 from gaociyuan.errors import AppError
 
@@ -26,9 +26,15 @@ def test_catalog_keeps_provider_ids_and_distinguishes_windows_routes():
     assert not entries["openrouter"]["creatable"]
     assert windows_read_mode("grok", GROK_ACCOUNT) == "unsupported"
     assert windows_read_mode("grok", FILE) == "file"
-    assert entries["gemini"]["defaultConnection"] == FILE
+    assert entries["gemini"]["defaultConnection"] == ANTIGRAVITY_REPORT
+    assert entries["gemini"]["connections"] == [ANTIGRAVITY_REPORT]
+    assert entries["gemini"]["connectionDetails"][GEMINI_APP]["legacy"]
+    assert entries["gemini"]["connectionDetails"][AGENT_LOCAL]["legacy"]
+    assert entries["gemini"]["connectionDetails"][FILE]["mode"] == "file"
     assert entries["gemini"]["url"] == "https://antigravity.google/docs/cli/commands/usage"
     assert "/usage" in entries["gemini"]["note"]
+    assert windows_read_mode("gemini", ANTIGRAVITY_REPORT) == "antigravity-report"
+    assert windows_read_mode("gemini", FILE) == "file"
     assert windows_read_mode("gemini", GEMINI_APP) == "unsupported"
     assert windows_read_mode("gemini", AGENT_LOCAL) == "unsupported"
 
@@ -57,6 +63,22 @@ def test_discovery_separates_desktop_running_and_cli_and_automatic_routes():
     assert discovery.completed and not discovery.rail_visible(hidden)
     assert discovery.rail_visible({**hidden, "autoDiscovered": False})
     assert ProviderDiscovery(enabled=False, collect=lambda: pytest.fail("isolated discovery touched host")).observations(force=True) == []
+
+
+def test_detected_windows_antigravity_only_suggests_standalone_route():
+    def cli(commands):
+        return Path("isolated", "agy.exe") if "agy" in commands else None
+
+    for observations in (
+        observations_from({"antigravity"}, set(), set(), lambda commands: None, lambda identity: False),
+        observations_from(set(), set(), set(), cli, lambda identity: False),
+    ):
+        rows = ProviderDiscovery.automatic_accounts(observations)
+        assert [(row["provider"], row["connection"]) for row in rows] == [("gemini", ANTIGRAVITY_REPORT)]
+    gemini = observations_from({"gemini"}, set(), {"gemini"}, lambda commands: None, lambda identity: False)
+    assert not ProviderDiscovery.automatic_accounts(gemini)
+    assert automatic_provider({"provider": "gemini", "connection": GEMINI_APP}) is None
+    assert automatic_provider({"provider": "gemini", "connection": ANTIGRAVITY_REPORT}) == "gemini"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Win32 package and process APIs")
