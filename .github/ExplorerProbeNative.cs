@@ -47,10 +47,15 @@ namespace GaoCiYuan.Smoke
         }
         public static Rectangle? NotifyBounds(IntPtr window, uint uid)
         {
-            var key = new NotifyId { Size = Marshal.SizeOf<NotifyId>(), Window = window, Id = uid };
             Rectangle rect;
-            if (Shell_NotifyIconGetRect(ref key, out rect) != 0 || rect.Right <= rect.Left || rect.Bottom <= rect.Top) return null;
+            if (NotifyStatus(window, uid, out rect) != 0 || rect.Right <= rect.Left || rect.Bottom <= rect.Top) return null;
             return rect;
+        }
+
+        public static int NotifyStatus(IntPtr window, uint uid, out Rectangle bounds)
+        {
+            var key = new NotifyId { Size = Marshal.SizeOf<NotifyId>(), Window = window, Id = uid };
+            return Shell_NotifyIconGetRect(ref key, out bounds);
         }
 
         public static uint Dpi(IntPtr window) { return GetDpiForWindow(window); }

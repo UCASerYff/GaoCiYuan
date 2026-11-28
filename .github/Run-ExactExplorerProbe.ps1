@@ -71,14 +71,55 @@ $result = [ordered]@{
     shellTaskbarFound = $initialShell -ne [IntPtr]::Zero
 }
 
-function Find-TrayRegistration {
-    $matches = @($n::Windows($app.Id) | Where-Object { $_.Class -cmatch '^com\.gaoseries\.GaoCiYuan[0-9]+SystemTrayIcon$' } | ForEach-Object {
+function Get-TrayCallbacks {
+    $n::Windows($app.Id) | Where-Object { $_.Class -cmatch '^com\.gaoseries\.GaoCiYuan[0-9]+SystemTrayIcon$' } | ForEach-Object {
         $uid = [uint32]([UInt64]([regex]::Match($_.Class, '[0-9]+(?=SystemTrayIcon$)').Value) -band 0xffffffffL)
-        $bounds = $n::NotifyBounds($_.Handle, $uid)
-        if ($bounds) { [PSCustomObject]@{ Window = $_.Handle; Id = $uid; Bounds = $bounds } }
+        $rect = [GaoCiYuan.Smoke.ExplorerProbeNative+Rectangle]::new()
+        $status = $n::NotifyStatus($_.Handle, $uid, [ref]$rect)
+        [PSCustomObject]@{ Window = $_.Handle; Id = $uid; Status = ('0x{0:X8}' -f $status); Bounds = $rect }
+    }
+}
+
+function Find-TrayRegistration {
+    $matches = @(Get-TrayCallbacks | Where-Object {
+        $_.Status -ceq '0x00000000' -and $_.Bounds.Right -gt $_.Bounds.Left -and $_.Bounds.Bottom -gt $_.Bounds.Top
     })
     Assert-Probe ($matches.Count -le 1) 'Explorer reported duplicate notifications for the exact packaged process.'
     if ($matches.Count -eq 1) { return $matches[0] }
+}
+
+function Open-NotificationOverflow([IntPtr]$ShellWindow) {
+    try {
+        Add-Type -AssemblyName UIAutomationClient
+        Add-Type -AssemblyName UIAutomationTypes
+        $shellElement = [Windows.Automation.AutomationElement]::FromHandle($ShellWindow)
+        $button = [Windows.Automation.PropertyCondition]::new(
+            [Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Button)
+        $controls = $shellElement.FindAll([Windows.Automation.TreeScope]::Descendants, $button)
+        $candidates = @($controls | Where-Object {
+            $_.Current.Name -match '(?i)hidden icons|notification overflow' -or
+            $_.Current.AutomationId -match '(?i)Chevron|Overflow'
+        })
+        $result['overflowCandidates'] = @($candidates | ForEach-Object {
+            @{ name = $_.Current.Name; id = $_.Current.AutomationId }
+        })
+        $target = $candidates | Where-Object { $_.Current.IsEnabled -and -not $_.Current.IsOffscreen } | Select-Object -First 1
+        if (-not $target) { return $false }
+        $invoker = $null
+        if ($target.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$invoker)) {
+            $invoker.Invoke()
+            return $true
+        }
+        $expander = $null
+        if ($target.TryGetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$expander)) {
+            $expander.Expand()
+            return $true
+        }
+        return $false
+    } catch {
+        $result['overflowError'] = $_.Exception.Message
+        return $false
+    }
 }
 
 function Add-Bounds($Bounds) {
@@ -128,6 +169,7 @@ try {
     $shell = Get-Process -Id ($n::Owner($initialShell))
     $expectedShellPath = Join-Path $env:WINDIR 'explorer.exe'
     Assert-Probe ($shell.SessionId -eq $session -and $shell.Path -ieq $expectedShellPath) 'The initial shell is not the hosted session Windows Explorer.'
+    $result.sampleTransport = $t::ProbeShell()
     $scratch = Join-Path $env:RUNNER_TEMP ('gaociyuan-app-explorer-' + [Guid]::NewGuid().ToString('N'))
     $null = New-Item -ItemType Directory -Path $scratch
     $app = Start-Process -FilePath $Executable -PassThru -ArgumentList @('--data-dir', ('"{0}"' -f $scratch), '--no-refresh')
@@ -159,9 +201,19 @@ try {
         $result[('windowIcon' + $kind)] = $measurement.Pixels
     }
 
-    $tray = Wait-Probe { Find-TrayRegistration } 'Explorer did not locate the actual packaged app notification icon.'
-    $native = Invoke-RestMethod -Uri "$base/api/native" -Headers @{ 'X-Gao-Token' = $token } -NoProxy -TimeoutSec 4
-    Assert-Probe ($native.ready -and $native.trayRegistered) 'The app did not report its running Explorer tray registration.'
+    $native = Wait-Probe {
+        $status = Invoke-RestMethod -Uri "$base/api/native" -Headers @{ 'X-Gao-Token' = $token } -NoProxy -TimeoutSec 4
+        if ($status.ready -and @(Get-TrayCallbacks).Count -eq 2) { $status }
+    } 'The installed application did not initialize its ready WebView and tray callbacks.'
+    $result.nativeReady = $native.ready
+    $result.nativeTrayRegistered = $native.trayRegistered
+    $result.callbacksBeforeOverflow = @(Get-TrayCallbacks | Select-Object @{n='Window';e={$_.Window.ToInt64()}},Id,Status)
+    Assert-Probe ($native.trayRegistered) 'The actual packaged app reported no successful Shell_NotifyIcon registration.'
+    $tray = Find-TrayRegistration
+    if (-not $tray) {
+        $result.overflowInvoked = Open-NotificationOverflow $initialShell
+        $tray = Wait-Probe { Find-TrayRegistration } 'Explorer did not locate the actual app notification icon, including its overflow.' 5
+    }
     $result.initialTrayBounds = Add-Bounds $tray.Bounds
     $result.initialTrayCropSaved = Write-NotificationCrop $result.initialTrayBounds 'tray-before-restart'
     $result.initialExplorerId = $shell.Id
@@ -190,7 +242,12 @@ try {
     }
     $newShellProcess = Get-Process -Id ($n::Owner($newShell))
     Assert-Probe ($newShellProcess.SessionId -eq $session -and $newShellProcess.Path -ieq $expectedShellPath) 'The restarted shell is not the hosted Windows Explorer.'
-    $restored = Wait-Probe { Find-TrayRegistration } 'The exact packaged application did not register again after actual Explorer restart.'
+    $result.callbacksAfterRestart = @(Get-TrayCallbacks | Select-Object @{n='Window';e={$_.Window.ToInt64()}},Id,Status)
+    $restored = Find-TrayRegistration
+    if (-not $restored) {
+        $result.overflowInvokedAfterRestart = Open-NotificationOverflow $newShell
+        $restored = Wait-Probe { Find-TrayRegistration } 'The exact application notification was not found after actual Explorer restart.'
+    }
     Assert-Probe ($restored.Id -eq $tray.Id -and $restored.Window -eq $tray.Window -and -not $app.HasExited) 'Recovery changed the app callback identity or process.'
     $result.recreatedExplorerId = $newShellProcess.Id
     $result.restoredTrayBounds = Add-Bounds $restored.Bounds
