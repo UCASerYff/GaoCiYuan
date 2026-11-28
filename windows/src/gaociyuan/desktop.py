@@ -9,6 +9,7 @@ import sys
 import threading
 import winreg
 from ctypes import wintypes
+from io import BytesIO
 from pathlib import Path
 
 import webview
@@ -28,19 +29,97 @@ RUNTIME_KEY = r'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-0
 UINT = wintypes.UINT
 HWND = wintypes.HWND
 RECT = wintypes.RECT
+WM_SETICON = 0x0080
+ICON_SMALL, ICON_BIG = 0, 1
+SM_CXICON, SM_CYICON = 11, 12
+SM_CXSMICON, SM_CYSMICON = 49, 50
+SMTO_ABORTIFHUNG, SMTO_ERRORONEXIT = 0x0002, 0x0020
 
 
 class MONITORINFO(ctypes.Structure):
     _fields_ = [('cbSize', wintypes.DWORD), ('rcMonitor', RECT), ('rcWork', RECT), ('dwFlags', wintypes.DWORD)]
 
 
+class WindowsIconAssets:
+    def __init__(self, user32, directory: Path):
+        self.user32 = user32
+        self.ico = directory / 'GaoCiYuan.ico'
+        self.png = directory / 'GaoCiYuanIcon.png'
+        self._pixels: dict[tuple[int, int], Image.Image] = {}
+        user32.GetDpiForWindow.restype = UINT
+        user32.GetDpiForSystem.restype = UINT
+        user32.GetSystemMetricsForDpi.argtypes = (ctypes.c_int, UINT)
+        user32.FindWindowW.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR)
+        user32.FindWindowW.restype = HWND
+        user32.CreateIconFromResourceEx.argtypes = (
+            ctypes.c_void_p, wintypes.DWORD, wintypes.BOOL, wintypes.DWORD, ctypes.c_int, ctypes.c_int, UINT,
+        )
+        user32.CreateIconFromResourceEx.restype = wintypes.HICON
+        user32.DestroyIcon.argtypes = (wintypes.HICON,)
+
+    def size(self, dpi: int, *, small: bool) -> tuple[int, int]:
+        indexes = (SM_CXSMICON, SM_CYSMICON) if small else (SM_CXICON, SM_CYICON)
+        default = 16 if small else 32
+        width, height = (self.user32.GetSystemMetricsForDpi(index, dpi or 96) for index in indexes)
+        return width or default, height or default
+
+    def tray_size(self) -> tuple[int, int]:
+        taskbar = self.user32.FindWindowW('Shell_TrayWnd', None)
+        dpi = self.user32.GetDpiForWindow(taskbar) if taskbar else 0
+        return self.size(dpi or self.user32.GetDpiForSystem(), small=True)
+
+    def pixels(self, size: tuple[int, int]) -> Image.Image:
+        image = self._pixels.get(size)
+        if image is not None:
+            return image
+        if self.ico.is_file():
+            with Image.open(self.ico) as source:
+                width, height = size
+                frame = min(source.ico.sizes(), key=lambda pair: (
+                    pair[0] < width or pair[1] < height, abs(pair[0] - width) + abs(pair[1] - height),
+                ))
+                image = source.ico.getimage(frame).convert('RGBA')
+        else:
+            with Image.open(self.png) as source:
+                image = source.convert('RGBA')
+        if image.size != size:
+            image = image.resize(size, Image.Resampling.LANCZOS)
+        return self._pixels.setdefault(size, image)
+
+    def create(self, size: tuple[int, int], warning: bool = False):
+        image = self.pixels(size)
+        if warning:
+            # Draw at 4× for clean badge edges even on a 16-pixel notification icon.
+            width, height = (4 * value for value in size)
+            edge = min(width, height)
+            diameter = round(edge * 0.28)
+            inset = max(1, round(edge * 0.04))
+            badge = Image.new('RGBA', (width, height))
+            ImageDraw.Draw(badge).ellipse(
+                (width - inset - diameter, inset, width - inset, inset + diameter),
+                fill='#ee7762', outline='white', width=max(2, round(edge * 0.035)),
+            )
+            image = Image.alpha_composite(image, badge.resize(size, Image.Resampling.LANCZOS))
+        encoded = BytesIO()
+        image.save(encoded, format='PNG')
+        data = encoded.getvalue()
+        # Since Vista, an RT_ICON image can be PNG data. Use the chosen frame as-is.
+        return self.user32.CreateIconFromResourceEx(
+            ctypes.create_string_buffer(data), len(data), True, 0x00030000, *size, 0,
+        )
+
+
 class DesktopTray(Icon):
-    def __init__(self, desktop, image, menu):
+    def __init__(self, desktop, icons, menu):
         self.desktop = desktop
+        self.icons = icons
         self.registered = False
+        self._warning = False
+        self._frame = None
+        self._icon_lock = threading.RLock()
         self._stop_requested = threading.Event()
         self._worker = None
-        super().__init__(APP_ID, icon=image, title=APP_NAME, menu=menu)
+        super().__init__(APP_ID, icon=icons.pixels(icons.tray_size()), title=APP_NAME, menu=menu)
 
     def start(self):
         self._worker = threading.Thread(target=self._run_tray, name='gaociyuan-tray')
@@ -82,17 +161,47 @@ class DesktopTray(Icon):
         return bool(tray_win32.Shell_NotifyIcon(code, data))
 
     def _show(self):
-        self._assert_icon_handle()
-        flags = tray_win32.NIF_MESSAGE | tray_win32.NIF_ICON | tray_win32.NIF_TIP
-        fields = {'uCallbackMessage': tray_win32.WM_NOTIFY, 'hIcon': self._icon_handle, 'szTip': self.title}
-        self.registered = (self._message(tray_win32.NIM_ADD, flags, **fields)
-                           or self._message(tray_win32.NIM_MODIFY, flags, **fields))
+        with self._icon_lock:
+            if self._stop_requested.is_set():
+                self.registered = False
+                return
+            # pystray calls this again on TaskbarCreated, including a primary DPI change.
+            self._assert_icon_handle()
+            flags = tray_win32.NIF_MESSAGE | tray_win32.NIF_ICON | tray_win32.NIF_TIP
+            fields = {'uCallbackMessage': tray_win32.WM_NOTIFY, 'hIcon': self._icon_handle, 'szTip': self.title}
+            self.registered = (self._message(tray_win32.NIM_ADD, flags, **fields)
+                               or self._message(tray_win32.NIM_MODIFY, flags, **fields))
+
+    def _assert_icon_handle(self):
+        frame = (self.icons.tray_size(), self._warning)
+        if self._icon_handle and frame == self._frame:
+            return
+        handle = self.icons.create(*frame)
+        if handle:
+            self._release_icon()
+            self._icon_handle = handle
+            self._frame = frame
+        elif not self._icon_handle:
+            super()._assert_icon_handle()
+
+    def update_status(self, warning: bool) -> None:
+        with self._icon_lock:
+            self._warning = warning
+            if not self.registered or self._stop_requested.is_set():
+                return
+            previous = self._icon_handle
+            self._assert_icon_handle()
+            if previous != self._icon_handle and not self._message(
+                tray_win32.NIM_MODIFY, tray_win32.NIF_ICON, hIcon=self._icon_handle,
+            ):
+                self._show()
 
     def _hide(self):
-        try:
-            super()._hide()
-        finally:
-            self.registered = False
+        with self._icon_lock:
+            try:
+                super()._hide()
+            finally:
+                self.registered = False
 
     def _on_notify(self, wparam, lparam):
         if lparam == 0x405:  # NIN_BALLOONUSERCLICK
@@ -122,7 +231,8 @@ class Desktop:
         self._floating_detail_side = None
         self._previous_dark = None
         self._last_monitor = None
-        self._tray_warning = None
+        self._main_icon_state = None
+        self._main_icons: dict[tuple[int, int], int] = {}
         self._drag_rect = None
 
         # Configure before WinForms creates its first HWND.
@@ -136,6 +246,10 @@ class Desktop:
         self.user32.SetWindowPos.argtypes = (HWND, HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, UINT)
         self.user32.GetWindowRect.argtypes = (HWND, ctypes.POINTER(RECT))
         self.user32.GetDpiForWindow.argtypes = (HWND,)
+        self.user32.SendMessageTimeoutW.argtypes = (
+            HWND, UINT, wintypes.WPARAM, wintypes.LPARAM, UINT, UINT, ctypes.POINTER(ctypes.c_size_t),
+        )
+        self.user32.SendMessageTimeoutW.restype = wintypes.LPARAM
         self.user32.MessageBoxW.argtypes = (HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, UINT)
         try:
             self.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # Per-monitor v2
@@ -159,10 +273,11 @@ class Desktop:
                                            on_top=True, transparent=True, js_api=PanelBridge(self),
                                            background_color=background)
         self.main.events.closing += self._close_main
+        self.main.events.before_show += self._update_main_icons
         self.main.events.loaded += self._main_loaded
         self.panel.events.loaded += self._panel_loaded
-        self.tray_image = Image.open(brand_dir() / 'GaoCiYuanIcon.png').convert('RGBA').resize((64, 64), Image.Resampling.LANCZOS)
-        self.tray = DesktopTray(self, self.tray_image, Menu(
+        self._icon_assets = WindowsIconAssets(self.user32, brand_dir())
+        self.tray = DesktopTray(self, self._icon_assets, Menu(
             MenuItem('打开搞词元', lambda: self.open_main(), default=True),
             MenuItem('悬浮窗', self.toggle_panel, checked=lambda _: bool(self.store.settings['panelFloating'])),
             MenuItem('设置', lambda: self.open_main('#settings')),
@@ -201,9 +316,14 @@ class Desktop:
         try:
             webview.start(self._run, gui='edgechromium', private_mode=False, storage_path=str(profile))
         finally:
-            self.tray.stop()
-            if self.mutex:
-                ctypes.windll.kernel32.CloseHandle(self.mutex)
+            try:
+                self.tray.stop()
+            finally:
+                for icon in self._main_icons.values():
+                    self.user32.DestroyIcon(icon)
+                self._main_icons.clear()
+                if self.mutex:
+                    ctypes.windll.kernel32.CloseHandle(self.mutex)
 
     def _run(self) -> None:
         try:
@@ -223,6 +343,7 @@ class Desktop:
                     break
                 if self.ready:
                     self._update_titlebar()
+                    self._update_main_icons()
                 if self.panel_ready:
                     self._sync_panel()
                 if self.tray.registered:
@@ -242,6 +363,31 @@ class Desktop:
     def _main_loaded(self) -> None:
         self.ready = True
         self._update_titlebar()
+
+    def _update_main_icons(self) -> None:
+        if self.hidden:
+            return
+        hwnd = self.handle(self.main)
+        if not hwnd:
+            return
+        window = HWND(hwnd)
+        dpi = self.user32.GetDpiForWindow(window)
+        state = (hwnd, dpi)
+        if state == self._main_icon_state:
+            return
+        for icon_type in (ICON_SMALL, ICON_BIG):
+            size = self._icon_assets.size(dpi, small=icon_type == ICON_SMALL)
+            icon = self._main_icons.get(size)
+            if not icon:
+                icon = self._icon_assets.create(size)
+                if not icon:
+                    return
+                self._main_icons[size] = icon
+            if not self.user32.SendMessageTimeoutW(
+                window, WM_SETICON, icon_type, icon, SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT, 100, None,
+            ):
+                return
+        self._main_icon_state = state
 
     def _panel_loaded(self) -> None:
         self.panel_ready = True
@@ -325,13 +471,7 @@ class Desktop:
         with self.server.lock:
             threshold = self.store.library['warningThreshold']
             warning = any(attention(item, threshold, self.store.now()) for item in self.store.library['accounts'])
-        if warning == self._tray_warning:
-            return
-        self._tray_warning = warning
-        image = self.tray_image.copy()
-        if warning:
-            ImageDraw.Draw(image).ellipse((45, 3, 62, 20), fill='#ee7762', outline='white', width=2)
-        self.tray.icon = image
+        self.tray.update_status(warning)
 
     def toggle_panel(self) -> None:
         with self.server.work() as accepted, self.server.lock:

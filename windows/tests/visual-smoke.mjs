@@ -22,6 +22,7 @@ const edgeExe = path.join(process.env['ProgramFiles(x86)'], 'Microsoft', 'Edge',
 const [marketingVersion, buildNumber] = expectedVersion.split('+');
 const testAntigravitySync = Number(marketingVersion) >= 4.15;
 const testAntigravity = testAntigravitySync || (marketingVersion === '4.14' && Number(buildNumber) >= 7);
+const testProviderIcons = Number(marketingVersion) > 4.15 || (marketingVersion === '4.15' && Number(buildNumber) >= 2);
 const legacyAntigravityID = '0c7814a8-4f46-4d73-93b8-e5e2747d2bef';
 const legacyAntigravityConnection = 'Gemini App 中的 Antigravity';
 const antigravityConnection = 'Antigravity 独立版 /usage 报告';
@@ -215,9 +216,28 @@ try {
     console.log(`${name}: ${width}×${height} @ ${dpr}`);
   }
 
+  async function checkProviderIcon(width, dark, testFallback = false) {
+    const selector = `.provider-mark[style="--mark-size:${width}px"] > .provider-icon--openai`;
+    await retry(() => devtools.evaluate(`(document.querySelector(${JSON.stringify(selector)})?.naturalWidth || 0) > 0`), 'OpenAI icon failed to decode.');
+    const mark = await devtools.evaluate(`(() => {
+      const image = document.querySelector(${JSON.stringify(selector)});
+      const fallback = image.nextElementSibling;
+      const width = image.getBoundingClientRect().width;
+      const filter = getComputedStyle(image).filter;
+      const hidden = getComputedStyle(fallback).display === 'none';
+      if (${testFallback}) image.dispatchEvent(new Event('error'));
+      return { width, filter, hidden, fallback: getComputedStyle(fallback).display !== 'none' };
+    })()`);
+    assert(mark.width > 0 && mark.width <= width);
+    assert.equal(mark.filter, dark ? 'invert(1)' : 'none');
+    assert.equal(mark.hidden, true);
+    assert.equal(mark.fallback, testFallback);
+  }
+
   await capture('01-overview-light', 'overview', 1160, 760);
   const agentRoute = testAntigravity ? `agents?account=${codexID}` : 'agents';
   await capture('02-agents-light', agentRoute, 1160, 760);
+  if (testProviderIcons) await checkProviderIcon(30, false, true);
   await capture('03-analytics-light', 'analytics', 1160, 840);
   await capture('04-catalog-light', 'catalog', 1160, 760);
   await capture('05-settings-light', 'settings', 1160, 760);
@@ -226,6 +246,7 @@ try {
     await devtools.send('Page.navigate', { url: 'about:blank' });
     await capture('06-overview-dark-150', 'overview', 760, 600, 1.5);
     assert.equal(await devtools.evaluate('document.documentElement.dataset.appearance'), 'dark');
+    if (testProviderIcons) await checkProviderIcon(36, true);
     await capture('07-analytics-dark-150', 'analytics', 760, 600, 1.5);
     await capture('08-settings-dark-150', 'settings', 760, 620, 1.5, '[data-action="settings-tab"][data-value="data"]');
     await capture('09-account-editor-dark-150', agentRoute, 760, 620, 1.5, '#agent-inspector [data-action="edit"]');

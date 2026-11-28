@@ -198,7 +198,7 @@ details.menu > summary.button::after { content: ""; width: 4px; height: 4px; bor
   z-index: 40;
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 3px 5px 0; font-size: 18px; white-space: nowrap; }
-.brand img { display: block; width: 35px; height: 35px; border-radius: 9px; }
+.brand img { display: block; width: 35px; height: 35px; border-radius: 20%; }
 .brand strong { font-weight: 650; letter-spacing: 0.02em; }
 .workspace-sidebar :is(nav, .sidebar-footer) { display: grid; gap: 5px; }
 .sidebar-footer { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); }
@@ -462,7 +462,9 @@ select { padding-inline-end: 20px; }
   line-height: 1;
   font-weight: 700;
 }
-.provider-mark img { display: block; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.provider-mark img { display: block; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.provider-mark img + .provider-initial { display: none; }
+:root[data-appearance="dark"] :is(.provider-icon--openai, .provider-icon--grok, .provider-icon--copilot) { filter: invert(1); }
 .account-card .tags { min-height: 19px; }
 .account-card .info-row { font-size: 12px; }
 .account-card .no-quota { display: grid; gap: 3px; min-height: 62px; align-content: center; }
@@ -778,7 +780,7 @@ th { white-space: nowrap; }
 @media (max-width: 640px) {
   .app-shell { display: block; }
   .workspace-sidebar { height: 55px; flex-direction: row; align-items: center; overflow: visible; padding: 5px 10px; gap: 8px; border-inline-end: 0; border-bottom: 1px solid var(--border); }
-  .brand img { width: 29px; height: 29px; border-radius: 7px; }
+  .brand img { width: 29px; height: 29px; }
   .workspace-sidebar :is(nav, .sidebar-footer) { display: flex; align-items: center; }
   .workspace-sidebar [aria-current]::before { display: none; }
   .workspace-sidebar button { width: 36px; height: 36px; min-height: 36px; }

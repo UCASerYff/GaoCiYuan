@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 MARKETING_VERSION = "4.15"
-WINDOWS_BUILD = "1"
+WINDOWS_BUILD = "2"
 VERSION_LABEL = f"{MARKETING_VERSION}+{WINDOWS_BUILD}"
 APP_NAME = "搞词元"
 EXE_NAME = "GaoCiYuan"

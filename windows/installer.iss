@@ -42,7 +42,7 @@ Source: "{#StageDir}\GaoCiYuan-cli\GaoCiYuan-cli.exe"; DestDir: "{app}"; Flags: 
 Source: "{#Bootstrapper}"; DestName: "WebView2Bootstrapper.exe"; Flags: dontcopy
 
 [Icons]
-Name: "{autoprograms}\{#ProductName}"; Filename: "{app}\{#AppExe}"; AppUserModelID: "{#ProductId}"
+Name: "{autoprograms}\{#ProductName}"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\{#AppExe}"; IconIndex: 0; AppUserModelID: "{#ProductId}"
 
 [Registry]
 Root: HKCU; Subkey: "Software\Classes\gaociyuan"; ValueType: string; ValueData: "URL:GaoCiYuan"; Flags: uninsdeletekey
