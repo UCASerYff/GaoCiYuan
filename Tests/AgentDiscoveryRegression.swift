@@ -13,8 +13,6 @@ enum Log {
     static let store = Sink(), connectors = Sink()
 }
 enum AlertRules { static func attention(_ account: Account, threshold: Double, at: Date) -> [String] { [] } }
-enum AntigravityBridge { static func cachedDiscoverServer() -> Int? { nil } }
-enum GeminiAntigravityBridge { static func isAgyRunning() -> Bool { false } }
 enum DshBridge { static func credentialsAvailable() -> Bool { fatalError("Unexpected credential lookup") } }
 func displayDate(_ date: Date, time: Bool) -> String { "fixture" }
 enum DoubaoReaderPayload {

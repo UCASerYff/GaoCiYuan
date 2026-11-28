@@ -17,8 +17,8 @@ framework="$app/Contents/Frameworks/Token.framework/Versions/A"
 [[ "$(/usr/bin/lipo -archs "$app/Contents/MacOS/GaoCiYuan")" == arm64 ]]
 [[ "$(/usr/bin/lipo -archs "$framework/Token")" == arm64 ]]
 for info in Info.plist "$app/Contents/Info.plist" "$framework/Resources/Info.plist"; do
-    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info")" == 4.13 ]]
-    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info")" == 15 ]]
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info")" == 4.14 ]]
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info")" == 16 ]]
 done
 [[ ! -e "$app/Contents/PlugIns/GaoCiYuanWidgets.appex" ]]
 
@@ -27,6 +27,9 @@ models=(Sources/{Models,AgentTables,ProviderIntegrations,GrokBotUsageReport,Quot
 
 "${compiler[@]}" "${models[@]}" Sources/Log.swift Tests/QuotaForecastRegression.swift -o "$fixture/quota-forecast"
 "$fixture/quota-forecast"
+
+"${compiler[@]}" "${models[@]}" Sources/{AntigravityUsageReport,Log}.swift Tests/AntigravityUsageReportRegression.swift -o "$fixture/antigravity-report"
+"$fixture/antigravity-report"
 
 "${compiler[@]}" Sources/TokenLifecycleWork.swift Tests/TokenLifecycleWorkRegression.swift -o "$fixture/lifecycle"
 "$fixture/lifecycle"

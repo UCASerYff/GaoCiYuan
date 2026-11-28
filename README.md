@@ -1,17 +1,17 @@
-# 搞词元 V4.13
+# 搞词元 V4.14
 
 独立 macOS Agent 软件额度与用量管理应用，包含紧凑总览、Agent 软件管理、用量分析、平台接入和悬浮窗。运行不依赖其他搞系列应用；第三方数据读取需要对应软件及本机现有登录状态。
 
 ## 下载与安装
 
-从 [Releases](https://github.com/UCASerYff/GaoCiYuan/releases/latest) 下载 `GaoCiYuan-4.13.zip` 和同名 `.sha256` 文件。仓库保存源码，安装包作为 Release 附件单独发布。
+从 [Releases](https://github.com/UCASerYff/GaoCiYuan/releases/latest) 下载 `GaoCiYuan-<版本>.zip` 和同名 `.sha256` 文件。仓库保存源码，安装包作为 Release 附件单独发布。
 
 1. 支持 macOS 14 或更高版本、Apple Silicon；暂未提供 Intel 版本。
 2. 解压 ZIP，将 `搞词元.app` 拖入“应用程序”文件夹。
 3. 如果 macOS 拦截打开，请先确认软件来源，再进入“系统设置 → 隐私与安全性”，允许该应用打开。发行包使用 Apple Development 签名，未做 Apple 公证。
 4. 安装后运行一次，真实 Agent 账户、用量分析数据库及悬浮窗设置会继续沿用。旧 LLM 与自定义 API 账户会永久删除；桌面和通知中心小组件不再提供。
 
-下载后可在文件所在目录运行 `shasum -a 256 -c GaoCiYuan-4.13.zip.sha256` 核验安装包。
+下载后可在文件所在目录运行 `shasum -a 256 -c GaoCiYuan-4.14.zip.sha256` 核验安装包，请使用与所下载 ZIP 对应的版本号。
 
 ## 功能
 
@@ -57,6 +57,12 @@
 - `Tests/`：离线及隔离回归验证。
 
 在 GitHub 托管的 `macos-15` arm64 runner 可从干净检出运行 `bash scripts/verify_macos.sh`。它编译 Token.framework 和原生宿主，核对架构和版本，再运行模型、调度、界面源码和安装前置回归。签名由构建脚本以验证用 ad hoc 身份完成。
+
+## V4.14 / build 16
+
+- Gemini 内置 Antigravity 改为按官方 `/usage` 报告显示 Gemini Models 和 Claude and GPT models 两个共享额度组，仅接纳明确标注的 5 小时与每周剩余百分比。没有可核实的账号或重置时刻时保留未知。两个连接各自保留来源和历史。 [官方额度说明](https://antigravity.google/docs/cli/commands/usage)
+- 账户中点「立即同步」可查询已安装且明确支持 `/usage` 的 Google 签名 Gemini 内置工具。若无法同步，在登录了正确 Google 账号的 Antigravity 中运行 `/usage`，将输出保存为文本，然后到该账户设置点「导入 Antigravity 用量报告」。导入使用文件保存时间，上次数据在失败时保留。 [官方命令行说明](https://antigravity.google/docs/cli/headless/)
+- 隐藏悬浮窗时停止透明区域的指针轮询，恢复显示后重新开始。
 
 ## V4.13 / build 15
 

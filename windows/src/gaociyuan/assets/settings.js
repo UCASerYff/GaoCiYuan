@@ -156,7 +156,7 @@ function dataSettings() {
       settingsDescription("Agent 软件可连接标准 JSON 快照。外部脚本更新文件后，应用会定时读取；observedAt 表示实际观测时间，不能用刷新时间冒充。"),
       settingsActions(button("导出快照格式示例…", "snapshot-example", { glyph: "download" })),
     ].join(""))}
-    ${settingsPanel("应用程序", "info", `<div class="preferences-version"><span>搞词元 · ${t("Windows x64 应用")}</span><strong>${text(state.version || "4.13")}</strong></div>`)}
+    ${settingsPanel("应用程序", "info", `<div class="preferences-version"><span>搞词元 · ${t("Windows x64 应用")}</span><strong>${text(state.version || "4.14")}</strong></div>`)}
   </form>`;
 }
 

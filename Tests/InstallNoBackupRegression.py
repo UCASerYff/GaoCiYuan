@@ -121,7 +121,7 @@ elif name=='pluginkit':
 
 with (project_root / 'Info.plist').open('rb') as handle:
     release = plistlib.load(handle)
-check((release['CFBundleShortVersionString'], release['CFBundleVersion']) == ('4.13', '15'), 'release version is not 4.13 / 15')
+check((release['CFBundleShortVersionString'], release['CFBundleVersion']) == ('4.14', '16'), 'release version is not 4.14 / 16')
 for forbidden in ['--rollback', 'rollback.noindex', 'application.zip', 'receipt.json']:
     check(forbidden not in original, 'obsolete installer surface remains: ' + forbidden)
 print('No-backup installer regression passed: isolated install, no rollback/archive/receipt, failure stops without restoration, exact preflight and owned staging cleanup. No real app or user data touched.')

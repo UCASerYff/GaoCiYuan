@@ -21,7 +21,7 @@ NOW = datetime(2026, 11, 27, 8, tzinfo=timezone.utc)
 
 
 def test_platform_filtered_updates_require_explicit_verified_download(tmp_path):
-    update = tmp_path / 'GaoCiYuan-Windows-4.14-x64-Setup.exe'
+    update = tmp_path / 'GaoCiYuan-Windows-4.15-x64-Setup.exe'
     original = b'synthetic build only'
     update.write_bytes(original)
     key = Ed25519PrivateKey.generate()
@@ -31,11 +31,11 @@ def test_platform_filtered_updates_require_explicit_verified_download(tmp_path):
     feed.write_text(f'''<rss xmlns:s="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel>
       <item><enclosure s:os="macos" s:version="99.0" url={quoteattr(update.as_uri())} /></item>
       <item><enclosure s:os="windows" s:arch="arm64" s:version="98.0" url={quoteattr(update.as_uri())} /></item>
-      <item><s:shortVersionString>v4.14</s:shortVersionString><enclosure s:os="windows" s:arch="x64"
+      <item><s:shortVersionString>v4.15</s:shortVersionString><enclosure s:os="windows" s:arch="x64"
         url={quoteattr(update.as_uri())} s:edSignature="{signature}" length="{len(original)}" /></item>
       </channel></rss>''', encoding='utf-8')
     service = UpdateService(tmp_path)
-    assert service.check(feed.as_uri()) == {'status': 'available', 'version': '4.14'}
+    assert service.check(feed.as_uri()) == {'status': 'available', 'version': '4.15'}
     assert not service.directory.exists()
     update.write_bytes(b'X' * len(original))
     with pytest.raises(AppError, match='签名'):
@@ -43,8 +43,8 @@ def test_platform_filtered_updates_require_explicit_verified_download(tmp_path):
     assert not service.directory.exists()
     update.write_bytes(original)
     result = service.download(feed.as_uri(), public_key)
-    assert (service.directory / 'GaoCiYuan-Windows-4.14-x64.exe').read_bytes() == original
-    assert result['version'] == '4.14'
+    assert (service.directory / 'GaoCiYuan-Windows-4.15-x64.exe').read_bytes() == original
+    assert result['version'] == '4.15'
     with pytest.raises(AppError):
         service.download('https://example.invalid/changed.xml', public_key)
 

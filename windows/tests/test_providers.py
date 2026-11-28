@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from gaociyuan import providers
-from gaociyuan.catalog import AGENT_LOCAL, CLAUDE_STATUSLINE, CODEX, FILE, GROK_ACCOUNT, MIMO, catalog_entries, windows_read_mode
+from gaociyuan.catalog import AGENT_LOCAL, CLAUDE_STATUSLINE, CODEX, FILE, GEMINI_APP, GROK_ACCOUNT, MIMO, catalog_entries, windows_read_mode
 from gaociyuan.discovery import ProviderDiscovery, automatic_provider, observations_from
 from gaociyuan.errors import AppError
 
@@ -26,6 +26,11 @@ def test_catalog_keeps_provider_ids_and_distinguishes_windows_routes():
     assert not entries["openrouter"]["creatable"]
     assert windows_read_mode("grok", GROK_ACCOUNT) == "unsupported"
     assert windows_read_mode("grok", FILE) == "file"
+    assert entries["gemini"]["defaultConnection"] == FILE
+    assert entries["gemini"]["url"] == "https://antigravity.google/docs/cli/commands/usage"
+    assert "/usage" in entries["gemini"]["note"]
+    assert windows_read_mode("gemini", GEMINI_APP) == "unsupported"
+    assert windows_read_mode("gemini", AGENT_LOCAL) == "unsupported"
 
 
 def test_discovery_separates_desktop_running_and_cli_and_automatic_routes():

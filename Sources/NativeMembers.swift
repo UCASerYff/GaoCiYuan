@@ -265,9 +265,6 @@ enum DoubaoBridge {
             if app.activationPolicy == .prohibited && bundle.isEmpty { continue }
             if AgentPlatformTable.matchesRunning(p, bundle: bundle, name: name) { return true }
         }
-        if p == .gemini, (AntigravityBridge.cachedDiscoverServer() != nil || GeminiAntigravityBridge.isAgyRunning()) {
-            return true
-        }
         return false
     }
 

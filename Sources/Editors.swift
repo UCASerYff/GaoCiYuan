@@ -63,7 +63,11 @@ struct AccountEditor: View {
                     Text(L("DeepSeek 余额接口不含百分比。「充值以来峰值」以本机观测到的余额峰值为分母，余额上升视为充值重新计满；「我的预算」以上方本月预算数字为分母。")).font(.caption).foregroundStyle(.secondary)
                 }
                 if account.connection == .geminiApp {
-                    Text(L("自动读取本机 Gemini 桌面端内置的 Antigravity 服务与配额（5 小时 / 每周额度池）。Gemini 运行且开启 Antigravity 时自动同步，无需配置 Key。")).font(.callout).foregroundStyle(.secondary)
+                    Text(L("用「立即同步」读取 Gemini 内置的 Antigravity /usage。也可从已登录的 Antigravity 导入文本报告。")).font(.callout).foregroundStyle(.secondary)
+                    if isExisting {
+                        Button(L("导入 Antigravity 用量报告…"), action: importAntigravityReport)
+                            .disabled(store.refreshing.contains(account.id))
+                    }
                 }
                 if account.connection == .agentLocal {
                     if account.provider == .gemini {
@@ -197,6 +201,33 @@ struct AccountEditor: View {
     }
     private var scopeBinding: Binding<String> { Binding(get: { account.scopeID ?? "" }, set: { account.scopeID = $0 }) }
     private func regionBinding(_ fallback: String) -> Binding<String> { Binding(get: { account.region ?? fallback }, set: { account.region = $0 }) }
+    private func importAntigravityReport() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.plainText]
+        guard panel.runModal() == .OK, let url = panel.url,
+              let saved = store.library.accounts.first(where: { $0.id == account.id && $0.connection == .geminiApp }),
+              !store.refreshing.contains(saved.id) else { return }
+        do {
+            let fields = try url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey])
+            guard fields.isRegularFile == true, let date = fields.contentModificationDate,
+                  let size = fields.fileSize, size <= AntigravityUsageReport.maxBytes else {
+                throw MonitorError.message("请选择包含 Antigravity /usage 输出的文本报告（最大 64 KB）。")
+            }
+            let file = try FileHandle(forReadingFrom: url)
+            defer { try? file.close() }
+            let data = try file.read(upToCount: AntigravityUsageReport.maxBytes + 1) ?? Data()
+            let snapshot = try AntigravityUsageReport.parse(data, source: AntigravityUsageReport.importedSource, observedAt: date)
+            guard saved.snapshot.map({ snapshot.observedAt > $0.observedAt }) ?? true else {
+                throw MonitorError.message("报告早于或等于账户上次成功读数。请重新运行 /usage 并保存报告。")
+            }
+            try store.updateSnapshot(snapshot, for: saved.id)
+            testResult = "已导入 Antigravity 用量报告。"
+        } catch let error as MonitorError {
+            testResult = error.localizedDescription
+        } catch {
+            testResult = "无法读取 Antigravity 用量报告。上次读数已保留。"
+        }
+    }
     private func validateDestinationChange() throws {
         try store.validateCredentialRetry(for: account, key: key)
         guard key.isEmpty, let old = store.library.accounts.first(where: { $0.id == account.id }) else { return }

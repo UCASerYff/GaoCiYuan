@@ -599,7 +599,21 @@ Bearer Token	Bearer Token
 Gemini App 中的 Antigravity	Antigravity in Gemini App
 Gemini App 中的 Antigravity（推荐）	Antigravity in Gemini App (Recommended)
 Antigravity 独立 App	Antigravity Standalone App
-自动读取本机 Gemini 桌面端内置的 Antigravity 服务与配额（5 小时 / 每周额度池）。Gemini 运行且开启 Antigravity 时自动同步，无需配置 Key。	Automatically reads the Antigravity service and quotas (5-hour and weekly pools) embedded in the local Gemini desktop app. Syncs automatically when Gemini runs with Antigravity enabled; no API key needed.
+用「立即同步」读取 Gemini 内置的 Antigravity /usage。也可从已登录的 Antigravity 导入文本报告。	Use Sync Now to read Antigravity /usage in Gemini. You can also import the text report from a signed-in Antigravity session.
+Antigravity 按模型组共享 5 小时与每周额度。Gemini 桌面端和独立版是不同连接。	Antigravity shares five-hour and weekly limits by model group. Gemini desktop and standalone Antigravity are separate connections.
+Gemini App 中的 Antigravity · /usage	Antigravity in Gemini App · /usage
+Antigravity /usage 手动报告	Antigravity /usage imported report
+Antigravity · 未注明时段	Antigravity · Window unspecified
+Gemini 的 Antigravity 额度可通过「立即同步」或导入 /usage 报告更新。	Use Sync Now or import an Antigravity /usage report to update Gemini quota.
+请在 Gemini 的 Antigravity 或官方 Antigravity CLI 中运行 /usage。可在账户设置导入额度报告。	Run /usage in Antigravity in Gemini or in the official Antigravity CLI. You can import the report in account settings.
+额度按 /usage 报告中的模型组共享。当前登录账号和重置时刻可在 Antigravity 中核对。	Limits are shared by model group in the /usage report. Check the signed-in account and reset time in Antigravity.
+未读到可确认的 Antigravity 模型组和剩余额度。上次读数已保留。	No supported Antigravity model group and remaining quota found. The last reading was kept.
+Antigravity /usage 未返回可用读数。请在原应用确认登录状态后重试，或导入报告。	Antigravity /usage returned no usable reading. Check your sign-in in the original app and retry, or import a report.
+导入 Antigravity 用量报告…	Import Antigravity Usage Report…
+请选择包含 Antigravity /usage 输出的文本报告（最大 64 KB）。	Choose a text report containing Antigravity /usage output (up to 64 KB).
+报告早于或等于账户上次成功读数。请重新运行 /usage 并保存报告。	The report is no newer than the last successful reading for this account. Run /usage and save the report again.
+已导入 Antigravity 用量报告。	Imported the Antigravity usage report.
+无法读取 Antigravity 用量报告。上次读数已保留。	Couldn't read the Antigravity usage report. The last reading was kept.
 自动读取独立版 Antigravity（或 Antigravity IDE）本机会话与配额池。软件运行中自动保持同步。	Automatically reads the standalone Antigravity (or Antigravity IDE) local session and quota pools. Stays in sync automatically while running.
 Gemini 官方服务 · 仅展示 Gemini 原生模型额度池	Gemini official service · Shows Gemini native model quota only
 Gemini 官方服务	Gemini official service

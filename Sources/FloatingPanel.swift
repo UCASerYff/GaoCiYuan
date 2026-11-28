@@ -120,7 +120,7 @@ struct PanelPointerWatcher: NSViewRepresentable {
         }
 
         private func sample() {
-            guard let window else { return }
+            guard let window, window.isVisible else { lastReported = nil; return }
             let local = convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
             let point = bounds.contains(local) ? local : nil
             if let lastReported, Self.isSame(lastReported, point) { return }
@@ -982,13 +982,6 @@ final class FloatingPanelController {
 
         placement.onChange = { [weak self] in self?.placePanel() }
 
-        // 透明区穿透轮询（见 hitTimer 注释）。0.12s 足够跟手：指针进细条到展开本来就要停一拍。
-        let hitTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.updateHitPassthrough() }
-        }
-        RunLoop.main.add(hitTimer, forMode: .common)
-        self.hitTimer = hitTimer
-
         // 显示器来来去去：任何变化都可能把面板留在不存在的空间里，变了就重排（拖动中除外）。
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -1041,6 +1034,21 @@ final class FloatingPanelController {
 
     deinit { if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }; hitTimer?.invalidate() }
 
+    private func startHitTimer() {
+        guard panel.isVisible, hitTimer == nil else { return }
+        updateHitPassthrough()
+        let timer = Timer(timeInterval: 0.12, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateHitPassthrough() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        hitTimer = timer
+    }
+
+    private func stopHitTimer() {
+        hitTimer?.invalidate()
+        hitTimer = nil
+    }
+
     /// 指针离开面板矩形才穿透给下方窗口；面板矩形内恒可点。
     /// 3.32 教训：区域级穿透（strip/railRect 细判定）在 statusBar 层窗口（顶部停靠）上会把
     /// ignoresMouseEvents 卡死在 true——hover/右键/菜单全部落空，事件直透主窗口。保守版没有状态面：
@@ -1048,6 +1056,7 @@ final class FloatingPanelController {
     /// 3.40：收起时直接把窗口缩到细条命中区（本函数兼管收缩/恢复）——
     /// 透明挡鼠区在物理上不存在，比任何穿透判定都可靠。
     private func updateHitPassthrough() {
+        guard panel.isVisible else { stopHitTimer(); return }
         // 收缩判定镜像 SwiftUI 的 expanded（isMenuOpen/isDragging/指针）并叠加按住态：
         // 拖动/按住/菜单期间绝不动窗口尺寸。
         let shrink = !placement.isRailExpanded && !placement.isDragging && !placement.isPressed && !placement.isMenuOpen
@@ -1095,10 +1104,12 @@ final class FloatingPanelController {
         placePanel()
         panel.orderFrontRegardless()
         placePanel()
+        startHitTimer()
         applyDisplayFollowing()
     }
 
     func hide() {
+        stopHitTimer()
         panel.orderOut(nil)
         applyDisplayFollowing()
     }
@@ -1107,12 +1118,13 @@ final class FloatingPanelController {
     func settingsChanged() {
         applyCollectionBehavior()
         if PanelSettings.read().enabled {
-            if !panel.isVisible { show() }
+            if !panel.isVisible { show(); return }
             placePanel()
+            startHitTimer()
+            applyDisplayFollowing()
         } else {
-            panel.orderOut(nil)
+            hide()
         }
-        applyDisplayFollowing()
     }
 
     private func configurePanel() {

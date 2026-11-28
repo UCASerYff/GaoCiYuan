@@ -131,6 +131,7 @@ const supplementalTranslations = {
   "快照文件": "Snapshot file",
   "本机额度连接": "Client quota connection",
   "手动读取额度": "Manual quota read",
+  "Windows 版搞词元可读取本地 JSON 快照。独立版 Antigravity 可在官方 CLI 运行 /usage 查看共享额度，Gemini 内置连接仅适用于 macOS。": "GaoCiYuan for Windows can read local JSON snapshots. Run /usage in the official standalone Antigravity CLI to view shared limits. The Gemini integration is available on macOS.",
   "搜索 Agent 平台": "Search Agent platforms",
   "搜索本机软件": "Search installed apps",
   "搜索采集来源": "Search collection sources",

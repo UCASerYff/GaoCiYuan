@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 import Security
 import Darwin
 import AppKit
@@ -554,25 +555,6 @@ enum AntigravityBridge {
         return URLSession(configuration: config, delegate: InsecureDelegate(), delegateQueue: nil)
     }()
 
-    // 进程发现结果短 TTL 缓存：状态面板的安装检测走缓存，避免频繁同步 spawn ps/lsof；
-    // 真实额度拉取（fetch）仍走实时 discoverServer，保证数据新鲜。
-    private static var discoveryCache: (value: (pid: Int32, csrfToken: String, ports: [Int])?, at: Date)?
-    private static let discoveryLock = NSLock()
-    static let discoveryTTL: TimeInterval = 60
-    static func cachedDiscoverServer() -> (pid: Int32, csrfToken: String, ports: [Int])? {
-        discoveryLock.lock()
-        if let cached = discoveryCache, Date().timeIntervalSince(cached.at) < discoveryTTL {
-            discoveryLock.unlock()
-            return cached.value
-        }
-        discoveryLock.unlock()
-        let fresh = discoverServer()
-        discoveryLock.lock()
-        discoveryCache = (fresh, Date())
-        discoveryLock.unlock()
-        return fresh
-    }
-
     struct ServerCandidate {
         let pid: Int32
         let csrfToken: String
@@ -652,11 +634,6 @@ enum AntigravityBridge {
         }
     }
 
-    // 兼容旧签名（缓存发现 / 运行检测只看有无）：取优先级最高的候选。
-    static func discoverServer() -> (pid: Int32, csrfToken: String, ports: [Int])? {
-        discoverServers().first.map { ($0.pid, $0.csrfToken, $0.ports) }
-    }
-
     static func parseSummary(_ obj: [String: Any], source: String = "Antigravity 本机服务", note: String = "Antigravity 官方服务 · 仅展示 Gemini 原生模型额度池") throws -> UsageSnapshot {
         let resp = obj["response"] as? [String: Any] ?? [:]
         let groups = resp["groups"] as? [[String: Any]] ?? []
@@ -669,7 +646,7 @@ enum AntigravityBridge {
             let buckets = group["buckets"] as? [[String: Any]] ?? []
             for b in buckets {
                 let bName = b["displayName"] as? String ?? ""
-                let frac = b["remainingFraction"] as? Double ?? 1.0
+                guard let frac = remainingFraction(b) else { continue }
                 let reset = (b["resetTime"] as? String).flatMap { iso.date(from: $0) }
                 let id = b["bucketId"] as? String ?? UUID().uuidString
                 let title: String
@@ -704,20 +681,26 @@ enum AntigravityBridge {
                 continue // 只显示本家模型
             }
             guard let quotaInfo = m["quotaInfo"] as? [String: Any],
-                  let frac = quotaInfo["remainingFraction"] as? Double else { continue }
+                  let frac = remainingFraction(quotaInfo) else { continue }
             let reset = (quotaInfo["resetTime"] as? String).flatMap { iso.date(from: $0) }
             let key = "\(round(frac * 100))-\(quotaInfo["resetTime"] as? String ?? "")"
             if !seenWindows.contains(key) {
                 seenWindows.insert(key)
                 let used = max(0, min(100, (1.0 - frac) * 100))
-                let title = "Gemini · 5 小时"
-                s.quotas.append(Quota(id: "gemini-cascade-\(s.quotas.count)", title: title, usedPercent: used, resetsAt: reset, windowSeconds: 18000))
+                let title = "Antigravity · 未注明时段"
+                s.quotas.append(Quota(id: "gemini-cascade-\(s.quotas.count)", title: title, usedPercent: used, resetsAt: reset))
             }
         }
         guard !s.quotas.isEmpty else { throw MonitorError.message("未找到 Gemini 本家模型配额") }
         s.note = note
         try s.validate()
         return s
+    }
+
+    private static func remainingFraction(_ fields: [String: Any]) -> Double? {
+        guard let value = fields["remainingFraction"] as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(),
+              (0...1).contains(value.doubleValue) else { return nil }
+        return value.doubleValue
     }
 
     // 单个端口的一次询问结果：命中；找错端口（无应答/异常状态）；找错 server 但确有应答
@@ -800,156 +783,104 @@ enum AntigravityBridge {
 }
 
 enum GeminiAntigravityBridge {
-    struct Candidate {
-        let pid: Int32
-        let hubPort: Int?
-        let ports: [Int]
-    }
-
-    static func discoverCandidates() -> [Candidate] {
-        let ps = Process()
-        ps.executableURL = URL(fileURLWithPath: "/bin/ps")
-        ps.arguments = ["-axww", "-o", "pid=,command="]
-        let pipe = Pipe()
-        ps.standardOutput = pipe
-        ps.standardError = FileHandle.nullDevice
-        do {
-            try ps.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            ps.waitUntilExit()
-            guard let text = String(data: data, encoding: .utf8) else { return [] }
-            let lines = text.split(separator: "\n").filter { line in
-                line.contains("agy") && (line.contains("/Gemini.app/") || line.contains("--hub") || line.contains("--app_data_dir=antigravity"))
-            }
-            return lines.compactMap { line in
-                let fields = line.trimmingCharacters(in: .whitespaces).split(separator: " ", omittingEmptySubsequences: true)
-                guard let pidStr = fields.first, let pid = Int32(pidStr) else { return nil }
-                var hubPort: Int? = nil
-                if let hubPortMatch = line.range(of: #"--hub-port=(\d+)"#, options: .regularExpression) {
-                    let sub = line[hubPortMatch]
-                    if let eq = sub.firstIndex(of: "=") {
-                        hubPort = Int(sub[sub.index(after: eq)...])
-                    }
-                }
-                var ports = AntigravityBridge.listeningPorts(of: pid)
-                if let hp = hubPort, !ports.contains(hp) {
-                    ports.insert(hp, at: 0)
-                }
-                return ports.isEmpty ? nil : Candidate(pid: pid, hubPort: hubPort, ports: ports)
-            }
-        } catch {
-            Log.connectors.error("gemini antigravity discovery failed")
-            return []
-        }
-    }
-
-    static func isAgyRunning() -> Bool {
-        !discoverCandidates().isEmpty
-    }
-
-    static func isGeminiAppRunning() -> Bool {
-        if !NSWorkspace.shared.runningApplications.filter({ !$0.isTerminated && (($0.bundleIdentifier ?? "").lowercased().contains("geminimacos") || ($0.localizedName ?? "").lowercased() == "gemini") }).isEmpty {
-            return true
-        }
-        return isAgyRunning()
-    }
-
-    static func resolveCsrfToken(ports: [Int]) async -> String? {
-        let regex = try? NSRegularExpression(pattern: #"\"csrfToken\"\s*:\s*\"([a-zA-Z0-9-]+)\""#)
-        for port in ports {
-            guard !Task.isCancelled else { return nil }
-            for scheme in ["http", "https"] {
-                guard !Task.isCancelled else { return nil }
-                guard let url = URL(string: "\(scheme)://127.0.0.1:\(port)/") else { continue }
-                var req = URLRequest(url: url)
-                req.timeoutInterval = 3
-                do {
-                    let (data, _) = try await BoundedHTTP.data(for: req, session: AntigravityBridge.session, maxBytes: 262_144, timeout: 3, category: .providerPage)
-                    if let html = String(data: data, encoding: .utf8), let regex = regex,
-                       let m = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
-                       let r = Range(m.range(at: 1), in: html) {
-                        let token = String(html[r])
-                        if !token.isEmpty { return token }
-                    }
-                } catch {
-                    continue
-                }
-            }
-        }
-        return nil
-    }
+    private static let bundleIdentifier = "com.google.GeminiMacOS"
 
     static func fetch(_ account: Account, userInitiated: Bool = false) async throws -> ConnectorResult {
         try Task.checkCancellation()
-        let candidates = await Task.detached(priority: .userInitiated) { discoverCandidates() }.value
-        try Task.checkCancellation()
-        if candidates.isEmpty {
-            let geminiRunning = isGeminiAppRunning()
-            if geminiRunning {
-                return .status("Gemini 已运行，等待 Antigravity 服务启动…")
-            }
-            if account.lastAttempt != nil && !userInitiated {
-                return .status("Gemini 暂未启动。启动后自动读取，不预填额度。")
-            }
-            throw MonitorError.message("未找到运行中的 Gemini 桌面端 Antigravity 服务。请打开 Gemini 并确认 Antigravity 已启用后重试。")
+        guard account.provider == .gemini, account.kind == .agent, account.connection == .geminiApp else {
+            return .status(AntigravityUsageReport.manualHint)
         }
-
-        var allPorts: [Int] = []
-        for c in candidates {
-            for p in c.ports {
-                if !allPorts.contains(p) { allPorts.append(p) }
-            }
+        guard userInitiated else {
+            return .status("Gemini 的 Antigravity 额度可通过「立即同步」或导入 /usage 报告更新。")
         }
+        guard let application = await MainActor.run(body: {
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
+        }) else { return .status(AntigravityUsageReport.manualHint) }
 
-        guard let csrfToken = await resolveCsrfToken(ports: allPorts) else {
-            throw MonitorError.message("未能获取 Gemini Antigravity 本机会话凭证。请在 Gemini 中查看 Antigravity 界面后重试。")
-        }
-
-        var answeredEmpty = false
-        var somethingAnswered = false
-        for port in allPorts {
-            try Task.checkCancellation()
-            for scheme in ["http", "https"] {
-                if let url = URL(string: "\(scheme)://127.0.0.1:\(port)/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary") {
-                    switch await AntigravityBridge.ask(url, csrfToken: csrfToken, parse: {
-                        try AntigravityBridge.parseSummary($0, source: "Gemini App 中的 Antigravity", note: "Gemini 官方服务 · 仅展示 Gemini 原生模型额度池")
-                    }) {
-                    case .hit(let s):
-                        return .snapshot(s)
-                    case .answeredEmpty:
-                        answeredEmpty = true
-                        somethingAnswered = true
-                    case .answeredWrong:
-                        somethingAnswered = true
-                    case .wrongPort:
-                        break
-                    }
+        let cancellation = ConnectorCancellation()
+        return try await withTaskCancellationHandler {
+            try await Task.detached(priority: .utility) { () throws -> ConnectorResult in
+                try cancellation.check()
+                guard let executable = trustedHelper(in: application),
+                      let help = try run(executable, arguments: ["--help"], cancellation: cancellation),
+                      AntigravityUsageReport.supportsHeadlessUsage(help) else { return .status(AntigravityUsageReport.manualHint) }
+                guard let output = try run(executable, arguments: ["-p", "/usage"], cancellation: cancellation) else {
+                    throw MonitorError.message("Antigravity /usage 未返回可用读数。请在原应用确认登录状态后重试，或导入报告。")
                 }
-                if let url = URL(string: "\(scheme)://127.0.0.1:\(port)/exa.language_server_pb.LanguageServerService/GetCascadeModelConfigData") {
-                    switch await AntigravityBridge.ask(url, csrfToken: csrfToken, parse: {
-                        try AntigravityBridge.parseCascadeModelConfigs($0, source: "Gemini App 中的 Antigravity", note: "Gemini 官方服务 · 仅展示 Gemini 原生模型额度池")
-                    }) {
-                    case .hit(let s):
-                        return .snapshot(s)
-                    case .answeredEmpty:
-                        answeredEmpty = true
-                        somethingAnswered = true
-                    case .answeredWrong:
-                        somethingAnswered = true
-                    case .wrongPort:
-                        break
-                    }
-                }
+                try cancellation.check()
+                return .snapshot(try AntigravityUsageReport.parse(output, source: AntigravityUsageReport.embeddedSource, observedAt: Date()))
+            }.value
+        } onCancel: { cancellation.cancel() }
+    }
+
+    private static func trustedHelper(in application: URL) -> URL? {
+        let bundle = application.resolvingSymlinksInPath()
+        let executable = bundle.appendingPathComponent("Contents/Helpers/agy")
+        guard Bundle(url: bundle)?.bundleIdentifier == bundleIdentifier,
+              executable.resolvingSymlinksInPath() == executable,
+              FileManager.default.isExecutableFile(atPath: executable.path),
+              googleSigned(bundle), googleSigned(executable) else { return nil }
+        return executable
+    }
+
+    private static func googleSigned(_ url: URL) -> Bool {
+        var code: SecStaticCode?
+        var requirement: SecRequirement?
+        let rule = #"anchor apple generic and certificate leaf[subject.O] = "Google LLC""#
+        let standard = SecCSFlags(rawValue: 0)
+        return SecStaticCodeCreateWithPath(url as CFURL, standard, &code) == errSecSuccess &&
+            SecRequirementCreateWithString(rule as CFString, standard, &requirement) == errSecSuccess &&
+            code.map { SecStaticCodeCheckValidity($0, SecCSFlags(rawValue: UInt32(kSecCSStrictValidate)), requirement) == errSecSuccess } == true
+    }
+
+    private static func run(_ executable: URL, arguments: [String], cancellation: ConnectorCancellation) throws -> Data? {
+        try cancellation.check()
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.currentDirectoryURL = FileManager.default.temporaryDirectory
+        process.standardInput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.environment = ["HOME": NSHomeDirectory(), "PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8",
+                               "LC_ALL": "en_US.UTF-8", "TERM": "dumb", "NO_COLOR": "1"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        let handle = pipe.fileHandleForReading
+        let flags = fcntl(handle.fileDescriptor, F_GETFL)
+        guard flags >= 0, fcntl(handle.fileDescriptor, F_SETFL, flags | O_NONBLOCK) == 0 else { return nil }
+        do { try process.run() } catch { return nil }
+        try? pipe.fileHandleForWriting.close()
+        defer {
+            if process.isRunning {
+                process.terminate()
+                for _ in 0..<10 where process.isRunning { Thread.sleep(forTimeInterval: 0.02) }
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                process.waitUntilExit()
+            }
+            try? handle.close()
+        }
+        let deadline = ProcessInfo.processInfo.systemUptime + 10
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            try cancellation.check()
+            guard ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+            let count = Darwin.read(handle.fileDescriptor, &buffer, buffer.count)
+            if count > 0 {
+                guard data.count + count <= AntigravityUsageReport.maxBytes else { return nil }
+                data.append(contentsOf: buffer.prefix(count))
+            } else if count < 0 && errno == EINTR {
+                continue
+            } else if count == 0 || errno == EAGAIN {
+                if !process.isRunning { break }
+                Thread.sleep(forTimeInterval: 0.02)
+            } else {
+                return nil
             }
         }
-
-        if answeredEmpty {
-            throw MonitorError.message("未找到 Gemini 本家模型配额")
-        }
-        if somethingAnswered {
-            throw MonitorError.message("Gemini Antigravity 服务运行中，但未返回可用配额。请确认已在 Gemini 中登录后重试。")
-        }
-        throw MonitorError.message("Gemini Antigravity 服务已发现但端口未响应，请稍后重试。")
+        try cancellation.check()
+        process.waitUntilExit()
+        return process.terminationReason == .exit && process.terminationStatus == 0 ? data : nil
     }
 }
 
@@ -1128,25 +1059,7 @@ enum AgentBridge {
         case .grok:
             return try await GrokBotBridge.fetch(account, userInitiated: userInitiated)
         case .gemini:
-            if account.connection == .geminiApp {
-                return try await GeminiAntigravityBridge.fetch(account, userInitiated: userInitiated)
-            }
-            do {
-                return .snapshot(try await AntigravityBridge.fetch())
-            } catch {
-                try Task.checkCancellation()
-                if error is CancellationError || (error as? URLError)?.code == .cancelled { throw CancellationError() }
-                if let geminiSnap = try? await GeminiAntigravityBridge.fetch(account, userInitiated: userInitiated),
-                   case .snapshot = geminiSnap {
-                    return geminiSnap
-                }
-                try Task.checkCancellation()
-                let status = detectLocalAgent(account)
-                if status.available {
-                    return .status(status.message)
-                }
-                throw error
-            }
+            return .snapshot(try await AntigravityBridge.fetch())
         case .doubao:
             return try await DoubaoBridge.fetch(account, userInitiated: userInitiated)
         case .minimax:
