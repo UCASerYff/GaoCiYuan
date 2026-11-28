@@ -17,7 +17,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_commit=291a42114ef588c0cff0d1fe573d8367ee9c646c
+          source_commit=00c60f35c98235846ee3eae71c4a8765a7ad32e9
           git show -s --format='Production source %H' "$source_commit"
           git diff --exit-code "$source_commit" -- Host Sources Resources scripts Tests App.entitlements Info.plist
           uname -m
@@ -40,13 +40,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 8
       - name: Run the targeted native updater fixture
         shell: bash
         run: |
           set -euo pipefail
           [[ "$(uname -m)" == arm64 ]]
-          git diff --exit-code 291a42114ef588c0cff0d1fe573d8367ee9c646c -- Sources/Updater.swift Tests/UpdaterNetworkRegression.swift
+          git diff --exit-code 00c60f35c98235846ee3eae71c4a8765a7ad32e9 -- Sources/Updater.swift Tests/UpdaterNetworkRegression.swift
           export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
           scratch="$(mktemp -d "$RUNNER_TEMP/updater-fixture.XXXXXXXX")"
           trap 'rm -rf -- "$scratch"' EXIT
