@@ -17,7 +17,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_commit=05da204017fbd79ed9a2215a53f6954a4615681d
+          source_commit=291a42114ef588c0cff0d1fe573d8367ee9c646c
           git show -s --format='Production source %H' "$source_commit"
           git diff --exit-code "$source_commit" -- Host Sources Resources scripts Tests App.entitlements Info.plist
           uname -m
@@ -33,3 +33,24 @@ jobs:
       - name: Run additional isolated macOS fixtures
         shell: bash
         run: bash .github/macos-extra-fixtures.sh
+  updater-fixture:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Run the targeted native updater fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == arm64 ]]
+          git diff --exit-code 291a42114ef588c0cff0d1fe573d8367ee9c646c -- Sources/Updater.swift Tests/UpdaterNetworkRegression.swift
+          export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+          scratch="$(mktemp -d "$RUNNER_TEMP/updater-fixture.XXXXXXXX")"
+          trap 'rm -rf -- "$scratch"' EXIT
+          xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 \
+            Sources/Updater.swift Sources/BoundedHTTP.swift Tests/UpdaterNetworkRegression.swift \
+            -framework AppKit -framework CryptoKit -o "$scratch/updater"
+          "$scratch/updater"
